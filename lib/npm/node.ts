@@ -16,6 +16,14 @@ declare const WASM: boolean;
 
 let worker_threads: typeof import('worker_threads') | undefined;
 
+// Yarn's PnP mode breaks stuff, so make sure to check for it
+let isYarnPnP = false;
+try {
+  require('pnpapi');
+  isYarnPnP = true;
+} catch (e) {
+}
+
 if (process.env.ESBUILD_WORKER_THREADS !== '0') {
   // Don't crash if the "worker_threads" library isn't present
   try {
@@ -37,12 +45,34 @@ if (process.env.ESBUILD_WORKER_THREADS !== '0') {
   ) {
     worker_threads = void 0;
   }
+
+  // Our worker_threads optimization doesn't work with Yarn PnP since we need
+  // to create a new worker thread using a file on the real file system, and
+  // Yarn PnP obscures the real file system with a virtual file system. Thus
+  // using esbuild's synchronous API calls with Yarn PnP will be a lot slower.
+  if (isYarnPnP) {
+    worker_threads = void 0;
+  }
 }
 
 // This should only be true if this is our internal worker thread. We want this
 // library to be usable from other people's worker threads, so we should not be
 // checking for "isMainThread".
 let isInternalWorkerThread = worker_threads?.workerData?.esbuildVersion === ESBUILD_VERSION;
+
+let getCachePath = (name: string): string => {
+  const home = os.homedir();
+  const common = ['esbuild', 'bin', `${name}@${version}`];
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Caches', ...common);
+  if (process.platform === 'win32') return path.join(home, 'AppData', 'Local', 'Cache', ...common);
+
+  // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+  const XDG_CACHE_HOME = process.env.XDG_CACHE_HOME;
+  if (process.platform === 'linux' && XDG_CACHE_HOME && path.isAbsolute(XDG_CACHE_HOME))
+    return path.join(XDG_CACHE_HOME, ...common);
+
+  return path.join(home, '.cache', ...common);
+};
 
 let esbuildCommandAndArgs = (): [string, string[]] => {
   // This feature was added to give external code a way to modify the binary
@@ -72,33 +102,52 @@ let esbuildCommandAndArgs = (): [string, string[]] => {
     return ['node', [path.join(__dirname, '..', 'bin', 'esbuild')]];
   }
 
-  if (process.platform === 'win32') {
-    return [path.join(__dirname, '..', 'esbuild.exe'), []];
+  const platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
+  const knownWindowsPackages: Record<string, string> = {
+    'win32 ia32 LE': 'esbuild-windows-32',
+    'win32 x64 LE': 'esbuild-windows-64',
+  };
+  const knownUnixlikePackages: Record<string, string> = {
+    'android arm64 LE': 'esbuild-android-arm64',
+    'darwin arm64 LE': 'esbuild-darwin-arm64',
+    'darwin x64 LE': 'esbuild-darwin-64',
+    'freebsd arm64 LE': 'esbuild-freebsd-arm64',
+    'freebsd x64 LE': 'esbuild-freebsd-64',
+    'openbsd x64 LE': 'esbuild-openbsd-64',
+    'linux arm LE': 'esbuild-linux-arm',
+    'linux arm64 LE': 'esbuild-linux-arm64',
+    'linux ia32 LE': 'esbuild-linux-32',
+    'linux mips64el LE': 'esbuild-linux-mips64le',
+    'linux ppc64 LE': 'esbuild-linux-ppc64le',
+    'linux x64 LE': 'esbuild-linux-64',
+  };
+
+  let packageName: string;
+  let binSourcePath: string;
+  if (platformKey in knownWindowsPackages) {
+    packageName = knownWindowsPackages[platformKey];
+    binSourcePath = require.resolve(`${packageName}/esbuild.exe`);
+  } else if (platformKey in knownUnixlikePackages) {
+    packageName = knownUnixlikePackages[platformKey];
+    binSourcePath = require.resolve(`${packageName}/bin/esbuild`);
+  } else {
+    throw new Error(`Unsupported platform: ${platformKey}`);
   }
 
-  // Yarn 2 is deliberately incompatible with binary modules because the
-  // developers of Yarn 2 don't think they should be used. See this thread for
-  // details: https://github.com/yarnpkg/berry/issues/882.
-  //
-  // As a compatibility hack we replace the binary with a wrapper script only
-  // for Yarn 2. The wrapper script is avoided for other platforms because
-  // running the binary directly without going through node first is faster.
-  // However, this will make using the JavaScript API with Yarn 2 unnecessarily
-  // slow because the wrapper means running the binary will now start another
-  // nested node process just to call "spawnSync" and run the actual binary.
-  //
-  // To work around this workaround, we query for the place the binary is moved
-  // to if the original location is replaced by our Yarn 2 compatibility hack.
-  // If it exists, we can infer that we are running within Yarn 2 and the
-  // JavaScript API should invoke the binary here instead to avoid a slowdown.
-  // Calling the binary directly can be over 6x faster than calling the wrapper
-  // script instead.
-  let pathForYarn2 = path.join(__dirname, '..', 'esbuild');
-  if (fs.existsSync(pathForYarn2)) {
-    return [pathForYarn2, []];
+  // The esbuild binary executable can't be used in Yarn 2 in PnP mode because
+  // it's inside a virtual file system and the OS needs it in the real file
+  // system. So we need to copy the file out of the virtual file system into
+  // the real file system.
+  if (isYarnPnP) {
+    const binTargetPath = getCachePath(packageName);
+    if (!fs.existsSync(binTargetPath)) {
+      fs.copyFileSync(binSourcePath, binTargetPath);
+      fs.chmodSync(binTargetPath, 0o755);
+    }
+    return [binTargetPath, []];
   }
 
-  return [path.join(__dirname, '..', 'bin', 'esbuild'), []];
+  return [binSourcePath, []];
 };
 
 // Return true if stderr is a TTY
