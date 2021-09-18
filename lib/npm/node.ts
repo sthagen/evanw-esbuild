@@ -1,5 +1,6 @@
 import * as types from "../shared/types";
 import * as common from "../shared/common";
+import { pkgAndBinForCurrentPlatform } from "./node-platform";
 
 import child_process = require('child_process');
 import crypto = require('crypto');
@@ -102,52 +103,22 @@ let esbuildCommandAndArgs = (): [string, string[]] => {
     return ['node', [path.join(__dirname, '..', 'bin', 'esbuild')]];
   }
 
-  const platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
-  const knownWindowsPackages: Record<string, string> = {
-    'win32 ia32 LE': 'esbuild-windows-32',
-    'win32 x64 LE': 'esbuild-windows-64',
-  };
-  const knownUnixlikePackages: Record<string, string> = {
-    'android arm64 LE': 'esbuild-android-arm64',
-    'darwin arm64 LE': 'esbuild-darwin-arm64',
-    'darwin x64 LE': 'esbuild-darwin-64',
-    'freebsd arm64 LE': 'esbuild-freebsd-arm64',
-    'freebsd x64 LE': 'esbuild-freebsd-64',
-    'openbsd x64 LE': 'esbuild-openbsd-64',
-    'linux arm LE': 'esbuild-linux-arm',
-    'linux arm64 LE': 'esbuild-linux-arm64',
-    'linux ia32 LE': 'esbuild-linux-32',
-    'linux mips64el LE': 'esbuild-linux-mips64le',
-    'linux ppc64 LE': 'esbuild-linux-ppc64le',
-    'linux x64 LE': 'esbuild-linux-64',
-  };
-
-  let packageName: string;
-  let binSourcePath: string;
-  if (platformKey in knownWindowsPackages) {
-    packageName = knownWindowsPackages[platformKey];
-    binSourcePath = require.resolve(`${packageName}/esbuild.exe`);
-  } else if (platformKey in knownUnixlikePackages) {
-    packageName = knownUnixlikePackages[platformKey];
-    binSourcePath = require.resolve(`${packageName}/bin/esbuild`);
-  } else {
-    throw new Error(`Unsupported platform: ${platformKey}`);
-  }
+  const { pkg, bin } = pkgAndBinForCurrentPlatform();
 
   // The esbuild binary executable can't be used in Yarn 2 in PnP mode because
   // it's inside a virtual file system and the OS needs it in the real file
   // system. So we need to copy the file out of the virtual file system into
   // the real file system.
   if (isYarnPnP) {
-    const binTargetPath = getCachePath(packageName);
+    const binTargetPath = getCachePath(pkg);
     if (!fs.existsSync(binTargetPath)) {
-      fs.copyFileSync(binSourcePath, binTargetPath);
+      fs.copyFileSync(bin, binTargetPath);
       fs.chmodSync(binTargetPath, 0o755);
     }
     return [binTargetPath, []];
   }
 
-  return [binSourcePath, []];
+  return [bin, []];
 };
 
 // Return true if stderr is a TTY

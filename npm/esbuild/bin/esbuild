@@ -1,13 +1,58 @@
 #!/usr/bin/env node
-throw new Error(`esbuild: Failed to install correctly
 
-Make sure you don't have "ignore-scripts" set to true. You can check this with
-"npm config get ignore-scripts". If that returns true you can reset it back to
-false using "npm config set ignore-scripts false" and then reinstall esbuild.
+// lib/npm/node-platform.ts
+var knownWindowsPackages = {
+  "win32 arm64 LE": "esbuild-windows-arm64",
+  "win32 ia32 LE": "esbuild-windows-32",
+  "win32 x64 LE": "esbuild-windows-64"
+};
+var knownUnixlikePackages = {
+  "android arm64 LE": "esbuild-android-arm64",
+  "darwin arm64 LE": "esbuild-darwin-arm64",
+  "darwin x64 LE": "esbuild-darwin-64",
+  "freebsd arm64 LE": "esbuild-freebsd-arm64",
+  "freebsd x64 LE": "esbuild-freebsd-64",
+  "openbsd x64 LE": "esbuild-openbsd-64",
+  "linux arm LE": "esbuild-linux-arm",
+  "linux arm64 LE": "esbuild-linux-arm64",
+  "linux ia32 LE": "esbuild-linux-32",
+  "linux mips64el LE": "esbuild-linux-mips64le",
+  "linux ppc64 LE": "esbuild-linux-ppc64le",
+  "linux x64 LE": "esbuild-linux-64",
+  "sunos x64 LE": "esbuild-sunos-64"
+};
+function pkgAndBinForCurrentPlatform() {
+  let pkg;
+  let bin2;
+  let os = require("os");
+  let platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
+  if (platformKey in knownWindowsPackages) {
+    pkg = knownWindowsPackages[platformKey];
+    bin2 = `${pkg}/esbuild.exe`;
+  } else if (platformKey in knownUnixlikePackages) {
+    pkg = knownUnixlikePackages[platformKey];
+    bin2 = `${pkg}/bin/esbuild`;
+  } else {
+    throw new Error(`Unsupported platform: ${platformKey}`);
+  }
+  try {
+    bin2 = require.resolve(bin2);
+  } catch (e) {
+    try {
+      require.resolve(pkg);
+    } catch (e2) {
+      throw new Error(`The package "${pkg}" could not be found, and is needed by esbuild
 
-If you're using npm v7, make sure your package-lock.json file contains either
-"lockfileVersion": 1 or the code "hasInstallScript": true. If it doesn't have
-either of those, then it is likely the case that a known bug in npm v7 has
-corrupted your package-lock.json file. Regenerating your package-lock.json file
-should fix this issue.
-`);
+If you are installing esbuild with npm, make sure that you don't specify the
+"--no-optional" flag. The "optionalDependencies" package.json feature is used
+by esbuild to install the correct binary executable for your current platform.`);
+    }
+    throw e;
+  }
+  return { pkg, bin: bin2 };
+}
+
+// lib/npm/node-shim.ts
+var child_process = require("child_process");
+var { bin } = pkgAndBinForCurrentPlatform();
+child_process.execFileSync(bin, process.argv.slice(2), { stdio: "inherit" });
