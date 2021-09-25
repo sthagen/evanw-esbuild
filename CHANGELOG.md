@@ -1,6 +1,122 @@
 # Changelog
 
-## Unreleased
+## 0.13.2
+
+* Fix `export {}` statements with `--tree-shaking=true` ([#1628](https://github.com/evanw/esbuild/issues/1628))
+
+    The new `--tree-shaking=true` option allows you to force-enable tree shaking in cases where it wasn't previously possible. One such case is when bundling is disabled and there is no output format configured, in which case esbuild just preserves the format of whatever format the input code is in. Enabling tree shaking in this context caused a bug where `export {}` statements were stripped. This release fixes the bug so `export {}` statements should now be preserved when you pass `--tree-shaking=true`. This bug only affected this new functionality and didn't affect existing scenarios.
+
+## 0.13.1
+
+* Fix the `esbuild` package in yarn 2+
+
+    The [yarn package manager](https://yarnpkg.com/) version 2 and above has a mode called [PnP](https://next.yarnpkg.com/features/pnp/) that installs packages inside zip files instead of using individual files on disk, and then hijacks node's `fs` module to pretend that paths to files inside the zip file are actually individual files on disk so that code that wasn't written specifically for yarn still works. Unfortunately that hijacking is incomplete and it still causes certain things to break such as using these zip file paths to create a JavaScript worker thread or to create a child process.
+
+    This was an issue for the new `optionalDependencies` package installation strategy that was just released in version 0.13.0 since the binary executable is now inside of an installed package instead of being downloaded using an install script. When it's installed with yarn 2+ in PnP mode the binary executable is inside a zip file and can't be run. To work around this, esbuild detects yarn's PnP mode and copies the binary executable to a real file outside of the zip file.
+
+    Unfortunately the code to do this didn't create the parent directory before writing to the file path. That caused esbuild's API to crash when it was run for the first time. This didn't come up during testing because the parent directory already existed when the tests were run. This release changes the location of the binary executable from a shared cache directory to inside the esbuild package itself, which should fix this crash. This problem only affected esbuild's JS API when it was run through yarn 2+ with PnP mode active.
+
+## 0.13.0
+
+**This release contains backwards-incompatible changes.** Since esbuild is before version 1.0.0, these changes have been released as a new minor version to reflect this (as [recommended by npm](https://docs.npmjs.com/cli/v6/using-npm/semver/)). You should either be pinning the exact version of `esbuild` in your `package.json` file or be using a version range syntax that only accepts patch upgrades such as `~0.12.0`. See the documentation about [semver](https://docs.npmjs.com/cli/v6/using-npm/semver/) for more information.
+
+* Allow tree shaking to be force-enabled and force-disabled ([#1518](https://github.com/evanw/esbuild/issues/1518), [#1610](https://github.com/evanw/esbuild/issues/1610), [#1611](https://github.com/evanw/esbuild/issues/1611), [#1617](https://github.com/evanw/esbuild/pull/1617))
+
+    This release introduces a breaking change that gives you more control over when tree shaking happens ("tree shaking" here refers to declaration-level dead code removal). Previously esbuild's tree shaking was automatically enabled or disabled for you depending on the situation and there was no manual override to change this. Specifically, tree shaking was only enabled either when bundling was enabled or when the output format was set to `iife` (i.e. wrapped in an immediately-invoked function expression). This was done to avoid issues with people appending code to output files in the `cjs` and `esm` formats and expecting that code to be able to reference code in the output file that isn't otherwise referenced.
+
+    You now have the ability to explicitly force-enable or force-disable tree shaking to bypass this default behavior. This is a breaking change because there is already a setting for tree shaking that does something else, and it has been moved to a separate setting instead. The previous setting allowed you to control whether or not to ignore manual side-effect annotations, which is related to tree shaking since only side-effect free code can be removed as dead code. Specifically you can annotate function calls with `/* @__PURE__ */` to indicate that they can be removed if they are not used, and you can annotate packages with `"sideEffects": false` to indicate that imports of that package can be removed if they are not used. Being able to ignore these annotations is necessary because [they are sometimes incorrect](https://github.com/tensorflow/tfjs/issues/4248). This previous setting has been moved to a separate setting because it actually impacts dead-code removal within expressions, which also applies when minifying with tree-shaking disabled.
+
+    ### Old behavior
+
+    * CLI
+        * Ignore side-effect annotations: `--tree-shaking=ignore-annotations`
+    * JS
+        * Ignore side-effect annotations: `treeShaking: 'ignore-annotations'`
+    * Go
+        * Ignore side-effect annotations: `TreeShaking: api.TreeShakingIgnoreAnnotations`
+
+    ### New behavior
+
+    * CLI
+        * Ignore side-effect annotations: `--ignore-annotations`
+        * Force-disable tree shaking: `--tree-shaking=false`
+        * Force-enable tree shaking: `--tree-shaking=true`
+    * JS
+        * Ignore side-effect annotations: `ignoreAnnotations: true`
+        * Force-disable tree shaking: `treeShaking: false`
+        * Force-enable tree shaking: `treeShaking: true`
+    * Go
+        * Ignore side-effect annotations: `IgnoreAnnotations: true`
+        * Force-disable tree shaking: `TreeShaking: api.TreeShakingFalse`
+        * Force-enable tree shaking: `TreeShaking: api.TreeShakingTrue`
+
+* The npm package now uses `optionalDependencies` to install the platform-specific binary executable ([#286](https://github.com/evanw/esbuild/issues/286), [#291](https://github.com/evanw/esbuild/issues/291), [#319](https://github.com/evanw/esbuild/issues/319), [#347](https://github.com/evanw/esbuild/issues/347), [#369](https://github.com/evanw/esbuild/issues/369), [#547](https://github.com/evanw/esbuild/issues/547), [#565](https://github.com/evanw/esbuild/issues/565), [#789](https://github.com/evanw/esbuild/issues/789), [#921](https://github.com/evanw/esbuild/issues/921), [#1193](https://github.com/evanw/esbuild/issues/1193), [#1270](https://github.com/evanw/esbuild/issues/1270), [#1382](https://github.com/evanw/esbuild/issues/1382), [#1422](https://github.com/evanw/esbuild/issues/1422), [#1450](https://github.com/evanw/esbuild/issues/1450), [#1485](https://github.com/evanw/esbuild/issues/1485), [#1546](https://github.com/evanw/esbuild/issues/1546), [#1547](https://github.com/evanw/esbuild/pull/1547), [#1574](https://github.com/evanw/esbuild/issues/1574), [#1609](https://github.com/evanw/esbuild/issues/1609))
+
+    This release changes esbuild's installation strategy in an attempt to improve compatibility with edge cases such as custom registries, custom proxies, offline installations, read-only file systems, or when post-install scripts are disabled. It's being treated as a breaking change out of caution because it's a significant change to how esbuild works with JS package managers, and hasn't been widely tested yet.
+
+    **The old installation strategy** manually downloaded the correct binary executable in a [post-install script](https://docs.npmjs.com/cli/v7/using-npm/scripts). The binary executable is hosted in a separate platform-specific npm package such as [`esbuild-darwin-64`](https://www.npmjs.com/package/esbuild-darwin-64). The install script first attempted to download the package via the `npm` command in case npm had custom network settings configured. If that didn't work, the install script attempted to download the package from https://registry.npmjs.org/ before giving up. This was problematic for many reasons including:
+
+    * Not all of npm's settings can be forwarded due to npm bugs such as https://github.com/npm/cli/issues/2284, and npm has said these bugs will never be fixed.
+    * Some people have configured their network environments such that downloading from https://registry.npmjs.org/ will hang instead of either succeeding or failing.
+    * The installed package was broken if you used `npm --ignore-scripts` because then the post-install script wasn't run. Some people enable this option so that malicious packages must be run first before being able to do malicious stuff.
+
+    **The new installation strategy** automatically downloads the correct binary executable using npm's `optionalDependencies` feature to depend on all esbuild packages for all platforms but only have the one for the current platform be installed. This is a built-in part of the package manager so my assumption is that it should work correctly in all of these edge cases that currently don't work. And if there's an issue with this, then the problem is with the package manager instead of with esbuild so this should hopefully reduce the maintenance burden on esbuild itself. Changing to this installation strategy has these drawbacks:
+
+    * Old versions of certain package managers (specifically npm and yarn) print lots of useless log messages during the installation, at least one for each platform other than the current one. These messages are harmless and can be ignored. However, they are annoying. There is nothing I can do about this. If you have this problem, one solution is to upgrade your package manager to a newer version.
+
+    * Installation will be significantly slower in old versions of npm, old versions of pnpm, and all versions of yarn. These package managers download all packages for all platforms even though they aren't needed and actually cannot be used. This problem has been fixed in npm and pnpm and the problem has been communicated to yarn: https://github.com/yarnpkg/berry/issues/3317. If you have this problem, one solution is to use a newer version of npm or pnpm as your package manager.
+
+    * This installation strategy does not work if you use `npm --no-optional` since then the package with the binary executable is not installed. If you have this problem, the solution is to not pass the `--no-optional` flag when installing packages.
+
+    * There is still a small post-install script but it's now optional in that the `esbuild` package should still function correctly if post-install scripts are disabled (such as with `npm --ignore-scripts`). This post-install script optimizes the installed package by replacing the `esbuild` JavaScript command shim with the actual binary executable at install time. This avoids the overhead of launching another `node` process when using the `esbuild` command. So keep in mind that installing with `--ignore-scripts` will result in a slower `esbuild` command.
+
+    Despite the drawbacks of the new installation strategy, I believe this change is overall a good thing to move forward with. It should fix edge case scenarios where installing esbuild currently doesn't work at all, and this only comes at the expense of the install script working in a less-optimal way (but still working) if you are using an old version of npm. So I'm going to switch installation strategies and see how it goes.
+
+    The platform-specific binary executables are still hosted on npm in the same way, so anyone who wrote code that downloads builds from npm using the instructions here should not have to change their code: https://esbuild.github.io/getting-started/#download-a-build. However, note that these platform-specific packages no longer specify the `bin` field in `package.json` so the `esbuild` command will no longer be automatically put on your path. The `bin` field had to be removed because of a collision with the `bin` field of the `esbuild` package (now that the `esbuild` package depends on all of these platform-specific packages as optional dependencies).
+
+In addition to the breaking changes above, the following features are also included in this release:
+
+* Treat `x` guarded by `typeof x !== 'undefined'` as side-effect free
+
+    This is a small tree-shaking (i.e. dead code removal) improvement. Global identifier references are considered to potentially have side effects since they will throw a reference error if the global identifier isn't defined, and code with side effects cannot be removed as dead code. However, there's a somewhat-common case where the identifier reference is guarded by a `typeof` check to check that it's defined before accessing it. With this release, code that does this will now be considered to have no side effects which allows it to be tree-shaken:
+
+    ```js
+    // Original code
+    var __foo = typeof foo !== 'undefined' && foo;
+    var __bar = typeof bar !== 'undefined' && bar;
+    console.log(__bar);
+
+    // Old output (with --bundle, which enables tree-shaking)
+    var __foo = typeof foo !== 'undefined' && foo;
+    var __bar = typeof bar !== 'undefined' && bar;
+    console.log(__bar);
+
+    // New output (with --bundle, which enables tree-shaking)
+    var __bar = typeof bar !== 'undefined' && bar;
+    console.log(__bar);
+    ```
+
+## 0.12.29
+
+* Fix compilation of abstract class fields in TypeScript ([#1623](https://github.com/evanw/esbuild/issues/1623))
+
+    This release fixes a bug where esbuild could incorrectly include a TypeScript abstract class field in the compiled JavaScript output. This is incorrect because the official TypeScript compiler never does this. Note that this only happened in scenarios where TypeScript's `useDefineForClassFields` setting was set to `true` (or equivalently where TypeScript's `target` setting was set to `ESNext`). Here is the difference:
+
+    ```js
+    // Original code
+    abstract class Foo {
+      abstract foo: any;
+    }
+
+    // Old output
+    class Foo {
+      foo;
+    }
+
+    // New output
+    class Foo {
+    }
+    ```
 
 * Proxy from the `__require` shim to `require` ([#1614](https://github.com/evanw/esbuild/issues/1614))
 
@@ -33,15 +149,32 @@
     Handling all of these edge cases is only possible with the [Proxy API](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy). So the implementation of `__require` now looks like this:
 
     ```js
-    var __require = typeof require !== 'undefined' ? require :
-      (x => typeof Proxy !== 'undefined' ? new Proxy(x, {
-        get: (a, b) => (typeof require !== 'undefined' ? require : a)[b],
-      }) : x)(function(x) {
-        if (typeof require !== 'undefined')
-          return require.apply(this, arguments);
-        throw new Error('Dynamic require of "' + x + '" is not supported');
-      });
+    var __require = (x =>
+      typeof require !== 'undefined' ? require :
+      typeof Proxy !== 'undefined' ? new Proxy(x, {
+        get: (a, b) => (typeof require !== 'undefined' ? require : a)[b]
+      }) : x
+    )(function(x) {
+      if (typeof require !== 'undefined') return require.apply(this, arguments);
+      throw new Error('Dynamic require of "' + x + '" is not supported');
+    });
     ```
+
+* Consider `typeof x` to have no side effects
+
+    The `typeof` operator does not itself trigger any code evaluation so it can safely be removed if evaluating the operand does not cause any side effects. However, there is a special case of the `typeof` operator when the operand is an identifier expression. In that case no reference error is thrown if the referenced symbol does not exist (e.g. `typeof x` does not throw an error if there is no symbol named `x`). With this release, esbuild will now consider `typeof x` to have no side effects even if evaluating `x` would have side effects (i.e. would throw a reference error):
+
+    ```js
+    // Original code
+    var unused = typeof React !== 'undefined';
+
+    // Old output
+    var unused = typeof React !== 'undefined';
+
+    // New output
+    ```
+
+    Note that there is actually an edge case where `typeof x` *can* throw an error: when `x` is being referenced inside of its TDZ, or temporal dead zone (i.e. before it's declared). This applies to `let`, `const`, and `class` symbols. However, esbuild doesn't currently handle TDZ rules so the possibility of errors thrown due to TDZ rules is not currently considered. This typically doesn't matter in real-world code so this hasn't been a priority to fix (and is actually tricky to fix with esbuild's current bundling approach). So esbuild may incorrectly remove a `typeof` expression that actually has side effects. However, esbuild already incorrectly did this in previous releases so its behavior regarding `typeof` and TDZ rules hasn't changed in this release.
 
 ## 0.12.28
 

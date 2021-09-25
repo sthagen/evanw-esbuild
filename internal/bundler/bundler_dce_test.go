@@ -1504,7 +1504,6 @@ func TestTreeShakingUnaryOperators(t *testing.T) {
 				let REMOVE;
 				!REMOVE;
 				void REMOVE;
-				typeof REMOVE;
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
@@ -1651,6 +1650,179 @@ func TestTreeShakingInESMWrapper(t *testing.T) {
 		options: config.Options{
 			Mode:          config.ModeBundle,
 			OutputFormat:  config.FormatESModule,
+			AbsOutputFile: "/out.js",
+		},
+	})
+}
+
+func TestDCETypeOf(t *testing.T) {
+	dce_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				// These should be removed because they have no side effects
+				typeof x_REMOVE
+				typeof v_REMOVE
+				typeof f_REMOVE
+				typeof g_REMOVE
+				typeof a_REMOVE
+				var v_REMOVE
+				function f_REMOVE() {}
+				function* g_REMOVE() {}
+				async function a_REMOVE() {}
+
+				// These technically have side effects due to TDZ, but this is not currently handled
+				typeof c_remove
+				typeof l_remove
+				typeof s_remove
+				const c_remove = 0
+				let l_remove
+				class s_remove {}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			OutputFormat:  config.FormatESModule,
+			AbsOutputFile: "/out.js",
+		},
+	})
+}
+
+func TestDCETypeOfEqualsString(t *testing.T) {
+	dce_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				var hasBar = typeof bar !== 'undefined'
+				if (false) console.log(hasBar)
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			OutputFormat:  config.FormatIIFE,
+			AbsOutputFile: "/out.js",
+		},
+	})
+}
+
+func TestDCETypeOfEqualsStringMangle(t *testing.T) {
+	dce_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				// Everything here should be removed as dead code due to tree shaking
+				var hasBar = typeof bar !== 'undefined'
+				if (false) console.log(hasBar)
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			OutputFormat:  config.FormatIIFE,
+			MangleSyntax:  true,
+			AbsOutputFile: "/out.js",
+		},
+	})
+}
+
+func TestDCETypeOfEqualsStringGuardCondition(t *testing.T) {
+	dce_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				// Everything here should be removed as dead code due to tree shaking
+				var REMOVE_1 = typeof x !== 'undefined' ? x : null
+				var REMOVE_1 = typeof x != 'undefined' ? x : null
+				var REMOVE_1 = typeof x === 'undefined' ? null : x
+				var REMOVE_1 = typeof x == 'undefined' ? null : x
+				var REMOVE_1 = typeof x !== 'undefined' && x
+				var REMOVE_1 = typeof x != 'undefined' && x
+				var REMOVE_1 = typeof x === 'undefined' || x
+				var REMOVE_1 = typeof x == 'undefined' || x
+				var REMOVE_1 = 'undefined' !== typeof x ? x : null
+				var REMOVE_1 = 'undefined' != typeof x ? x : null
+				var REMOVE_1 = 'undefined' === typeof x ? null : x
+				var REMOVE_1 = 'undefined' == typeof x ? null : x
+				var REMOVE_1 = 'undefined' !== typeof x && x
+				var REMOVE_1 = 'undefined' != typeof x && x
+				var REMOVE_1 = 'undefined' === typeof x || x
+				var REMOVE_1 = 'undefined' == typeof x || x
+
+				// Everything here should be removed as dead code due to tree shaking
+				var REMOVE_2 = typeof x === 'object' ? x : null
+				var REMOVE_2 = typeof x == 'object' ? x : null
+				var REMOVE_2 = typeof x !== 'object' ? null : x
+				var REMOVE_2 = typeof x != 'object' ? null : x
+				var REMOVE_2 = typeof x === 'object' && x
+				var REMOVE_2 = typeof x == 'object' && x
+				var REMOVE_2 = typeof x !== 'object' || x
+				var REMOVE_2 = typeof x != 'object' || x
+				var REMOVE_2 = 'object' === typeof x ? x : null
+				var REMOVE_2 = 'object' == typeof x ? x : null
+				var REMOVE_2 = 'object' !== typeof x ? null : x
+				var REMOVE_2 = 'object' != typeof x ? null : x
+				var REMOVE_2 = 'object' === typeof x && x
+				var REMOVE_2 = 'object' == typeof x && x
+				var REMOVE_2 = 'object' !== typeof x || x
+				var REMOVE_2 = 'object' != typeof x || x
+
+				// Everything here should be kept as live code because it has side effects
+				var keep_1 = typeof x !== 'object' ? x : null
+				var keep_1 = typeof x != 'object' ? x : null
+				var keep_1 = typeof x === 'object' ? null : x
+				var keep_1 = typeof x == 'object' ? null : x
+				var keep_1 = typeof x !== 'object' && x
+				var keep_1 = typeof x != 'object' && x
+				var keep_1 = typeof x === 'object' || x
+				var keep_1 = typeof x == 'object' || x
+				var keep_1 = 'object' !== typeof x ? x : null
+				var keep_1 = 'object' != typeof x ? x : null
+				var keep_1 = 'object' === typeof x ? null : x
+				var keep_1 = 'object' == typeof x ? null : x
+				var keep_1 = 'object' !== typeof x && x
+				var keep_1 = 'object' != typeof x && x
+				var keep_1 = 'object' === typeof x || x
+				var keep_1 = 'object' == typeof x || x
+
+				// Everything here should be kept as live code because it has side effects
+				var keep_2 = typeof x !== 'undefined' ? y : null
+				var keep_2 = typeof x != 'undefined' ? y : null
+				var keep_2 = typeof x === 'undefined' ? null : y
+				var keep_2 = typeof x == 'undefined' ? null : y
+				var keep_2 = typeof x !== 'undefined' && y
+				var keep_2 = typeof x != 'undefined' && y
+				var keep_2 = typeof x === 'undefined' || y
+				var keep_2 = typeof x == 'undefined' || y
+				var keep_2 = 'undefined' !== typeof x ? y : null
+				var keep_2 = 'undefined' != typeof x ? y : null
+				var keep_2 = 'undefined' === typeof x ? null : y
+				var keep_2 = 'undefined' == typeof x ? null : y
+				var keep_2 = 'undefined' !== typeof x && y
+				var keep_2 = 'undefined' != typeof x && y
+				var keep_2 = 'undefined' === typeof x || y
+				var keep_2 = 'undefined' == typeof x || y
+
+				// Everything here should be kept as live code because it has side effects
+				var keep_3 = typeof x !== 'undefined' ? null : x
+				var keep_3 = typeof x != 'undefined' ? null : x
+				var keep_3 = typeof x === 'undefined' ? x : null
+				var keep_3 = typeof x == 'undefined' ? x : null
+				var keep_3 = typeof x !== 'undefined' || x
+				var keep_3 = typeof x != 'undefined' || x
+				var keep_3 = typeof x === 'undefined' && x
+				var keep_3 = typeof x == 'undefined' && x
+				var keep_3 = 'undefined' !== typeof x ? null : x
+				var keep_3 = 'undefined' != typeof x ? null : x
+				var keep_3 = 'undefined' === typeof x ? x : null
+				var keep_3 = 'undefined' == typeof x ? x : null
+				var keep_3 = 'undefined' !== typeof x || x
+				var keep_3 = 'undefined' != typeof x || x
+				var keep_3 = 'undefined' === typeof x && x
+				var keep_3 = 'undefined' == typeof x && x
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			OutputFormat:  config.FormatIIFE,
 			AbsOutputFile: "/out.js",
 		},
 	})

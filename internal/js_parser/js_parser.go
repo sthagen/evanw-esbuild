@@ -336,6 +336,7 @@ type optionsThatSupportStructuralEquality struct {
 	minifyIdentifiers       bool
 	omitRuntimeForTests     bool
 	ignoreDCEAnnotations    bool
+	treeShaking             bool
 	preserveUnusedImportsTS bool
 	useDefineForClassFields config.MaybeBool
 }
@@ -361,6 +362,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			minifyIdentifiers:       options.MinifyIdentifiers,
 			omitRuntimeForTests:     options.OmitRuntimeForTests,
 			ignoreDCEAnnotations:    options.IgnoreDCEAnnotations,
+			treeShaking:             options.TreeShaking,
 			preserveUnusedImportsTS: options.PreserveUnusedImportsTS,
 			useDefineForClassFields: options.UseDefineForClassFields,
 		},
@@ -1809,6 +1811,7 @@ type propertyOpts struct {
 	// Class-related options
 	isStatic          bool
 	isTSDeclare       bool
+	isTSAbstract      bool
 	isClass           bool
 	classHasExtends   bool
 	allowTSDecorators bool
@@ -1936,7 +1939,16 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 						return js_ast.Property{}, false
 					}
 
-				case "private", "protected", "public", "readonly", "abstract", "override":
+				case "abstract":
+					if opts.isClass && p.options.ts.Parse && !opts.isTSAbstract && raw == name {
+						opts.isTSAbstract = true
+						scopeIndex := len(p.scopesInOrder)
+						p.parseProperty(kind, opts, nil)
+						p.discardScopesUpTo(scopeIndex)
+						return js_ast.Property{}, false
+					}
+
+				case "private", "protected", "public", "readonly", "override":
 					// Skip over TypeScript keywords
 					if opts.isClass && p.options.ts.Parse && raw == name {
 						return p.parseProperty(kind, opts, nil)
@@ -13109,9 +13121,9 @@ func (p *parser) appendPart(parts []js_ast.Part, stmts []js_ast.Stmt) []js_ast.P
 	p.declaredSymbols = nil
 	p.importRecordsForCurrentPart = nil
 	p.scopesForCurrentPart = nil
-	part := js_ast.Part{
-		Stmts: p.visitStmtsAndPrependTempRefs(stmts, prependTempRefsOpts{}),
 
+	part := js_ast.Part{
+		Stmts:      p.visitStmtsAndPrependTempRefs(stmts, prependTempRefsOpts{}),
 		SymbolUses: p.symbolUses,
 	}
 
@@ -13189,8 +13201,16 @@ func (p *parser) stmtsCanBeRemovedIfUnused(stmts []js_ast.Stmt) bool {
 				}
 			}
 
-		case *js_ast.SExportClause, *js_ast.SExportFrom:
+		case *js_ast.SExportFrom:
 			// Exports are tracked separately, so this isn't necessary
+
+		case *js_ast.SExportClause:
+			// Exports are tracked separately, so this isn't necessary. Except we
+			// should keep all of these statements if we're not doing any format
+			// conversion, because exports are not re-emitted in that case.
+			if p.options.mode == config.ModePassThrough {
+				return false
+			}
 
 		case *js_ast.SExportDefault:
 			switch s2 := s.Value.Data.(type) {
@@ -13330,7 +13350,9 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		return true
 
 	case *js_ast.EIf:
-		return p.exprCanBeRemovedIfUnused(e.Test) && p.exprCanBeRemovedIfUnused(e.Yes) && p.exprCanBeRemovedIfUnused(e.No)
+		return p.exprCanBeRemovedIfUnused(e.Test) &&
+			((p.isSideEffectFreeUnboundIdentifierRef(e.Yes, e.Test, true) || p.exprCanBeRemovedIfUnused(e.Yes)) &&
+				(p.isSideEffectFreeUnboundIdentifierRef(e.No, e.Test, false) || p.exprCanBeRemovedIfUnused(e.No)))
 
 	case *js_ast.EArray:
 		for _, item := range e.Items {
@@ -13380,7 +13402,23 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		switch e.Op {
 		// These operators must not have any type conversions that can execute code
 		// such as "toString" or "valueOf". They must also never throw any exceptions.
-		case js_ast.UnOpTypeof, js_ast.UnOpVoid, js_ast.UnOpNot:
+		case js_ast.UnOpVoid, js_ast.UnOpNot:
+			return p.exprCanBeRemovedIfUnused(e.Value)
+
+		// The "typeof" operator doesn't do any type conversions so it can be removed
+		// if the result is unused and the operand has no side effects. However, it
+		// has a special case where if the operand is an identifier expression such
+		// as "typeof x" and "x" doesn't exist, no reference error is thrown so the
+		// operation has no side effects.
+		//
+		// Note that there *is* actually a case where "typeof x" can throw an error:
+		// when "x" is being referenced inside of its TDZ (temporal dead zone). TDZ
+		// checks are not yet handled correctly by esbuild, so this possibility is
+		// currently ignored.
+		case js_ast.UnOpTypeof:
+			if _, ok := e.Value.Data.(*js_ast.EIdentifier); ok {
+				return true
+			}
 			return p.exprCanBeRemovedIfUnused(e.Value)
 		}
 
@@ -13388,13 +13426,59 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		switch e.Op {
 		// These operators must not have any type conversions that can execute code
 		// such as "toString" or "valueOf". They must also never throw any exceptions.
-		case js_ast.BinOpStrictEq, js_ast.BinOpStrictNe, js_ast.BinOpComma,
-			js_ast.BinOpLogicalOr, js_ast.BinOpLogicalAnd, js_ast.BinOpNullishCoalescing:
+		case js_ast.BinOpStrictEq, js_ast.BinOpStrictNe, js_ast.BinOpComma, js_ast.BinOpNullishCoalescing:
 			return p.exprCanBeRemovedIfUnused(e.Left) && p.exprCanBeRemovedIfUnused(e.Right)
+
+		// Special-case "||" to make sure "typeof x === 'undefined' || x" can be removed
+		case js_ast.BinOpLogicalOr:
+			return p.exprCanBeRemovedIfUnused(e.Left) &&
+				(p.isSideEffectFreeUnboundIdentifierRef(e.Right, e.Left, false) || p.exprCanBeRemovedIfUnused(e.Right))
+
+		// Special-case "&&" to make sure "typeof x !== 'undefined' && x" can be removed
+		case js_ast.BinOpLogicalAnd:
+			return p.exprCanBeRemovedIfUnused(e.Left) &&
+				(p.isSideEffectFreeUnboundIdentifierRef(e.Right, e.Left, true) || p.exprCanBeRemovedIfUnused(e.Right))
+
+		// For "==" and "!=", pretend the operator was actually "===" or "!==". If
+		// we know that we can convert it to "==" or "!=", then we can consider the
+		// operator itself to have no side effects. This matters because our mangle
+		// logic will convert "typeof x === 'object'" into "typeof x == 'object'"
+		// and since "typeof x === 'object'" is considered to be side-effect free,
+		// we must also consider "typeof x == 'object'" to be side-effect free.
+		case js_ast.BinOpLooseEq, js_ast.BinOpLooseNe:
+			return canChangeStrictToLoose(e.Left, e.Right) && p.exprCanBeRemovedIfUnused(e.Left) && p.exprCanBeRemovedIfUnused(e.Right)
 		}
 	}
 
 	// Assume all other expression types have side effects and cannot be removed
+	return false
+}
+
+func (p *parser) isSideEffectFreeUnboundIdentifierRef(value js_ast.Expr, guardCondition js_ast.Expr, isYesBranch bool) bool {
+	if id, ok := value.Data.(*js_ast.EIdentifier); ok && p.symbols[id.Ref.InnerIndex].Kind == js_ast.SymbolUnbound {
+		if binary, ok := guardCondition.Data.(*js_ast.EBinary); ok {
+			switch binary.Op {
+			case js_ast.BinOpStrictEq, js_ast.BinOpStrictNe, js_ast.BinOpLooseEq, js_ast.BinOpLooseNe:
+				// Pattern match for "typeof x !== <string>"
+				typeof, string := binary.Left, binary.Right
+				if _, ok := typeof.Data.(*js_ast.EString); ok {
+					typeof, string = string, typeof
+				}
+				if typeof, ok := typeof.Data.(*js_ast.EUnary); ok && typeof.Op == js_ast.UnOpTypeof {
+					if text, ok := string.Data.(*js_ast.EString); ok {
+						// In "typeof x !== 'undefined' ? x : null", the reference to "x" is side-effect free
+						// In "typeof x === 'object' ? x : null", the reference to "x" is side-effect free
+						if (js_lexer.UTF16EqualsString(text.Value, "undefined") == isYesBranch) ==
+							(binary.Op == js_ast.BinOpStrictNe || binary.Op == js_ast.BinOpLooseNe) {
+							if id2, ok := typeof.Value.Data.(*js_ast.EIdentifier); ok && id2.Ref == id.Ref {
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 	return false
 }
 
@@ -13830,11 +13914,11 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	// single pass, but it turns out it's pretty much impossible to do this
 	// correctly while handling arrow functions because of the grammar
 	// ambiguities.
-	if !config.IsTreeShakingEnabled(p.options.mode, p.options.outputFormat) {
-		// When not bundling, everything comes in a single part
+	if !p.options.treeShaking {
+		// When tree shaking is disabled, everything comes in a single part
 		parts = p.appendPart(parts, stmts)
 	} else {
-		// When bundling, each top-level statement is potentially a separate part
+		// When tree shaking is enabled, each top-level statement is potentially a separate part
 		for _, stmt := range stmts {
 			switch s := stmt.Data.(type) {
 			case *js_ast.SLocal:
@@ -13846,10 +13930,22 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 				}
 
 			case *js_ast.SImport, *js_ast.SExportFrom, *js_ast.SExportStar:
-				// Move imports (and import-like exports) to the top of the file to
-				// ensure that if they are converted to a require() call, the effects
-				// will take place before any other statements are evaluated.
-				before = p.appendPart(before, []js_ast.Stmt{stmt})
+				if p.options.mode != config.ModePassThrough {
+					// Move imports (and import-like exports) to the top of the file to
+					// ensure that if they are converted to a require() call, the effects
+					// will take place before any other statements are evaluated.
+					before = p.appendPart(before, []js_ast.Stmt{stmt})
+				} else {
+					// If we aren't doing any format conversion, just keep these statements
+					// inline where they were. Exports are sorted so order doesn't matter:
+					// https://262.ecma-international.org/6.0/#sec-module-namespace-exotic-objects.
+					// However, this is likely an aesthetic issue that some people will
+					// complain about. In addition, there are code transformation tools
+					// such as TypeScript and Babel with bugs where the order of exports
+					// in the file is incorrectly preserved instead of sorted, so preserving
+					// the order of exports ourselves here may be preferable.
+					parts = p.appendPart(parts, []js_ast.Stmt{stmt})
+				}
 
 			case *js_ast.SExportEquals:
 				// TypeScript "export = value;" becomes "module.exports = value;". This
