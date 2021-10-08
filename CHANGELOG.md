@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.13.4
+
+* Fix permission issues with the install script ([#1642](https://github.com/evanw/esbuild/issues/1642))
+
+    The `esbuild` package contains a small JavaScript stub file that implements the CLI (command-line interface). Its only purpose is to spawn the binary esbuild executable as a child process and forward the command-line arguments to it.
+
+    The install script contains an optimization that replaces this small JavaScript stub with the actual binary executable at install time to avoid the overhead of unnecessarily creating a new `node` process. This optimization can't be done at package publish time because there is only one `esbuild` package but there are many supported platforms, so the binary executable for the current platform must live outside of the `esbuild` package.
+
+    However, the optimization was implemented with an [unlink](https://www.man7.org/linux/man-pages/man2/unlink.2.html) operation followed by a [link](https://www.man7.org/linux/man-pages/man2/link.2.html) operation. This means that if the first step fails, the package is left in a broken state since the JavaScript stub file is deleted but not yet replaced.
+
+    With this release, the optimization is now implemented with a [link](https://www.man7.org/linux/man-pages/man2/link.2.html) operation followed by a [rename](https://www.man7.org/linux/man-pages/man2/rename.2.html) operation. This should always leave the package in a working state even if either step fails.
+
+* Add a fallback for `npm install esbuild --no-optional` ([#1647](https://github.com/evanw/esbuild/issues/1647))
+
+    The installation method for esbuild's platform-specific binary executable was recently changed in version 0.13.0. Before that version esbuild downloaded it in an install script, and after that version esbuild lets the package manager download it using the `optionalDependencies` feature in `package.json`. This change was made because downloading the binary executable in an install script never really fully worked. The reasons are complex but basically there are a variety of edge cases where people people want to install esbuild in environments that they have customized such that downloading esbuild isn't possible. Using `optionalDependencies` instead lets the package manager deal with it instead, which should work fine in all cases (either that or your package manager has a bug, but that's not esbuild's problem).
+
+    There is one case where this new installation method doesn't work: if you pass the `--no-optional` flag to npm to disable the `optionalDependencies` feature. If you do this, you prevent esbuild from being installed. This is not a problem with esbuild because you are manually enabling a flag to change npm's behavior such that esbuild doesn't install correctly. However, people still want to do this.
+
+    With this release, esbuild will now fall back to the old installation method if the new installation method fails. **THIS MAY NOT WORK.** The new `optionalDependencies` installation method is the only supported way to install esbuild with npm. The old downloading installation method was removed because it doesn't always work. The downloading method is only being provided to try to be helpful but it's not the supported installation method. If you pass `--no-optional` and the download fails due to some environment customization you did, the recommended fix is to just remove the `--no-optional` flag.
+
+* Support the new `.mts` and `.cts` TypeScript file extensions
+
+    The upcoming version 4.5 of TypeScript has two new file extensions: `.mts` and `.cts`. Files with these extensions can be imported using the `.mjs` and `.cjs`, respectively. So the statement `import "./foo.mjs"` in TypeScript can actually succeed even if the file `./foo.mjs` doesn't exist on the file system as long as the file `./foo.mts` does exist. The import path with the `.mjs` extension is automatically re-routed to the corresponding file with the `.mts` extension at type-checking time by the TypeScript compiler. See [the TypeScript 4.5 beta announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-4-5-beta/#new-file-extensions) for details.
+
+    With this release, esbuild will also automatically rewrite `.mjs` to `.mts` and `.cjs` to `.cts` when resolving import paths to files on the file system. This should make it possible to bundle code written in this new style. In addition, the extensions `.mts` and `.cts` are now also considered valid TypeScript file extensions by default along with the `.ts` extension.
+
+* Fix invalid CSS minification of `margin` and `padding` ([#1657](https://github.com/evanw/esbuild/issues/1657))
+
+    CSS minification does collapsing of `margin` and `padding` related properties. For example:
+
+    ```css
+    /* Original CSS */
+    div {
+      margin: auto;
+      margin-top: 5px;
+      margin-left: 5px;
+    }
+
+    /* Minified CSS */
+    div{margin:5px auto auto 5px}
+    ```
+
+    However, while this works for the `auto` keyword, it doesn't work for other keywords. For example:
+
+    ```css
+    /* Original CSS */
+    div {
+      margin: inherit;
+      margin-top: 5px;
+      margin-left: 5px;
+    }
+
+    /* Minified CSS */
+    div{margin:inherit;margin-top:5px;margin-left:5px}
+    ```
+
+    Transforming this to `div{margin:5px inherit inherit 5px}`, as was done in previous releases of esbuild, is an invalid transformation and results in incorrect CSS. This release of esbuild fixes this CSS transformation bug.
+
 ## 0.13.3
 
 * Support TypeScript type-only import/export specifiers ([#1637](https://github.com/evanw/esbuild/pull/1637))
