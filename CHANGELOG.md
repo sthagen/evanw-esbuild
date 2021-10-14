@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.13.6
+
+* Emit decorators for `declare` class fields ([#1675](https://github.com/evanw/esbuild/issues/1675))
+
+    In version 3.7, TypeScript introduced the `declare` keyword for class fields that avoids generating any code for that field:
+
+    ```ts
+    // TypeScript input
+    class Foo {
+      a: number
+      declare b: number
+    }
+
+    // JavaScript output
+    class Foo {
+      a;
+    }
+    ```
+
+    However, it turns out that TypeScript still emits decorators for these omitted fields. With this release, esbuild will now do this too:
+
+    ```ts
+    // TypeScript input
+    class Foo {
+      @decorator a: number;
+      @decorator declare b: number;
+    }
+
+    // Old JavaScript output
+    class Foo {
+      a;
+    }
+    __decorateClass([
+      decorator
+    ], Foo.prototype, "a", 2);
+
+    // New JavaScript output
+    class Foo {
+      a;
+    }
+    __decorateClass([
+      decorator
+    ], Foo.prototype, "a", 2);
+    __decorateClass([
+      decorator
+    ], Foo.prototype, "b", 2);
+    ```
+
+* Experimental support for esbuild on NetBSD ([#1624](https://github.com/evanw/esbuild/pull/1624))
+
+    With this release, esbuild now has a published binary executable for [NetBSD](https://www.netbsd.org/) in the [`esbuild-netbsd-64`](https://www.npmjs.com/package/esbuild-netbsd-64) npm package, and esbuild's installer has been modified to attempt to use it when on NetBSD. Hopefully this makes installing esbuild via npm work on NetBSD. This change was contributed by [@gdt](https://github.com/gdt).
+
+    ⚠️ Note: NetBSD is not one of [Node's supported platforms](https://nodejs.org/api/process.html#process_process_platform), so installing esbuild may or may not work on NetBSD depending on how Node has been patched. This is not a problem with esbuild. ⚠️
+
+* Disable the "esbuild was bundled" warning if `ESBUILD_BINARY_PATH` is provided ([#1678](https://github.com/evanw/esbuild/pull/1678))
+
+    The `ESBUILD_BINARY_PATH` environment variable allows you to substitute an alternate binary executable for esbuild's JavaScript API. This is useful in certain cases such as when debugging esbuild. The JavaScript API has some code that throws an error if it detects that it was bundled before being run, since bundling prevents esbuild from being able to find the path to its binary executable. However, that error is unnecessary if `ESBUILD_BINARY_PATH` is present because an alternate path has been provided. This release disables the warning when `ESBUILD_BINARY_PATH` is present so that esbuild can be used when bundled as long as you also manually specify `ESBUILD_BINARY_PATH`.
+
+    This change was contributed by [@heypiotr](https://github.com/heypiotr).
+
+* Remove unused `catch` bindings when minifying ([#1660](https://github.com/evanw/esbuild/pull/1660))
+
+    With this release, esbuild will now remove unused `catch` bindings when minifying:
+
+    ```js
+    // Original code
+    try {
+      throw 0;
+    } catch (e) {
+    }
+
+    // Old output (with --minify)
+    try{throw 0}catch(t){}
+
+    // New output (with --minify)
+    try{throw 0}catch{}
+    ```
+
+    This takes advantage of the new [optional catch binding](https://github.com/tc39/proposal-optional-catch-binding) syntax feature that was introduced in ES2019. This minification rule is only enabled when optional catch bindings are supported by the target environment. Specifically, it's not enabled when using `--target=es2018` or older. Make sure to set esbuild's `target` setting correctly when minifying if the code will be running in an older JavaScript environment.
+
+    This change was contributed by [@sapphi-red](https://github.com/sapphi-red).
+
 ## 0.13.5
 
 * Improve watch mode accuracy ([#1113](https://github.com/evanw/esbuild/issues/1113))
@@ -4220,7 +4302,7 @@ In addition to the breaking changes above, the following features are also inclu
 
 * Allow namespaced names in JSX syntax ([#702](https://github.com/evanw/esbuild/issues/702))
 
-    XML-style namespaced names with a `:` in the middle are a part of the [JSX specification](http://facebook.github.io/jsx/) but they are explicitly unimplemented by React and TypeScript so esbuild doesn't currently support them. However, there was a user request to support this feature since it's part of the JSX specification and esbuild's JSX support can be used for non-React purposes. So this release now supports namespaced names in JSX expressions:
+    XML-style namespaced names with a `:` in the middle are a part of the [JSX specification](https://facebook.github.io/jsx/) but they are explicitly unimplemented by React and TypeScript so esbuild doesn't currently support them. However, there was a user request to support this feature since it's part of the JSX specification and esbuild's JSX support can be used for non-React purposes. So this release now supports namespaced names in JSX expressions:
 
     ```jsx
     let xml =
@@ -7427,7 +7509,7 @@ Note that you can also just use `--strict` to enable strictness for all transfor
 
 * Special-case `require` in browserify bundles ([#80](https://github.com/evanw/esbuild/issues/80) and [#90](https://github.com/evanw/esbuild/issues/90))
 
-    [Browserify](http://browserify.org/) generates code containing the expression `typeof require == "function" && require` which then ends up in a lot of npm packages. This expression is problematic because bundling involves statically determining all source files and their dependencies. Using `require` dynamically like this defeats the static analysis. It's also problematic because esbuild replaces `typeof require == "function"` with `true` since `require` is a function at compile-time when bundling. Then `true && require` becomes `require` in the generated code, which crashes at run time.
+    [Browserify](https://browserify.org/) generates code containing the expression `typeof require == "function" && require` which then ends up in a lot of npm packages. This expression is problematic because bundling involves statically determining all source files and their dependencies. Using `require` dynamically like this defeats the static analysis. It's also problematic because esbuild replaces `typeof require == "function"` with `true` since `require` is a function at compile-time when bundling. Then `true && require` becomes `require` in the generated code, which crashes at run time.
 
     Previously esbuild would generate an error for these expressions. Now esbuild replaces `typeof require == "function" && require` with `false` when targeting the browser and `require` when targeting node. This matches the intent of the browserify prelude snippet and allows esbuild to build libraries containing this code without errors or warnings.
 
@@ -7445,7 +7527,7 @@ Note that you can also just use `--strict` to enable strictness for all transfor
 
 * Fix interpretation of legacy `-->` single-line HTML comments
 
-    The `-->` sequence starts a single-line comment similar to `//`. This is legacy behavior from [annex B](http://www.ecma-international.org/ecma-262/6.0/#sec-html-like-comments) under the name `SingleLineHTMLCloseComment`. However, `-->` was incorrectly treated as the start of a comment even when it didn't come at the beginning of the line. Now `-->` only starts a comment if there are no tokens before it on that line.
+    The `-->` sequence starts a single-line comment similar to `//`. This is legacy behavior from [annex B](https://www.ecma-international.org/ecma-262/6.0/#sec-html-like-comments) under the name `SingleLineHTMLCloseComment`. However, `-->` was incorrectly treated as the start of a comment even when it didn't come at the beginning of the line. Now `-->` only starts a comment if there are no tokens before it on that line.
 
 * Allow shadowing of CommonJS variables ([#165](https://github.com/evanw/esbuild/issues/165))
 

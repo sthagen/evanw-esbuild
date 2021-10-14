@@ -341,6 +341,7 @@ func TestTSClass(t *testing.T) {
 	expectPrintedTS(t, "class Foo { override public foo: number }", "class Foo {\n}\n")
 	expectPrintedTS(t, "class Foo { public override foo: number }", "class Foo {\n}\n")
 	expectPrintedTS(t, "class Foo { declare override public foo: number }", "class Foo {\n}\n")
+	expectParseErrorTS(t, "class Foo { declare foo = 123 }", "<stdin>: error: Class fields that use \"declare\" cannot be initialized\n")
 
 	expectPrintedTS(t, "class Foo { public static foo: number }", "class Foo {\n}\n")
 	expectPrintedTS(t, "class Foo { private static foo: number }", "class Foo {\n}\n")
@@ -354,6 +355,26 @@ func TestTSClass(t *testing.T) {
 	expectPrintedTS(t, "class Foo { public override static foo: number }", "class Foo {\n}\n")
 	expectPrintedTS(t, "class Foo { public static override foo: number }", "class Foo {\n}\n")
 	expectPrintedTS(t, "class Foo { declare override public static foo: number }", "class Foo {\n}\n")
+	expectParseErrorTS(t, "class Foo { declare static foo = 123 }", "<stdin>: error: Class fields that use \"declare\" cannot be initialized\n")
+	expectParseErrorTS(t, "class Foo { static declare foo = 123 }", "<stdin>: error: Class fields that use \"declare\" cannot be initialized\n")
+
+	expectParseErrorTS(t, "class Foo { declare #foo }", "<stdin>: error: \"declare\" cannot be used with a private identifier\n")
+	expectParseErrorTS(t, "class Foo { declare [foo: string]: number }", "<stdin>: error: \"declare\" cannot be used with an index signature\n")
+	expectParseErrorTS(t, "class Foo { declare foo() }", "<stdin>: error: \"declare\" cannot be used with a method\n")
+	expectParseErrorTS(t, "class Foo { declare get foo() }", "<stdin>: error: \"declare\" cannot be used with a getter\n")
+	expectParseErrorTS(t, "class Foo { declare set foo(x) }", "<stdin>: error: \"declare\" cannot be used with a setter\n")
+
+	expectParseErrorTS(t, "class Foo { declare static #foo }", "<stdin>: error: \"declare\" cannot be used with a private identifier\n")
+	expectParseErrorTS(t, "class Foo { declare static [foo: string]: number }", "<stdin>: error: \"declare\" cannot be used with an index signature\n")
+	expectParseErrorTS(t, "class Foo { declare static foo() }", "<stdin>: error: \"declare\" cannot be used with a method\n")
+	expectParseErrorTS(t, "class Foo { declare static get foo() }", "<stdin>: error: \"declare\" cannot be used with a getter\n")
+	expectParseErrorTS(t, "class Foo { declare static set foo(x) }", "<stdin>: error: \"declare\" cannot be used with a setter\n")
+
+	expectParseErrorTS(t, "class Foo { static declare #foo }", "<stdin>: error: \"declare\" cannot be used with a private identifier\n")
+	expectParseErrorTS(t, "class Foo { static declare [foo: string]: number }", "<stdin>: error: \"declare\" cannot be used with an index signature\n")
+	expectParseErrorTS(t, "class Foo { static declare foo() }", "<stdin>: error: \"declare\" cannot be used with a method\n")
+	expectParseErrorTS(t, "class Foo { static declare get foo() }", "<stdin>: error: \"declare\" cannot be used with a getter\n")
+	expectParseErrorTS(t, "class Foo { static declare set foo(x) }", "<stdin>: error: \"declare\" cannot be used with a setter\n")
 
 	expectPrintedTS(t, "class Foo { [key: string]: any\nfoo = 0 }", "class Foo {\n  constructor() {\n    this.foo = 0;\n  }\n}\n")
 	expectPrintedTS(t, "class Foo { [key: string]: any; foo = 0 }", "class Foo {\n  constructor() {\n    this.foo = 0;\n  }\n}\n")

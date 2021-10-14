@@ -104,8 +104,13 @@ func TestTSDeclareClassFields(t *testing.T) {
 				class Foo {
 					a
 					declare b
-					c = () => this
-					declare d = () => this
+					[(() => null, c)]
+					declare [(() => null, d)]
+
+					static A
+					static declare B
+					static [(() => null, C)]
+					static declare [(() => null, D)]
 				}
 				(() => new Foo())()
 			`,
@@ -113,8 +118,13 @@ func TestTSDeclareClassFields(t *testing.T) {
 				class Bar {
 					a
 					declare b
-					c = () => this
-					declare d = () => this
+					[(() => null, c)]
+					declare [(() => null, d)]
+
+					static A
+					static declare B
+					static [(() => null, C)]
+					static declare [(() => null, D)]
 				}
 				(() => new Bar())()
 			`,
@@ -596,11 +606,14 @@ func TestTypeScriptDecorators(t *testing.T) {
 				export default class Foo {
 					@x @y mUndef
 					@x @y mDef = 1
-					constructor(@x0 @y0 arg0, @x1 @y1 arg1) {}
 					@x @y method(@x0 @y0 arg0, @x1 @y1 arg1) { return new Foo }
+					@x @y declare mDecl
+					constructor(@x0 @y0 arg0, @x1 @y1 arg1) {}
+
 					@x @y static sUndef
 					@x @y static sDef = new Foo
 					@x @y static sMethod(@x0 @y0 arg0, @x1 @y1 arg1) { return new Foo }
+					@x @y static declare mDecl
 				}
 			`,
 			"/all_computed.ts": `
@@ -610,6 +623,7 @@ func TestTypeScriptDecorators(t *testing.T) {
 					@x @y [mUndef()]
 					@x @y [mDef()] = 1
 					@x @y [method()](@x0 @y0 arg0, @x1 @y1 arg1) { return new Foo }
+					@x @y declare [mDecl()]
 
 					// Side effect order must be preserved even for fields without decorators
 					[xUndef()]
@@ -620,6 +634,7 @@ func TestTypeScriptDecorators(t *testing.T) {
 					@x @y static [sUndef()]
 					@x @y static [sDef()] = new Foo
 					@x @y static [sMethod()](@x0 @y0 arg0, @x1 @y1 arg1) { return new Foo }
+					@x @y static declare [mDecl()]
 				}
 			`,
 			"/a.ts": `

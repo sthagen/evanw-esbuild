@@ -107,8 +107,8 @@ wasm-napi-exit0-windows:
 	main.bat
 	rm -f main.*
 
-platform-all: cmd/esbuild/version.go test-all
-	make -j8 \
+platform-all: cmd/esbuild/version.go
+	make -j4 \
 		platform-windows \
 		platform-windows-32 \
 		platform-windows-arm64 \
@@ -117,6 +117,7 @@ platform-all: cmd/esbuild/version.go test-all
 		platform-darwin-arm64 \
 		platform-freebsd \
 		platform-freebsd-arm64 \
+		platform-netbsd \
 		platform-openbsd \
 		platform-linux \
 		platform-linux-32 \
@@ -161,6 +162,9 @@ platform-freebsd:
 
 platform-freebsd-arm64:
 	make GOOS=freebsd GOARCH=arm64 NPMDIR=npm/esbuild-freebsd-arm64 platform-unixlike
+
+platform-netbsd:
+	make GOOS=netbsd GOARCH=amd64 NPMDIR=npm/esbuild-netbsd-64 platform-unixlike
 
 platform-openbsd:
 	make GOOS=openbsd GOARCH=amd64 NPMDIR=npm/esbuild-openbsd-64 platform-unixlike
@@ -210,13 +214,18 @@ publish-all: cmd/esbuild/version.go test-prepublish
 	@read OTP && OTP="$$OTP" make -j4 \
 		publish-windows \
 		publish-windows-32 \
-		publish-windows-arm64 \
-		publish-openbsd
+		publish-windows-arm64
 
 	@echo Enter one-time password:
 	@read OTP && OTP="$$OTP" make -j4 \
 		publish-freebsd \
 		publish-freebsd-arm64 \
+		publish-openbsd \
+		publish-netbsd
+
+	@echo Enter one-time password:
+	@read OTP && OTP="$$OTP" $(MAKE) -j4 \
+		publish-sunos \
 		publish-darwin \
 		publish-darwin-arm64
 
@@ -231,12 +240,11 @@ publish-all: cmd/esbuild/version.go test-prepublish
 	@read OTP && OTP="$$OTP" make -j4 \
 		publish-linux-arm64 \
 		publish-linux-mips64le \
-		publish-linux-ppc64le \
-		publish-sunos
+		publish-linux-ppc64le
 
 	# Do these last to avoid race conditions
 	@echo Enter one-time password:
-	@read OTP && OTP="$$OTP" make -j2 \
+	@read OTP && OTP="$$OTP" make -j4 \
 		publish-neutral \
 		publish-deno \
 		publish-wasm
@@ -268,6 +276,9 @@ publish-freebsd: platform-freebsd
 
 publish-freebsd-arm64: platform-freebsd-arm64
 	test -n "$(OTP)" && cd npm/esbuild-freebsd-arm64 && npm publish --otp="$(OTP)"
+
+publish-netbsd: platform-netbsd
+	test -n "$(OTP)" && cd npm/esbuild-netbsd-64 && npm publish --otp="$(OTP)"
 
 publish-openbsd: platform-openbsd
 	test -n "$(OTP)" && cd npm/esbuild-openbsd-64 && npm publish --otp="$(OTP)"
@@ -317,6 +328,7 @@ clean:
 	rm -rf npm/esbuild-darwin-arm64/bin
 	rm -rf npm/esbuild-freebsd-64/bin
 	rm -rf npm/esbuild-freebsd-amd64/bin
+	rm -rf npm/esbuild-netbsd-64/bin
 	rm -rf npm/esbuild-openbsd-64/bin
 	rm -rf npm/esbuild-linux-32/bin
 	rm -rf npm/esbuild-linux-64/bin
@@ -341,21 +353,11 @@ clean-all: clean
 # These npm packages are used for benchmarks. Install them in subdirectories
 # because we want to install the same package name at multiple versions
 
-require/webpack/node_modules:
-	cd require/webpack && npm ci
-
 require/webpack5/node_modules:
 	cd require/webpack5 && npm ci
 
 require/rollup/node_modules:
 	cd require/rollup && npm ci
-
-require/parcel/node_modules:
-	cd require/parcel && npm ci
-
-	# Fix a bug where parcel doesn't know about one specific node builtin module
-	mkdir -p require/parcel/node_modules/inspector
-	touch require/parcel/node_modules/inspector/index.js
 
 require/parcel2/node_modules:
 	cd require/parcel2 && npm ci
@@ -443,7 +445,7 @@ test-rollup: esbuild | demo/rollup
 	cd demo/rollup && ../../esbuild $(TEST_ROLLUP_FLAGS) --minify && npm run test:only
 
 ################################################################################
-# This builds Sucrase using esbuild and then uses it to run Sucrase's test suite
+# This builds Preact using esbuild with splitting enabled, which had a bug at one point
 
 PREACT_SPLITTING += import { h } from 'preact';
 PREACT_SPLITTING += import { USE as use } from 'preact/hooks';
@@ -537,7 +539,7 @@ demo/three: | github/three
 	mkdir -p demo/three
 	cp -r github/three/src demo/three/src
 
-demo-three: demo-three-esbuild demo-three-rollup demo-three-webpack demo-three-webpack5 demo-three-parcel demo-three-parcel2
+demo-three: demo-three-esbuild demo-three-rollup demo-three-webpack5 demo-three-parcel2
 
 demo-three-esbuild: esbuild | demo/three
 	rm -fr demo/three/esbuild
@@ -567,18 +569,6 @@ demo-three-rollup: | require/rollup/node_modules demo/three
 	cd require/rollup/demo/three && time -p ../../node_modules/.bin/rollup src/Three.js -o out/Three.rollup.js -c config.js
 	du -h demo/three/rollup/Three.rollup.js*
 
-THREE_WEBPACK_FLAGS += --devtool=sourcemap
-THREE_WEBPACK_FLAGS += --mode=production
-THREE_WEBPACK_FLAGS += --output-library THREE
-
-demo-three-webpack: | require/webpack/node_modules demo/three
-	rm -fr require/webpack/demo/three demo/three/webpack require/webpack/node_modules/.cache/terser-webpack-plugin
-	mkdir -p require/webpack/demo/three demo/three/webpack
-	ln -s ../../../../demo/three/src require/webpack/demo/three/src
-	ln -s ../../../../demo/three/webpack require/webpack/demo/three/out
-	cd require/webpack/demo/three && time -p ../../node_modules/.bin/webpack src/Three.js $(THREE_WEBPACK_FLAGS) -o out/Three.webpack.js
-	du -h demo/three/webpack/Three.webpack.js*
-
 THREE_WEBPACK5_FLAGS += --devtool=source-map
 THREE_WEBPACK5_FLAGS += --mode=production
 THREE_WEBPACK5_FLAGS += --output-library THREE
@@ -590,19 +580,6 @@ demo-three-webpack5: | require/webpack5/node_modules demo/three
 	ln -s ../../../../demo/three/webpack5 require/webpack5/demo/three/out
 	cd require/webpack5/demo/three && time -p ../../node_modules/.bin/webpack --entry ./src/Three.js $(THREE_WEBPACK5_FLAGS) -o out/Three.webpack5.js
 	du -h demo/three/webpack5/Three.webpack5.js*
-
-THREE_PARCEL_FLAGS += --global THREE
-THREE_PARCEL_FLAGS += --no-autoinstall
-THREE_PARCEL_FLAGS += --out-dir out
-THREE_PARCEL_FLAGS += --public-url ./
-
-demo-three-parcel: | require/parcel/node_modules demo/three
-	rm -fr require/parcel/demo/three demo/three/parcel
-	mkdir -p require/parcel/demo/three demo/three/parcel
-	ln -s ../../../../demo/three/src require/parcel/demo/three/src
-	ln -s ../../../../demo/three/parcel require/parcel/demo/three/out
-	cd require/parcel/demo/three && time -p ../../node_modules/.bin/parcel build src/Three.js $(THREE_PARCEL_FLAGS) --out-file Three.parcel.js
-	du -h demo/three/parcel/Three.parcel.js*
 
 demo-three-parcel2: | require/parcel2/node_modules demo/three
 	rm -fr require/parcel2/demo/three demo/three/parcel2
@@ -626,7 +603,7 @@ bench/three: | github/three
 	for i in 1 2 3 4 5 6 7 8 9 10; do echo "import * as copy$$i from './copy$$i/Three.js'; export {copy$$i}" >> bench/three/src/entry.js; done
 	echo 'Line count:' && find bench/three/src -name '*.js' | xargs wc -l | tail -n 1
 
-bench-three: bench-three-esbuild bench-three-rollup bench-three-webpack bench-three-webpack5 bench-three-parcel bench-three-parcel2
+bench-three: bench-three-esbuild bench-three-rollup bench-three-webpack5 bench-three-parcel2
 
 bench-three-esbuild: esbuild | bench/three
 	rm -fr bench/three/esbuild
@@ -650,14 +627,6 @@ bench-three-rollup: | require/rollup/node_modules bench/three
 	cd require/rollup/bench/three && time -p ../../node_modules/.bin/rollup src/entry.js -o out/entry.rollup.js -c config.js
 	du -h bench/three/rollup/entry.rollup.js*
 
-bench-three-webpack: | require/webpack/node_modules bench/three
-	rm -fr require/webpack/bench/three bench/three/webpack require/webpack/node_modules/.cache/terser-webpack-plugin
-	mkdir -p require/webpack/bench/three bench/three/webpack
-	ln -s ../../../../bench/three/src require/webpack/bench/three/src
-	ln -s ../../../../bench/three/webpack require/webpack/bench/three/out
-	cd require/webpack/bench/three && time -p ../../node_modules/.bin/webpack src/entry.js $(THREE_WEBPACK_FLAGS) -o out/entry.webpack.js
-	du -h bench/three/webpack/entry.webpack.js*
-
 bench-three-webpack5: | require/webpack5/node_modules bench/three
 	rm -fr require/webpack5/bench/three bench/three/webpack5
 	mkdir -p require/webpack5/bench/three bench/three/webpack5
@@ -665,14 +634,6 @@ bench-three-webpack5: | require/webpack5/node_modules bench/three
 	ln -s ../../../../bench/three/webpack5 require/webpack5/bench/three/out
 	cd require/webpack5/bench/three && time -p ../../node_modules/.bin/webpack --entry ./src/entry.js $(THREE_WEBPACK5_FLAGS) -o out/entry.webpack5.js
 	du -h bench/three/webpack5/entry.webpack5.js*
-
-bench-three-parcel: | require/parcel/node_modules bench/three
-	rm -fr require/parcel/bench/three bench/three/parcel
-	mkdir -p require/parcel/bench/three bench/three/parcel
-	ln -s ../../../../bench/three/src require/parcel/bench/three/src
-	ln -s ../../../../bench/three/parcel require/parcel/bench/three/out
-	cd require/parcel/bench/three && time -p ../../node_modules/.bin/parcel build src/entry.js $(THREE_PARCEL_FLAGS) --out-file entry.parcel.js
-	du -h bench/three/parcel/entry.parcel.js*
 
 bench-three-parcel2: | require/parcel2/node_modules bench/three
 	rm -fr require/parcel2/bench/three bench/three/parcel2
@@ -735,39 +696,16 @@ bench/rome-verify: | github/rome
 	cp -r github/rome/packages bench/rome-verify/packages
 	cp github/rome/package.json bench/rome-verify/package.json
 
-bench-rome: bench-rome-esbuild bench-rome-webpack bench-rome-webpack5 bench-rome-parcel bench-rome-parcel2
+bench-rome: bench-rome-esbuild bench-rome-webpack5 bench-rome-parcel2
 
 bench-rome-esbuild: esbuild | bench/rome bench/rome-verify
 	rm -fr bench/rome/esbuild
 	time -p ./esbuild --bundle --sourcemap --minify bench/rome/src/entry.ts --outfile=bench/rome/esbuild/rome.esbuild.js --platform=node --timing
 	time -p ./esbuild --bundle --sourcemap --minify bench/rome/src/entry.ts --outfile=bench/rome/esbuild/rome.esbuild.js --platform=node --timing
 	time -p ./esbuild --bundle --sourcemap --minify bench/rome/src/entry.ts --outfile=bench/rome/esbuild/rome.esbuild.js --platform=node --timing
-	# du -h bench/rome/esbuild/rome.esbuild.js*
-	# shasum bench/rome/esbuild/rome.esbuild.js*
-	# cd bench/rome-verify && rm -fr esbuild && ROME_CACHE=0 node ../rome/esbuild/rome.esbuild.js bundle packages/rome esbuild
-
-ROME_WEBPACK_CONFIG += module.exports = {
-ROME_WEBPACK_CONFIG +=   entry: './src/entry.ts',
-ROME_WEBPACK_CONFIG +=   mode: 'production',
-ROME_WEBPACK_CONFIG +=   target: 'node',
-ROME_WEBPACK_CONFIG +=   devtool: 'sourcemap',
-ROME_WEBPACK_CONFIG +=   module: { rules: [{ test: /\.ts$$/, loader: 'ts-loader', options: { transpileOnly: true } }] },
-ROME_WEBPACK_CONFIG +=   resolve: {
-ROME_WEBPACK_CONFIG +=     extensions: ['.ts', '.js'],
-ROME_WEBPACK_CONFIG +=     alias: { rome: __dirname + '/src/rome', '@romejs': __dirname + '/src/@romejs' },
-ROME_WEBPACK_CONFIG +=   },
-ROME_WEBPACK_CONFIG +=   output: { filename: 'rome.webpack.js', path: __dirname + '/out' },
-ROME_WEBPACK_CONFIG += };
-
-bench-rome-webpack: | require/webpack/node_modules bench/rome bench/rome-verify
-	rm -fr require/webpack/bench/rome bench/rome/webpack require/webpack/node_modules/.cache/terser-webpack-plugin
-	mkdir -p require/webpack/bench/rome bench/rome/webpack
-	echo "$(ROME_WEBPACK_CONFIG)" > require/webpack/bench/rome/webpack.config.js
-	ln -s ../../../../bench/rome/src require/webpack/bench/rome/src
-	ln -s ../../../../bench/rome/webpack require/webpack/bench/rome/out
-	cd require/webpack/bench/rome && time -p ../../node_modules/.bin/webpack
-	du -h bench/rome/webpack/rome.webpack.js*
-	cd bench/rome-verify && rm -fr webpack && ROME_CACHE=0 node ../rome/webpack/rome.webpack.js bundle packages/rome webpack
+	du -h bench/rome/esbuild/rome.esbuild.js*
+	shasum bench/rome/esbuild/rome.esbuild.js*
+	cd bench/rome-verify && rm -fr esbuild && ROME_CACHE=0 node ../rome/esbuild/rome.esbuild.js bundle packages/rome esbuild
 
 ROME_WEBPACK5_CONFIG += module.exports = {
 ROME_WEBPACK5_CONFIG +=   entry: './src/entry.ts',
@@ -792,58 +730,16 @@ bench-rome-webpack5: | require/webpack5/node_modules bench/rome bench/rome-verif
 	du -h bench/rome/webpack5/rome.webpack.js*
 	cd bench/rome-verify && rm -fr webpack5 && ROME_CACHE=0 node ../rome/webpack5/rome.webpack.js bundle packages/rome webpack5
 
-ROME_PARCEL_FLAGS += --bundle-node-modules
-ROME_PARCEL_FLAGS += --no-autoinstall
-ROME_PARCEL_FLAGS += --out-dir .
-ROME_PARCEL_FLAGS += --public-url ./
-ROME_PARCEL_FLAGS += --target node
-
 ROME_PARCEL_ALIASES += "alias": {
 ROME_PARCEL_ALIASES +=   $(shell ls bench/rome/src/@romejs | sed 's/.*/"\@romejs\/&": ".\/@romejs\/&",/g')
 ROME_PARCEL_ALIASES +=   "rome": "./rome"
 ROME_PARCEL_ALIASES += }
 
-bench-rome-parcel: | require/parcel/node_modules bench/rome bench/rome-verify
-	rm -fr bench/rome/parcel
-	cp -r bench/rome/src bench/rome/parcel
-	rm -fr bench/rome/parcel/node_modules
-	cp -RP require/parcel/node_modules bench/rome/parcel/node_modules
-
-	# Inject aliases into "package.json" to fix Parcel ignoring "tsconfig.json".
-	cat require/parcel/package.json | sed '/^\}/d' > bench/rome/parcel/package.json
-	echo ', $(ROME_PARCEL_ALIASES) }' >> bench/rome/parcel/package.json
-
-	# Work around a bug that causes the resulting bundle to crash when run.
-	# See https://github.com/parcel-bundler/parcel/issues/1762 for more info.
-	echo 'import "regenerator-runtime/runtime"; import "./entry.ts"' > bench/rome/parcel/rome.parcel.ts
-
-	cd bench/rome/parcel && time -p node_modules/.bin/parcel build rome.parcel.ts $(ROME_PARCEL_FLAGS) --out-file rome.parcel.js
-	du -h bench/rome/parcel/rome.parcel.js*
-	cd bench/rome-verify && rm -fr parcel && ROME_CACHE=0 node ../rome/parcel/rome.parcel.js bundle packages/rome parcel
-
-# This fixes TypeScript parsing bugs in Parcel 2. Parcel 2 switched to using
-# Babel to transform TypeScript into JavaScript, and Babel's TypeScript parser is
-# incomplete. It cannot parse the code in the TypeScript benchmark.
-#
-# The suggested workaround for any Babel bugs is to install a plugin to get the
-# old TypeScript parser back. Read this thread for more information:
-# https://github.com/parcel-bundler/parcel/issues/2023.
-#
-# It also looks like the Parcel team is considering reverting this change:
-# https://github.com/parcel-bundler/parcel/issues/4938.
-PARCELRC += {
-PARCELRC +=   "extends": ["@parcel/config-default"],
-PARCELRC +=   "transformers": {
-PARCELRC +=     "*.ts": ["@parcel/transformer-typescript-tsc"]
-PARCELRC +=   }
-PARCELRC += }
-
 bench-rome-parcel2: | require/parcel2/node_modules bench/rome bench/rome-verify
 	rm -fr bench/rome/parcel2
-	cp -r bench/rome/src bench/rome/parcel2 # Can't use a symbolic link or ".parcelrc" breaks
+	cp -r bench/rome/src bench/rome/parcel2
 	rm -fr bench/rome/parcel2/node_modules
 	cp -RP require/parcel2/node_modules bench/rome/parcel2/node_modules
-	echo '$(PARCELRC)' > bench/rome/parcel2/.parcelrc
 
 	# Inject aliases into "package.json" to fix Parcel 2 ignoring "tsconfig.json".
 	# Also inject "engines": "node" to avoid Parcel 2 mangling node globals.

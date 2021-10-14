@@ -1804,13 +1804,13 @@ func (p *parser) parseStringLiteral() js_ast.Expr {
 }
 
 type propertyOpts struct {
-	asyncRange  logger.Range
-	isAsync     bool
-	isGenerator bool
+	asyncRange     logger.Range
+	tsDeclareRange logger.Range
+	isAsync        bool
+	isGenerator    bool
 
 	// Class-related options
 	isStatic          bool
-	isTSDeclare       bool
 	isTSAbstract      bool
 	isClass           bool
 	classHasExtends   bool
@@ -1843,6 +1843,9 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 		if !opts.isClass || len(opts.tsDecorators) > 0 {
 			p.lexer.Expected(js_lexer.TIdentifier)
 		}
+		if opts.tsDeclareRange.Len != 0 {
+			p.log.AddRangeError(&p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with a private identifier")
+		}
 		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EPrivateIdentifier{Ref: p.storeNameInRef(p.lexer.Identifier)}}
 		p.lexer.Next()
 
@@ -1856,6 +1859,10 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 		// Handle index signatures
 		if p.options.ts.Parse && p.lexer.Token == js_lexer.TColon && wasIdentifier && opts.isClass {
 			if _, ok := expr.Data.(*js_ast.EIdentifier); ok {
+				if opts.tsDeclareRange.Len != 0 {
+					p.log.AddRangeError(&p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with an index signature")
+				}
+
 				// "[key: string]: any;"
 				p.lexer.Next()
 				p.skipTypeScriptType(js_ast.LLowest)
@@ -1931,10 +1938,25 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 					}
 
 				case "declare":
-					if opts.isClass && p.options.ts.Parse && !opts.isTSDeclare && raw == name {
-						opts.isTSDeclare = true
+					if opts.isClass && p.options.ts.Parse && opts.tsDeclareRange.Len == 0 && raw == name {
+						opts.tsDeclareRange = nameRange
 						scopeIndex := len(p.scopesInOrder)
-						p.parseProperty(kind, opts, nil)
+
+						if prop, ok := p.parseProperty(kind, opts, nil); ok &&
+							prop.Kind == js_ast.PropertyNormal && prop.ValueOrNil.Data == nil {
+							// If this is a well-formed class field with the "declare" keyword,
+							// keep the declaration to preserve its side-effects, which may
+							// include the computed key and/or the TypeScript decorators:
+							//
+							//   class Foo {
+							//     declare [(console.log('side effect 1'), 'foo')]
+							//     @decorator(console.log('side effect 2')) declare bar
+							//   }
+							//
+							prop.Kind = js_ast.PropertyDeclare
+							return prop, true
+						}
+
 						p.discardScopesUpTo(scopeIndex)
 						return js_ast.Property{}, false
 					}
@@ -2039,6 +2061,10 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 		}
 
 		if p.lexer.Token == js_lexer.TEquals {
+			if opts.tsDeclareRange.Len != 0 {
+				p.log.AddRangeError(&p.tracker, p.lexer.Range(), "Class fields that use \"declare\" cannot be initialized")
+			}
+
 			p.lexer.Next()
 
 			// "super" property access is allowed in field initializers
@@ -2079,6 +2105,16 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 	// Parse a method expression
 	if p.lexer.Token == js_lexer.TOpenParen || kind != js_ast.PropertyNormal ||
 		opts.isClass || opts.isAsync || opts.isGenerator {
+		if opts.tsDeclareRange.Len != 0 {
+			what := "method"
+			if kind == js_ast.PropertyGet {
+				what = "getter"
+			} else if kind == js_ast.PropertySet {
+				what = "setter"
+			}
+			p.log.AddRangeError(&p.tracker, opts.tsDeclareRange, "\"declare\" cannot be used with a "+what)
+		}
+
 		if p.lexer.Token == js_lexer.TOpenParen && kind != js_ast.PropertyGet && kind != js_ast.PropertySet {
 			p.markSyntaxFeature(compat.ObjectExtensions, p.lexer.Range())
 		}
@@ -7552,6 +7588,35 @@ func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt 
 					}
 				}
 			}
+
+		case *js_ast.STry:
+			// Drop an unused identifier binding if the optional catch binding feature is supported
+			if !p.options.unsupportedJSFeatures.Has(compat.OptionalCatchBinding) && s.Catch != nil {
+				if id, ok := s.Catch.BindingOrNil.Data.(*js_ast.BIdentifier); ok {
+					if symbol := p.symbols[id.Ref.InnerIndex]; symbol.UseCountEstimate == 0 {
+						if symbol.Link != js_ast.InvalidRef {
+							// We cannot transform "try { x() } catch (y) { var y = 1 }" into
+							// "try { x() } catch { var y = 1 }" even though "y" is never used
+							// because the hoisted variable "y" would have different values
+							// after the statement ends due to a strange JavaScript quirk:
+							//
+							//   try { x() } catch (y) { var y = 1 }
+							//   console.log(y) // undefined
+							//
+							//   try { x() } catch { var y = 1 }
+							//   console.log(y) // 1
+							//
+						} else if p.currentScope.ContainsDirectEval {
+							// We cannot transform "try { x() } catch (y) { eval('z = y') }"
+							// into "try { x() } catch { eval('z = y') }" because the variable
+							// "y" is actually still used.
+						} else {
+							// "try { x() } catch (y) {}" => "try { x() } catch {}"
+							s.Catch.BindingOrNil.Data = nil
+						}
+					}
+				}
+			}
 		}
 
 		result = append(result, stmt)
@@ -12558,7 +12623,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		name := e.Fn.Name
 
 		// Remove unused function names when minifying
-		if p.options.mangleSyntax && name != nil && p.symbols[name.Ref.InnerIndex].UseCountEstimate == 0 {
+		if p.options.mangleSyntax && !p.currentScope.ContainsDirectEval &&
+			name != nil && p.symbols[name.Ref.InnerIndex].UseCountEstimate == 0 {
 			e.Fn.Name = nil
 		}
 
@@ -12955,7 +13021,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					}
 
 					// Remove the symbol if it's never used outside a dead code region
-					if symbol.UseCountEstimate == 0 {
+					if symbol.UseCountEstimate == 0 && (p.options.ts.Parse || !p.moduleScope.ContainsDirectEval) {
 						s.DefaultName = nil
 					}
 				}
@@ -12971,7 +13037,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					}
 
 					// Remove the symbol if it's never used outside a dead code region
-					if symbol.UseCountEstimate == 0 {
+					if symbol.UseCountEstimate == 0 && (p.options.ts.Parse || !p.moduleScope.ContainsDirectEval) {
 						// Make sure we don't remove this if it was used for a property
 						// access while bundling
 						if importItems, ok := p.importItemsForNamespace[s.NamespaceRef]; ok && len(importItems) == 0 {
@@ -12994,7 +13060,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 						}
 
 						// Remove the symbol if it's never used outside a dead code region
-						if symbol.UseCountEstimate != 0 {
+						if symbol.UseCountEstimate != 0 || (!p.options.ts.Parse && p.moduleScope.ContainsDirectEval) {
 							(*s.Items)[itemsEnd] = item
 							itemsEnd++
 						}
