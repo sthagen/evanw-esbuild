@@ -23,7 +23,7 @@ test-all:
 test-prepublish: check-go-version test-all test-preact-splitting test-sucrase bench-rome-esbuild bench-readmin-esbuild test-esprima test-rollup
 
 check-go-version:
-	@go version | grep ' go1\.17\.1 ' || (echo 'Please install Go version 1.17.1' && false)
+	@go version | grep ' go1\.17\.2 ' || (echo 'Please install Go version 1.17.2' && false)
 
 # This "ESBUILD_RACE" variable exists at the request of a user on GitHub who
 # wants to run "make test" on an unsupported version of macOS (version 10.9).
@@ -44,8 +44,13 @@ no-filepath:
 	@! grep --color --include '*.go' -r '"path/filepath"' cmd internal pkg || ( \
 		echo 'error: Use of "path/filepath" is disallowed. See http://golang.org/issue/43768.' && false)
 
+# This uses "env -i" to run in a clean environment with no environment
+# variables. It then adds some environment variables back as needed.
+# This is a hack to avoid a problem with the WebAssembly support in Go
+# 1.17.2, which will crash when run in an environment with over 4096
+# bytes of environment variable data such as GitHub Actions.
 test-wasm-node: esbuild
-	PATH="$(shell go env GOROOT)/misc/wasm:$$PATH" GOOS=js GOARCH=wasm go test ./internal/...
+	env -i $(shell go env) PATH="$(shell go env GOROOT)/misc/wasm:$(PATH)" GOOS=js GOARCH=wasm go test ./internal/...
 	node scripts/wasm-tests.js
 
 test-wasm-browser: platform-wasm | scripts/browser/node_modules
@@ -429,7 +434,7 @@ TEST_ROLLUP_FLAGS += src/node-entry.ts
 
 github/rollup:
 	mkdir -p github
-	git clone --depth 1 --branch v2.50.1 https://github.com/rollup/rollup.git github/rollup
+	git clone --depth 1 --branch v2.58.0 https://github.com/rollup/rollup.git github/rollup
 
 demo/rollup: | github/rollup
 	mkdir -p demo
