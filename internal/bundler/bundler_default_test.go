@@ -4742,3 +4742,47 @@ func TestBuiltInNodeModulePrecedence(t *testing.T) {
 		},
 	})
 }
+
+func TestEntryNamesNoSlashAfterDir(t *testing.T) {
+	default_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/src/app1/main.ts": `console.log(1)`,
+			"/src/app2/main.ts": `console.log(2)`,
+			"/src/app3/main.ts": `console.log(3)`,
+		},
+		entryPathsAdvanced: []EntryPoint{
+			{InputPath: "/src/app1/main.ts"},
+			{InputPath: "/src/app2/main.ts"},
+			{InputPath: "/src/app3/main.ts", OutputPath: "customPath"},
+		},
+		options: config.Options{
+			Mode: config.ModePassThrough,
+			EntryPathTemplate: []config.PathTemplate{
+				// "[dir]-[name]"
+				{Data: "./", Placeholder: config.DirPlaceholder},
+				{Data: "-", Placeholder: config.NamePlaceholder},
+			},
+			AbsOutputDir: "/out",
+		},
+	})
+}
+
+func TestEntryNamesNonPortableCharacter(t *testing.T) {
+	default_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry1-*.ts": `console.log(1)`,
+			"/entry2-*.ts": `console.log(2)`,
+		},
+		entryPathsAdvanced: []EntryPoint{
+			// The "*" should turn into "_" for cross-platform Windows portability
+			{InputPath: "/entry1-*.ts"},
+
+			// The "*" should be preserved since the user _really_ wants it
+			{InputPath: "/entry2-*.ts", OutputPath: "entry2-*"},
+		},
+		options: config.Options{
+			Mode:         config.ModePassThrough,
+			AbsOutputDir: "/out",
+		},
+	})
+}
