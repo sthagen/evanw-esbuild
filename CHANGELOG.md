@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.13.9
+
+* Add support for `imports` in `package.json` ([#1691](https://github.com/evanw/esbuild/issues/1691))
+
+    This release adds basic support for the `imports` field in `package.json`. It behaves similarly to the `exports` field but only applies to import paths that start with `#`. The `imports` field provides a way for a package to remap its own internal imports for itself, while the `exports` field provides a way for a package to remap its external exports for other packages. This is useful because the `imports` field respects the currently-configured conditions which means that the import mapping can change at run-time. For example:
+
+    ```
+    $ cat entry.mjs
+    import '#example'
+
+    $ cat package.json
+    {
+      "imports": {
+        "#example": {
+          "foo": "./example.foo.mjs",
+          "default": "./example.mjs"
+        }
+      }
+    }
+
+    $ cat example.foo.mjs
+    console.log('foo is enabled')
+
+    $ cat example.mjs
+    console.log('foo is disabled')
+
+    $ node entry.mjs
+    foo is disabled
+
+    $ node --conditions=foo entry.mjs
+    foo is enabled
+    ```
+
+    Now that esbuild supports this feature too, import paths starting with `#` and any provided conditions will be respected when bundling:
+
+    ```
+    $ esbuild --bundle entry.mjs | node
+    foo is disabled
+
+    $ esbuild --conditions=foo --bundle entry.mjs | node
+    foo is enabled
+    ```
+
+* Fix using `npm rebuild` with the `esbuild` package ([#1703](https://github.com/evanw/esbuild/issues/1703))
+
+    Version 0.13.4 accidentally introduced a regression in the install script where running `npm rebuild` multiple times could fail after the second time. The install script creates a copy of the binary executable using [`link`](https://man7.org/linux/man-pages/man2/link.2.html) followed by [`rename`](https://www.man7.org/linux/man-pages/man2/rename.2.html). Using `link` creates a hard link which saves space on the file system, and `rename` is used for safety since it atomically replaces the destination.
+
+    However, the `rename` syscall has an edge case where it silently fails if the source and destination are both the same link. This meant that the install script would fail after being run twice in a row. With this release, the install script now deletes the source after calling `rename` in case it has silently failed, so this issue should now be fixed. It should now be safe to use `npm rebuild` with the `esbuild` package.
+
+* Fix invalid CSS minification of `border-radius` ([#1702](https://github.com/evanw/esbuild/issues/1702))
+
+    CSS minification does collapsing of `border-radius` related properties. For example:
+
+    ```css
+    /* Original CSS */
+    div {
+      border-radius: 1px;
+      border-top-left-radius: 5px;
+    }
+
+    /* Minified CSS */
+    div{border-radius:5px 1px 1px}
+    ```
+
+    However, this only works for numeric tokens, not identifiers. For example:
+
+    ```css
+    /* Original CSS */
+    div {
+      border-radius: 1px;
+      border-top-left-radius: inherit;
+    }
+
+    /* Minified CSS */
+    div{border-radius:1px;border-top-left-radius:inherit}
+    ```
+
+    Transforming this to `div{border-radius:inherit 1px 1px}`, as was done in previous releases of esbuild, is an invalid transformation and results in incorrect CSS. This release of esbuild fixes this CSS transformation bug.
+
 ## 0.13.8
 
 * Fix `super` inside arrow function inside lowered `async` function ([#1425](https://github.com/evanw/esbuild/issues/1425))
