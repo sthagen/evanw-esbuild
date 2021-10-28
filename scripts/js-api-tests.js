@@ -3774,10 +3774,30 @@ let transformTests = {
     assert.strictEqual(json.sourcesContent[0], input)
   },
 
-  async transformLegalComments({ esbuild }) {
+  async transformLegalCommentsJS({ esbuild }) {
     assert.strictEqual((await esbuild.transform(`//!x\ny()`, { legalComments: 'none' })).code, `y();\n`)
     assert.strictEqual((await esbuild.transform(`//!x\ny()`, { legalComments: 'inline' })).code, `//!x\ny();\n`)
     assert.strictEqual((await esbuild.transform(`//!x\ny()`, { legalComments: 'eof' })).code, `y();\n//!x\n`)
+    try {
+      await esbuild.transform(``, { legalComments: 'linked' })
+      throw new Error('Expected a transform failure')
+    } catch (e) {
+      if (!e || !e.errors || !e.errors[0] || e.errors[0].text !== 'Cannot transform with linked or external legal comments')
+        throw e
+    }
+    try {
+      await esbuild.transform(``, { legalComments: 'external' })
+      throw new Error('Expected a transform failure')
+    } catch (e) {
+      if (!e || !e.errors || !e.errors[0] || e.errors[0].text !== 'Cannot transform with linked or external legal comments')
+        throw e
+    }
+  },
+
+  async transformLegalCommentsCSS({ esbuild }) {
+    assert.strictEqual((await esbuild.transform(`/*!x*/\ny{}`, { loader: 'css', legalComments: 'none' })).code, `y {\n}\n`)
+    assert.strictEqual((await esbuild.transform(`/*!x*/\ny{}`, { loader: 'css', legalComments: 'inline' })).code, `/*!x*/\ny {\n}\n`)
+    assert.strictEqual((await esbuild.transform(`/*!x*/\ny{}`, { loader: 'css', legalComments: 'eof' })).code, `y {\n}\n/*!x*/\n`)
     try {
       await esbuild.transform(``, { legalComments: 'linked' })
       throw new Error('Expected a transform failure')
@@ -3920,6 +3940,11 @@ let transformTests = {
     const fromPromiseResolve = text => text.slice(text.indexOf('Promise.resolve'))
     const { code: code4 } = await esbuild.transform(`import(foo)`, { target: 'chrome48', minifyWhitespace: true })
     assert.strictEqual(fromPromiseResolve(code4), `Promise.resolve().then(function(){return __toModule(require(foo))});\n`)
+  },
+
+  async caseInsensitiveTarget({ esbuild }) {
+    assert.strictEqual((await esbuild.transform(`a ||= b`, { target: 'eS5' })).code, `a || (a = b);\n`)
+    assert.strictEqual((await esbuild.transform(`a ||= b`, { target: 'eSnExT' })).code, `a ||= b;\n`)
   },
 
   async multipleEngineTargets({ esbuild }) {

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.10
+
+* Implement legal comment preservation for CSS ([#1539](https://github.com/evanw/esbuild/issues/1539))
+
+    This release adds support for legal comments in CSS the same way they are already supported for JS. A legal comment is one that starts with `/*!` or that contains the text `@license` or `@preserve`. These comments are preserved in output files by esbuild since that follows the intent of the original authors of the code. The specific behavior is controlled via `--legal-comments=` in the CLI and `legalComments` in the JS API, which can be set to any of the following options:
+
+    * `none`: Do not preserve any legal comments
+    * `inline`: Preserve all rule-level legal comments
+    * `eof`: Move all rule-level legal comments to the end of the file
+    * `linked`: Move all rule-level legal comments to a `.LEGAL.txt` file and link to them with a comment
+    * `external`: Move all rule-level legal comments to a `.LEGAL.txt` file but to not link to them
+
+    The default behavior is `eof` when bundling and `inline` otherwise.
+
+* Allow uppercase `es*` targets ([#1717](https://github.com/evanw/esbuild/issues/1717))
+
+    With this release, you can now use target names such as `ESNext` instead of `esnext` as the target name in the CLI and JS API. This is important because people don't want to have to call `.toLowerCase()` on target strings from TypeScript's `tsconfig.json` file before passing it to esbuild (TypeScript uses case-agnostic target names).
+
+    This feature was contributed by [@timse](https://github.com/timse).
+
+* Update to Unicode 14.0.0
+
+    The character tables that determine which characters form valid JavaScript identifiers have been updated from Unicode version 13.0.0 to the newly release Unicode version 14.0.0. I'm not putting an example in the release notes because all of the new characters will likely just show up as little squares since fonts haven't been updated yet. But you can read https://www.unicode.org/versions/Unicode14.0.0/#Summary for more information about the changes.
+
 ## 0.13.9
 
 * Add support for `imports` in `package.json` ([#1691](https://github.com/evanw/esbuild/issues/1691))
