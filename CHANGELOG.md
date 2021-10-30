@@ -1,5 +1,134 @@
 # Changelog
 
+## 0.13.11
+
+* Implement class static blocks ([#1558](https://github.com/evanw/esbuild/issues/1558))
+
+    This release adds support for a new upcoming JavaScript feature called [class static blocks](https://github.com/tc39/proposal-class-static-block) that lets you evaluate code inside of a class body. It looks like this:
+
+    ```js
+    class Foo {
+      static {
+        this.foo = 123
+      }
+    }
+    ```
+
+    This can be useful when you want to use `try`/`catch` or access private `#name` fields during class initialization. Doing that without this feature is quite hacky and basically involves creating temporary static fields containing immediately-invoked functions and then deleting the fields after class initialization. Static blocks are much more ergonomic and avoid performance loss due to `delete` changing the object shape.
+
+    Static blocks are transformed for older browsers by moving the static block outside of the class body and into an immediately invoked arrow function after the class definition:
+
+    ```js
+    // The transformed version of the example code above
+    const _Foo = class {
+    };
+    let Foo = _Foo;
+    (() => {
+      _Foo.foo = 123;
+    })();
+    ```
+
+    In case you're wondering, the additional `let` variable is to guard against the potential reassignment of `Foo` during evaluation such as what happens below. The value of `this` must be bound to the original class, not to the current value of `Foo`:
+
+    ```js
+    let bar
+    class Foo {
+      static {
+        bar = () => this
+      }
+    }
+    Foo = null
+    console.log(bar()) // This should not be "null"
+    ```
+
+* Fix issues with `super` property accesses
+
+    Code containing `super` property accesses may need to be transformed even when they are supported. For example, in ES6 `async` methods are unsupported while `super` properties are supported. An `async` method containing `super` property accesses requires those uses of `super` to be transformed (the `async` function is transformed into a nested generator function and the `super` keyword cannot be used inside nested functions).
+
+    Previously esbuild transformed `super` property accesses into a function call that returned the corresponding property. However, this was incorrect for uses of `super` that write to the inherited setter since a function call is not a valid assignment target. This release fixes writing to a `super` property:
+
+    ```js
+    // Original code
+    class Base {
+      set foo(x) { console.log('set foo to', x) }
+    }
+    class Derived extends Base {
+      async bar() { super.foo = 123 }
+    }
+    new Derived().bar()
+
+    // Old output with --target=es6 (contains a syntax error)
+    class Base {
+      set foo(x) {
+        console.log("set foo to", x);
+      }
+    }
+    class Derived extends Base {
+      bar() {
+        var __super = (key) => super[key];
+        return __async(this, null, function* () {
+          __super("foo") = 123;
+        });
+      }
+    }
+    new Derived().bar();
+
+    // New output with --target=es6 (works correctly)
+    class Base {
+      set foo(x) {
+        console.log("set foo to", x);
+      }
+    }
+    class Derived extends Base {
+      bar() {
+        var __superSet = (key, value) => super[key] = value;
+        return __async(this, null, function* () {
+          __superSet("foo", 123);
+        });
+      }
+    }
+    new Derived().bar();
+    ```
+
+    All known edge cases for assignment to a `super` property should now be covered including destructuring assignment and using the unary assignment operators with BigInts.
+
+    In addition, this release also fixes a bug where a `static` class field containing a `super` property access was not transformed when it was moved outside of the class body, which can happen when `static` class fields aren't supported.
+
+    ```js
+    // Original code
+    class Base {
+      static get foo() {
+        return 123
+      }
+    }
+    class Derived extends Base {
+      static bar = super.foo
+    }
+
+    // Old output with --target=es6 (contains a syntax error)
+    class Base {
+      static get foo() {
+        return 123;
+      }
+    }
+    class Derived extends Base {
+    }
+    __publicField(Derived, "bar", super.foo);
+
+    // New output with --target=es6 (works correctly)
+    class Base {
+      static get foo() {
+        return 123;
+      }
+    }
+    const _Derived = class extends Base {
+    };
+    let Derived = _Derived;
+    __publicField(Derived, "bar", __superStaticGet(_Derived, "foo"));
+    ```
+
+    All known edge cases for `super` inside `static` class fields should be handled including accessing `super` after prototype reassignment of the enclosing class object.
+
 ## 0.13.10
 
 * Implement legal comment preservation for CSS ([#1539](https://github.com/evanw/esbuild/issues/1539))

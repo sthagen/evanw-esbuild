@@ -511,7 +511,8 @@ type fnOrArrowDataVisit struct {
 // restored on the call stack around code that parses nested functions (but not
 // nested arrow functions).
 type fnOnlyDataVisit struct {
-	superIndexRef    *js_ast.Ref
+	superGetRef      *js_ast.Ref
+	superSetRef      *js_ast.Ref
 	shouldLowerSuper bool
 
 	// This is a reference to the magic "arguments" variable that exists inside
@@ -1978,25 +1979,31 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 					}
 				}
 			} else if p.lexer.Token == js_lexer.TOpenBrace && name == "static" {
-				p.log.AddRangeError(&p.tracker, p.lexer.Range(), "Class static blocks are not supported yet")
-
 				loc := p.lexer.Loc()
 				p.lexer.Next()
 
-				oldIsClassStaticInit := p.fnOrArrowDataParse.isClassStaticInit
-				oldAwait := p.fnOrArrowDataParse.await
-				p.fnOrArrowDataParse.isClassStaticInit = true
-				p.fnOrArrowDataParse.await = forbidAll
+				oldFnOrArrowDataParse := p.fnOrArrowDataParse
+				p.fnOrArrowDataParse = fnOrArrowDataParse{
+					isClassStaticInit:  true,
+					allowSuperProperty: true,
+					await:              forbidAll,
+					yield:              allowIdent,
+				}
 
-				scopeIndex := p.pushScopeForParsePass(js_ast.ScopeClassStaticInit, loc)
-				p.parseStmtsUpTo(js_lexer.TCloseBrace, parseStmtOpts{})
-				p.popAndDiscardScope(scopeIndex)
+				p.pushScopeForParsePass(js_ast.ScopeClassStaticInit, loc)
+				stmts := p.parseStmtsUpTo(js_lexer.TCloseBrace, parseStmtOpts{})
+				p.popScope()
 
-				p.fnOrArrowDataParse.isClassStaticInit = oldIsClassStaticInit
-				p.fnOrArrowDataParse.await = oldAwait
+				p.fnOrArrowDataParse = oldFnOrArrowDataParse
 
 				p.lexer.Expect(js_lexer.TCloseBrace)
-
+				return js_ast.Property{
+					Kind: js_ast.PropertyClassStaticBlock,
+					ClassStaticBlock: &js_ast.ClassStaticBlock{
+						Loc:   loc,
+						Stmts: stmts,
+					},
+				}, true
 			}
 		}
 
@@ -9690,7 +9697,6 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 	// field initializers outside of the class body and "this" will no longer
 	// reference the same thing.
 	classLoweringInfo := p.computeClassLoweringInfo(class)
-	replaceThisInStaticFieldInit := classLoweringInfo.lowerAllStaticFields
 
 	// Sometimes we need to lower private members even though they are supported.
 	// This flags them for lowering so that we lower references to them as we
@@ -9746,7 +9752,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 	classNameRef := js_ast.InvalidRef
 	if class.Name != nil {
 		classNameRef = class.Name.Ref
-	} else if replaceThisInStaticFieldInit {
+	} else if classLoweringInfo.lowerAllStaticFields {
 		// Generate a name if one doesn't already exist. This is necessary for
 		// handling "this" in static class property initializers.
 		classNameRef = p.newSymbol(js_ast.SymbolOther, "this")
@@ -9777,8 +9783,47 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 	p.pushScopeForVisitPass(js_ast.ScopeClassBody, class.BodyLoc)
 	defer p.popScope()
 
+	end := 0
+
 	for i := range class.Properties {
 		property := &class.Properties[i]
+
+		if property.Kind == js_ast.PropertyClassStaticBlock {
+			oldFnOrArrowData := p.fnOrArrowDataVisit
+			oldFnOnlyDataVisit := p.fnOnlyDataVisit
+
+			p.fnOrArrowDataVisit = fnOrArrowDataVisit{}
+			p.fnOnlyDataVisit = fnOnlyDataVisit{
+				isThisNested:       true,
+				isNewTargetAllowed: true,
+			}
+
+			if classLoweringInfo.lowerAllStaticFields {
+				// Replace "this" with the class name inside static class blocks
+				p.fnOnlyDataVisit.thisClassStaticRef = &shadowRef
+
+				// Need to lower "super" since it won't be valid outside the class body
+				p.fnOnlyDataVisit.shouldLowerSuper = true
+			}
+
+			p.pushScopeForVisitPass(js_ast.ScopeClassStaticInit, property.ClassStaticBlock.Loc)
+			property.ClassStaticBlock.Stmts = p.visitStmts(property.ClassStaticBlock.Stmts, stmtsFnBody)
+			p.popScope()
+
+			p.fnOrArrowDataVisit = oldFnOrArrowData
+			p.fnOnlyDataVisit = oldFnOnlyDataVisit
+
+			// "class { static {} }" => "class {}"
+			if p.options.mangleSyntax && len(property.ClassStaticBlock.Stmts) == 0 {
+				continue
+			}
+
+			// Keep this property
+			class.Properties[end] = *property
+			end++
+			continue
+		}
+
 		property.TSDecorators = p.visitTSDecorators(property.TSDecorators)
 		private, isPrivate := property.Key.Data.(*js_ast.EPrivateIdentifier)
 
@@ -9819,6 +9864,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 		// The value of "this" is shadowed inside property values
 		oldIsThisCaptured := p.fnOnlyDataVisit.isThisNested
 		oldThis := p.fnOnlyDataVisit.thisClassStaticRef
+		oldShouldLowerSuper := p.fnOnlyDataVisit.shouldLowerSuper
 		p.fnOnlyDataVisit.isThisNested = true
 		p.fnOnlyDataVisit.isNewTargetAllowed = true
 		p.fnOnlyDataVisit.thisClassStaticRef = nil
@@ -9846,9 +9892,12 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 		}
 
 		if property.InitializerOrNil.Data != nil {
-			if property.IsStatic && replaceThisInStaticFieldInit {
+			if property.IsStatic && classLoweringInfo.lowerAllStaticFields {
 				// Replace "this" with the class name inside static property initializers
 				p.fnOnlyDataVisit.thisClassStaticRef = &shadowRef
+
+				// Need to lower "super" since it won't be valid outside the class body
+				p.fnOnlyDataVisit.shouldLowerSuper = true
 			}
 			if nameToKeep != "" {
 				wasAnonymousNamedExpr := p.isAnonymousNamedExpr(property.InitializerOrNil)
@@ -9861,10 +9910,18 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 		// Restore "this" so it will take the inherited value in property keys
 		p.fnOnlyDataVisit.thisClassStaticRef = oldThis
 		p.fnOnlyDataVisit.isThisNested = oldIsThisCaptured
+		p.fnOnlyDataVisit.shouldLowerSuper = oldShouldLowerSuper
 
 		// Restore the ability to use "arguments" in decorators and computed properties
 		p.currentScope.ForbidArguments = false
+
+		// Keep this property
+		class.Properties[end] = *property
+		end++
 	}
+
+	// Finish the filtering operation
+	class.Properties = class.Properties[:end]
 
 	p.enclosingClassKeyword = oldEnclosingClassKeyword
 	p.popScope()
@@ -11422,6 +11479,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				return p.lowerPrivateSet(target, loc, private, e.Right), exprOut{}
 			}
 
+			if property := p.extractSuperProperty(e.Left); property.Data != nil {
+				return p.lowerSuperPropertySet(e.Left.Loc, property, e.Right), exprOut{}
+			}
+
 			// Lower assignment destructuring patterns for browsers that don't
 			// support them. Note that assignment expressions are used to represent
 			// initializers in binding patterns, so only do this if we're not
@@ -11437,28 +11498,28 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 		case js_ast.BinOpAddAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpAdd, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpAdd, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpSubAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpSub, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpSub, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpMulAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpMul, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpMul, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpDivAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpDiv, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpDiv, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpRemAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpRem, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpRem, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpPowAssign:
@@ -11467,38 +11528,38 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				return p.lowerExponentiationAssignmentOperator(expr.Loc, e), exprOut{}
 			}
 
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpPow, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpPow, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpShlAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpShl, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpShl, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpShrAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpShr, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpShr, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpUShrAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpUShr, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpUShr, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpBitwiseOrAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpBitwiseOr, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpBitwiseOr, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpBitwiseAndAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpBitwiseAnd, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpBitwiseAnd, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpBitwiseXorAssign:
-			if target, loc, private := p.extractPrivateIndex(e.Left); private != nil {
-				return p.lowerPrivateSetBinOp(target, loc, private, js_ast.BinOpBitwiseXor, e.Right), exprOut{}
+			if result := p.maybeLowerSetBinOp(e.Left, js_ast.BinOpBitwiseXor, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 		case js_ast.BinOpNullishCoalescingAssign:
@@ -11606,8 +11667,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// Lower "super[prop]" if necessary
-		if !isCallTarget && p.shouldLowerSuperPropertyAccess(e.Target) {
-			return p.lowerSuperPropertyAccess(expr.Loc, e.Index), exprOut{}
+		if e.OptionalChain == js_ast.OptionalChainNone && in.assignTarget == js_ast.AssignTargetNone &&
+			!isCallTarget && p.shouldLowerSuperPropertyAccess(e.Target) {
+			// "super[foo]" => "__superGet(foo)"
+			return p.lowerSuperPropertyGet(expr.Loc, e.Index), exprOut{}
 		}
 
 		// Lower optional chaining if we're the top of the chain
@@ -11763,6 +11826,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				if target, loc, private := p.extractPrivateIndex(e.Value); private != nil {
 					return p.lowerPrivateSetUnOp(target, loc, private, e.Op), exprOut{}
 				}
+				if property := p.extractSuperProperty(e.Value); property.Data != nil {
+					e.Value = p.callSuperPropertyWrapper(expr.Loc, property, true /* includeGet */)
+				}
 			}
 		}
 
@@ -11829,9 +11895,11 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		e.Target = target
 
 		// Lower "super.prop" if necessary
-		if !isCallTarget && p.shouldLowerSuperPropertyAccess(e.Target) {
+		if e.OptionalChain == js_ast.OptionalChainNone && in.assignTarget == js_ast.AssignTargetNone &&
+			!isCallTarget && p.shouldLowerSuperPropertyAccess(e.Target) {
+			// "super.foo" => "__superGet('foo')"
 			key := js_ast.Expr{Loc: e.NameLoc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(e.Name)}}
-			return p.lowerSuperPropertyAccess(expr.Loc, key), exprOut{}
+			return p.lowerSuperPropertyGet(expr.Loc, key), exprOut{}
 		}
 
 		// Lower optional chaining if we're the top of the chain
@@ -12483,7 +12551,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 					CanBeUnwrappedIfUnused: e.CanBeUnwrappedIfUnused,
 				}}), exprOut{}
 			}
-			p.maybeLowerSuperPropertyAccessInsideCall(e)
+			p.maybeLowerSuperPropertyGetInsideCall(e)
 		}
 
 		// Track calls to require() so we can use them while bundling
@@ -13397,6 +13465,11 @@ func (p *parser) stmtsCanBeRemovedIfUnused(stmts []js_ast.Stmt) bool {
 				}
 			}
 
+		case *js_ast.STry:
+			if !p.stmtsCanBeRemovedIfUnused(s.Body) || (s.Finally != nil && !p.stmtsCanBeRemovedIfUnused(s.Finally.Stmts)) {
+				return false
+			}
+
 		case *js_ast.SExportFrom:
 			// Exports are tracked separately, so this isn't necessary
 
@@ -13443,6 +13516,12 @@ func (p *parser) classCanBeRemovedIfUnused(class js_ast.Class) bool {
 	}
 
 	for _, property := range class.Properties {
+		if property.Kind == js_ast.PropertyClassStaticBlock {
+			if !p.stmtsCanBeRemovedIfUnused(property.ClassStaticBlock.Stmts) {
+				return false
+			}
+			continue
+		}
 		if !p.exprCanBeRemovedIfUnused(property.Key) {
 			return false
 		}
