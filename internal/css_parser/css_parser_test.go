@@ -846,6 +846,27 @@ func TestAtImport(t *testing.T) {
 	expectParseError(t, "@import \"foo.css\" {}", "<stdin>: warning: Expected \";\" but found end of file\n")
 }
 
+func TestLicenseComment(t *testing.T) {
+	expectPrinted(t, "/*!*/@import \"x\";", "/*!*/\n@import \"x\";\n")
+	expectPrinted(t, "/*!*/@charset \"UTF-8\";", "/*!*/\n@charset \"UTF-8\";\n")
+	expectPrinted(t, "/*!*/ @import \"x\";", "/*!*/\n@import \"x\";\n")
+	expectPrinted(t, "/*!*/ @charset \"UTF-8\";", "/*!*/\n@charset \"UTF-8\";\n")
+	expectPrinted(t, "/*!*/ @charset \"UTF-8\"; @import \"x\";", "/*!*/\n@charset \"UTF-8\";\n@import \"x\";\n")
+	expectPrinted(t, "/*!*/ @import \"x\"; @charset \"UTF-8\";", "/*!*/\n@import \"x\";\n@charset \"UTF-8\";\n")
+
+	expectParseError(t, "/*!*/ @import \"x\";", "")
+	expectParseError(t, "/*!*/ @charset \"UTF-8\";", "")
+	expectParseError(t, "/*!*/ @charset \"UTF-8\"; @import \"x\";", "")
+	expectParseError(t, "/*!*/ @import \"x\"; @charset \"UTF-8\";",
+		"<stdin>: warning: \"@charset\" must be the first rule in the file\n"+
+			"<stdin>: note: This rule cannot come before a \"@charset\" rule\n")
+
+	expectPrinted(t, "@import \"x\";/*!*/", "@import \"x\";\n/*!*/\n")
+	expectPrinted(t, "@charset \"UTF-8\";/*!*/", "@charset \"UTF-8\";\n/*!*/\n")
+	expectPrinted(t, "@import \"x\"; /*!*/", "@import \"x\";\n/*!*/\n")
+	expectPrinted(t, "@charset \"UTF-8\"; /*!*/", "@charset \"UTF-8\";\n/*!*/\n")
+}
+
 func TestAtKeyframes(t *testing.T) {
 	expectPrinted(t, "@keyframes {}", "@keyframes \"\" {\n}\n")
 	expectPrinted(t, "@keyframes name{}", "@keyframes name {\n}\n")
@@ -1155,6 +1176,93 @@ func TestMangleTime(t *testing.T) {
 	// Mangling times with exponents is not currently supported
 	expectPrintedMangle(t, "a { animation: b 1e3ms }", "a {\n  animation: b 1e3ms;\n}\n")
 	expectPrintedMangle(t, "a { animation: b 1E3ms }", "a {\n  animation: b 1E3ms;\n}\n")
+}
+
+func TestCalc(t *testing.T) {
+	expectParseError(t, "a { b: calc(+(2)) }", "<stdin>: warning: \"+\" can only be used as an infix operator, not a prefix operator\n")
+	expectParseError(t, "a { b: calc(-(2)) }", "<stdin>: warning: \"-\" can only be used as an infix operator, not a prefix operator\n")
+	expectParseError(t, "a { b: calc(*(2)) }", "")
+	expectParseError(t, "a { b: calc(/(2)) }", "")
+
+	expectParseError(t, "a { b: calc(1 + 2) }", "")
+	expectParseError(t, "a { b: calc(1 - 2) }", "")
+	expectParseError(t, "a { b: calc(1 * 2) }", "")
+	expectParseError(t, "a { b: calc(1 / 2) }", "")
+
+	expectParseError(t, "a { b: calc(1+ 2) }", "<stdin>: warning: The \"+\" operator only works if there is whitespace on both sides\n")
+	expectParseError(t, "a { b: calc(1- 2) }", "<stdin>: warning: The \"-\" operator only works if there is whitespace on both sides\n")
+	expectParseError(t, "a { b: calc(1* 2) }", "")
+	expectParseError(t, "a { b: calc(1/ 2) }", "")
+
+	expectParseError(t, "a { b: calc(1 +2) }", "<stdin>: warning: The \"+\" operator only works if there is whitespace on both sides\n")
+	expectParseError(t, "a { b: calc(1 -2) }", "<stdin>: warning: The \"-\" operator only works if there is whitespace on both sides\n")
+	expectParseError(t, "a { b: calc(1 *2) }", "")
+	expectParseError(t, "a { b: calc(1 /2) }", "")
+
+	expectParseError(t, "a { b: calc(1 +(2)) }", "<stdin>: warning: The \"+\" operator only works if there is whitespace on both sides\n")
+	expectParseError(t, "a { b: calc(1 -(2)) }", "<stdin>: warning: The \"-\" operator only works if there is whitespace on both sides\n")
+	expectParseError(t, "a { b: calc(1 *(2)) }", "")
+	expectParseError(t, "a { b: calc(1 /(2)) }", "")
+}
+
+func TestMinifyCalc(t *testing.T) {
+	expectPrintedMangleMinify(t, "a { b: calc(x + y) }", "a{b:calc(x + y)}")
+	expectPrintedMangleMinify(t, "a { b: calc(x - y) }", "a{b:calc(x - y)}")
+	expectPrintedMangleMinify(t, "a { b: calc(x * y) }", "a{b:calc(x*y)}")
+	expectPrintedMangleMinify(t, "a { b: calc(x / y) }", "a{b:calc(x/y)}")
+}
+
+func TestMangleCalc(t *testing.T) {
+	expectPrintedMangle(t, "a { b: calc(1) }", "a {\n  b: 1;\n}\n")
+	expectPrintedMangle(t, "a { b: calc((1)) }", "a {\n  b: 1;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(calc(1)) }", "a {\n  b: 1;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x + y * z) }", "a {\n  b: calc(x + y * z);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x * y + z) }", "a {\n  b: calc(x * y + z);\n}\n")
+
+	// Test sum
+	expectPrintedMangle(t, "a { b: calc(2 + 3) }", "a {\n  b: 5;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(6 - 2) }", "a {\n  b: 4;\n}\n")
+
+	// Test product
+	expectPrintedMangle(t, "a { b: calc(2 * 3) }", "a {\n  b: 6;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(6 / 2) }", "a {\n  b: 3;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(2px * 3 + 4px * 5) }", "a {\n  b: 26px;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(2 * 3px + 4 * 5px) }", "a {\n  b: 26px;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(2px * 3 - 4px * 5) }", "a {\n  b: -14px;\n}\n")
+	expectPrintedMangle(t, "a { b: calc(2 * 3px - 4 * 5px) }", "a {\n  b: -14px;\n}\n")
+
+	// Test negation
+	expectPrintedMangle(t, "a { b: calc(x + 1) }", "a {\n  b: calc(x + 1);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x - 1) }", "a {\n  b: calc(x - 1);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x + -1) }", "a {\n  b: calc(x - 1);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x - -1) }", "a {\n  b: calc(x + 1);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(1 + x) }", "a {\n  b: calc(1 + x);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(1 - x) }", "a {\n  b: calc(1 - x);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(-1 + x) }", "a {\n  b: calc(-1 + x);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(-1 - x) }", "a {\n  b: calc(-1 - x);\n}\n")
+
+	// Test inversion
+	expectPrintedMangle(t, "a { b: calc(x * 4) }", "a {\n  b: calc(x * 4);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x / 4) }", "a {\n  b: calc(x / 4);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x * 0.25) }", "a {\n  b: calc(x / 4);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(x / 0.25) }", "a {\n  b: calc(x * 4);\n}\n")
+
+	// Test operator precedence
+	expectPrintedMangle(t, "a { b: calc((a + b) + c) }", "a {\n  b: calc(a + b + c);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(a + (b + c)) }", "a {\n  b: calc(a + b + c);\n}\n")
+	expectPrintedMangle(t, "a { b: calc((a - b) - c) }", "a {\n  b: calc(a - b - c);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(a - (b - c)) }", "a {\n  b: calc(a - (b - c));\n}\n")
+	expectPrintedMangle(t, "a { b: calc((a * b) * c) }", "a {\n  b: calc(a * b * c);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(a * (b * c)) }", "a {\n  b: calc(a * b * c);\n}\n")
+	expectPrintedMangle(t, "a { b: calc((a / b) / c) }", "a {\n  b: calc(a / b / c);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(a / (b / c)) }", "a {\n  b: calc(a / (b / c));\n}\n")
+	expectPrintedMangle(t, "a { b: calc(a + b * c / d - e) }", "a {\n  b: calc(a + b * c / d - e);\n}\n")
+	expectPrintedMangle(t, "a { b: calc((a + ((b * c) / d)) - e) }", "a {\n  b: calc(a + b * c / d - e);\n}\n")
+	expectPrintedMangle(t, "a { b: calc((a + b) * c / (d - e)) }", "a {\n  b: calc((a + b) * c / (d - e));\n}\n")
+
+	// Using "var()" should bail because it can expand to any number of tokens
+	expectPrintedMangle(t, "a { b: calc(1px - x + 2px) }", "a {\n  b: calc(3px - x);\n}\n")
+	expectPrintedMangle(t, "a { b: calc(1px - var(x) + 2px) }", "a {\n  b: calc(1px - var(x) + 2px);\n}\n")
 }
 
 func TestTransform(t *testing.T) {

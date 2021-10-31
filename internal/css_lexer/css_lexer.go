@@ -39,6 +39,7 @@ const (
 	TDelimEquals
 	TDelimExclamation
 	TDelimGreaterThan
+	TDelimMinus
 	TDelimPlus
 	TDelimSlash
 	TDelimTilde
@@ -79,6 +80,7 @@ var tokenToString = []string{
 	"\"=\"",
 	"\"!\"",
 	"\">\"",
+	"\"-\"",
 	"\"+\"",
 	"\"/\"",
 	"\"~\"",
@@ -205,6 +207,13 @@ func Tokenize(log logger.Log, source logger.Source) TokenizeResult {
 		}
 		tokens = append(tokens, lexer.Token)
 		lexer.next()
+	}
+	if lexer.licenseCommentsBefore != nil {
+		for _, comment := range lexer.licenseCommentsBefore {
+			comment.TokenIndexAfter = uint32(len(tokens))
+			comments = append(comments, comment)
+		}
+		lexer.licenseCommentsBefore = nil
 	}
 	return TokenizeResult{
 		Tokens:               tokens,
@@ -356,7 +365,7 @@ func (lexer *lexer) next() {
 				lexer.Token.Kind = lexer.consumeIdentLike()
 			} else {
 				lexer.step()
-				lexer.Token.Kind = TDelim
+				lexer.Token.Kind = TDelimMinus
 			}
 
 		case '<':
