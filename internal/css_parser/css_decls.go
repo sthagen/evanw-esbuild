@@ -1,6 +1,7 @@
 package css_parser
 
 import (
+	"github.com/evanw/esbuild/internal/compat"
 	"github.com/evanw/esbuild/internal/css_ast"
 	"github.com/evanw/esbuild/internal/css_lexer"
 )
@@ -77,8 +78,9 @@ func compactTokenQuad(a css_ast.Token, b css_ast.Token, c css_ast.Token, d css_a
 }
 
 func (p *parser) processDeclarations(rules []css_ast.Rule) []css_ast.Rule {
-	margin := boxTracker{}
-	padding := boxTracker{}
+	margin := boxTracker{key: css_ast.DMargin, keyText: "margin", allowAuto: true}
+	padding := boxTracker{key: css_ast.DPadding, keyText: "padding", allowAuto: false}
+	inset := boxTracker{key: css_ast.DInset, keyText: "inset", allowAuto: true}
 	borderRadius := borderRadiusTracker{}
 
 	for i, rule := range rules {
@@ -131,27 +133,7 @@ func (p *parser) processDeclarations(rules []css_ast.Rule) []css_ast.Rule {
 				decl.Value = p.mangleBoxShadows(decl.Value)
 			}
 
-		case css_ast.DPadding:
-			if p.options.MangleSyntax {
-				padding.mangleSides(rules, decl, i, p.options.RemoveWhitespace)
-			}
-		case css_ast.DPaddingTop:
-			if p.options.MangleSyntax {
-				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxTop)
-			}
-		case css_ast.DPaddingRight:
-			if p.options.MangleSyntax {
-				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxRight)
-			}
-		case css_ast.DPaddingBottom:
-			if p.options.MangleSyntax {
-				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxBottom)
-			}
-		case css_ast.DPaddingLeft:
-			if p.options.MangleSyntax {
-				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxLeft)
-			}
-
+		// Margin
 		case css_ast.DMargin:
 			if p.options.MangleSyntax {
 				margin.mangleSides(rules, decl, i, p.options.RemoveWhitespace)
@@ -173,6 +155,51 @@ func (p *parser) processDeclarations(rules []css_ast.Rule) []css_ast.Rule {
 				margin.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxLeft)
 			}
 
+		// Padding
+		case css_ast.DPadding:
+			if p.options.MangleSyntax {
+				padding.mangleSides(rules, decl, i, p.options.RemoveWhitespace)
+			}
+		case css_ast.DPaddingTop:
+			if p.options.MangleSyntax {
+				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxTop)
+			}
+		case css_ast.DPaddingRight:
+			if p.options.MangleSyntax {
+				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxRight)
+			}
+		case css_ast.DPaddingBottom:
+			if p.options.MangleSyntax {
+				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxBottom)
+			}
+		case css_ast.DPaddingLeft:
+			if p.options.MangleSyntax {
+				padding.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxLeft)
+			}
+
+		// Inset
+		case css_ast.DInset:
+			if !p.options.UnsupportedCSSFeatures.Has(compat.InsetProperty) && p.options.MangleSyntax {
+				inset.mangleSides(rules, decl, i, p.options.RemoveWhitespace)
+			}
+		case css_ast.DTop:
+			if !p.options.UnsupportedCSSFeatures.Has(compat.InsetProperty) && p.options.MangleSyntax {
+				inset.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxTop)
+			}
+		case css_ast.DRight:
+			if !p.options.UnsupportedCSSFeatures.Has(compat.InsetProperty) && p.options.MangleSyntax {
+				inset.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxRight)
+			}
+		case css_ast.DBottom:
+			if !p.options.UnsupportedCSSFeatures.Has(compat.InsetProperty) && p.options.MangleSyntax {
+				inset.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxBottom)
+			}
+		case css_ast.DLeft:
+			if !p.options.UnsupportedCSSFeatures.Has(compat.InsetProperty) && p.options.MangleSyntax {
+				inset.mangleSide(rules, decl, i, p.options.RemoveWhitespace, boxLeft)
+			}
+
+		// Border radius
 		case css_ast.DBorderRadius:
 			if p.options.MangleSyntax {
 				borderRadius.mangleCorners(rules, decl, i, p.options.RemoveWhitespace)
