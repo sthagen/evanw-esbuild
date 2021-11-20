@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.13.15
+
+* Fix `super` in lowered `async` arrow functions ([#1777](https://github.com/evanw/esbuild/issues/1777))
+
+    This release fixes an edge case that was missed when lowering `async` arrow functions containing `super` property accesses for compile targets that don't support `async` such as with `--target=es6`. The problem was that lowering transforms `async` arrow functions into generator function expressions that are then passed to an esbuild helper function called `__async` that implements the `async` state machine behavior. Since function expressions do not capture `this` and `super` like arrow functions do, this led to a mismatch in behavior which meant that the transform was incorrect. The fix is to introduce a helper function to forward `super` access into the generator function expression body. Here's an example:
+
+    ```js
+    // Original code
+    class Foo extends Bar {
+      foo() { return async () => super.bar() }
+    }
+
+    // Old output (with --target=es6)
+    class Foo extends Bar {
+      foo() {
+        return () => __async(this, null, function* () {
+          return super.bar();
+        });
+      }
+    }
+
+    // New output (with --target=es6)
+    class Foo extends Bar {
+      foo() {
+        return () => {
+          var __superGet = (key) => super[key];
+          return __async(this, null, function* () {
+            return __superGet("bar").call(this);
+          });
+        };
+      }
+    }
+    ```
+
+* Avoid merging certain CSS rules with different units ([#1732](https://github.com/evanw/esbuild/issues/1732))
+
+    This release no longer collapses `border-radius`, `margin`, `padding`, and `inset` rules when they have units with different levels of browser support. Collapsing multiple of these rules into a single rule is not equivalent if the browser supports one unit but not the other unit, since one rule would still have applied before the collapse but no longer applies after the collapse due to the whole rule being ignored. For example, Chrome 10 supports the `rem` unit but not the `vw` unit, so the CSS code below should render with rounded corners in Chrome 10. However, esbuild previously merged everything into a single rule which would cause Chrome 10 to ignore the rule and not round the corners. This issue is now fixed:
+
+    ```css
+    /* Original CSS */
+    div {
+      border-radius: 1rem;
+      border-top-left-radius: 1vw;
+      margin: 0;
+      margin-top: 1Q;
+      left: 10Q;
+      top: 20Q;
+      right: 10Q;
+      bottom: 20Q;
+    }
+
+    /* Old output (with --minify) */
+    div{border-radius:1vw 1rem 1rem;margin:1Q 0 0;inset:20Q 10Q}
+
+    /* New output (with --minify) */
+    div{border-radius:1rem;border-top-left-radius:1vw;margin:0;margin-top:1Q;inset:20Q 10Q}
+    ```
+
+    Notice how esbuild can still collapse rules together when they all share the same unit, even if the unit is one that doesn't have universal browser support such as the unit `Q`. One subtlety is that esbuild now distinguishes between "safe" and "unsafe" units where safe units are old enough that they are guaranteed to work in any browser a user might reasonably use, such as `px`. Safe units are allowed to be collapsed together even if there are multiple different units while multiple different unsafe units are not allowed to be collapsed together. Another detail is that esbuild no longer minifies zero lengths by removing the unit if the unit is unsafe (e.g. `0rem` into `0`) since that could cause a rendering difference if a previously-ignored rule is now no longer ignored due to the unit change. If you are curious, you can learn more about browser support levels for different CSS units in [Mozilla's documentation about CSS length units](https://developer.mozilla.org/en-US/docs/Web/CSS/length).
+
+* Avoid warning about ignored side-effect free imports for empty files ([#1785](https://github.com/evanw/esbuild/issues/1785))
+
+    When bundling, esbuild warns about bare imports such as `import "lodash-es"` when the package has been marked as `"sideEffects": false` in its `package.json` file. This is because the only reason to use a bare import is because you are relying on the side effects of the import, but imports for packages marked as side-effect free are supposed to be removed. If the package indicates that it has no side effects, then this bare import is likely a bug.
+
+    However, some people have packages just for TypeScript type definitions. These package can actually have a side effect as they can augment the type of the global object in TypeScript, even if they are marked with `"sideEffects": false`. To avoid warning in this case, esbuild will now only issue this warning if the imported file is non-empty. If the file is empty, then it's irrelevant whether you import it or not so any import of that file does not indicate a bug. This fixes this case because `.d.ts` files typically end up being empty after esbuild parses them since they typically only contain type declarations.
+
+* Attempt to fix packages broken due to the `node:` prefix ([#1760](https://github.com/evanw/esbuild/issues/1760))
+
+    Some people have started using the node-specific `node:` path prefix in their packages. This prefix forces the following path to be interpreted as a node built-in module instead of a package on the file system. So `require("node:path")` will always import [node's `path` module](https://nodejs.org/api/path.html) and never import [npm's `path` package](https://www.npmjs.com/package/path).
+
+    Adding the `node:` prefix breaks that code with older node versions that don't understand the `node:` prefix. This is a problem with the package, not with esbuild. The package should be adding a fallback if the `node:` prefix isn't available. However, people still want to be able to use these packages with older node versions even though the code is broken. Now esbuild will automatically strip this prefix if it detects that the code will break in the configured target environment (as specified by `--target=`). Note that this only happens during bundling, since import paths are only examined during bundling.
+
 ## 0.13.14
 
 * Fix dynamic `import()` on node 12.20+ ([#1772](https://github.com/evanw/esbuild/issues/1772))
