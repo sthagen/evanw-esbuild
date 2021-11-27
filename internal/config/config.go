@@ -223,7 +223,7 @@ type Options struct {
 	WriteToStdout bool
 
 	OmitRuntimeForTests     bool
-	PreserveUnusedImportsTS bool
+	UnusedImportsTS         UnusedImportsTS
 	UseDefineForClassFields MaybeBool
 	ASCIIOnly               bool
 	KeepNames               bool
@@ -235,7 +235,7 @@ type Options struct {
 	JSX      JSXOptions
 	Platform Platform
 
-	IsTargetUnconfigured   bool // If true, TypeScript's "target" setting is respected
+	TargetFromAPI          TargetFromAPI
 	UnsupportedJSFeatures  compat.JSFeature
 	UnsupportedCSSFeatures compat.CSSFeature
 	TSTarget               *TSTarget
@@ -282,6 +282,42 @@ type Options struct {
 	ExcludeSourcesContent bool
 
 	Stdin *StdinInfo
+}
+
+type TargetFromAPI uint8
+
+const (
+	// In this state, the "target" field in "tsconfig.json" is respected
+	TargetWasUnconfigured TargetFromAPI = iota
+
+	// In this state, the "target" field in "tsconfig.json" is overridden
+	TargetWasConfigured
+
+	// In this state, "useDefineForClassFields" is true unless overridden
+	TargetWasConfiguredIncludingESNext
+)
+
+type UnusedImportsTS uint8
+
+const (
+	// "import { unused } from 'foo'" => "" (TypeScript's default behavior)
+	UnusedImportsRemoveStmt UnusedImportsTS = iota
+
+	// "import { unused } from 'foo'" => "import 'foo'" ("importsNotUsedAsValues" != "remove")
+	UnusedImportsKeepStmtRemoveValues
+
+	// "import { unused } from 'foo'" => "import { unused } from 'foo'" ("preserveValueImports" == true)
+	UnusedImportsKeepValues
+)
+
+func UnusedImportsFromTsconfigValues(preserveImportsNotUsedAsValues bool, preserveValueImports bool) UnusedImportsTS {
+	if preserveValueImports {
+		return UnusedImportsKeepValues
+	}
+	if preserveImportsNotUsedAsValues {
+		return UnusedImportsKeepStmtRemoveValues
+	}
+	return UnusedImportsRemoveStmt
 }
 
 type TSTarget struct {

@@ -1,5 +1,256 @@
 # Changelog
 
+## Unreleased
+
+* Fix `imports` in `package.json` ([#1807](https://github.com/evanw/esbuild/issues/1807))
+
+    This release contains a fix for the rarely-used [`imports` feature in `package.json` files](https://nodejs.org/api/packages.html#subpath-imports) that lets a package specify a custom remapping for import paths inside that package that start with `#`. Support for `imports` was added in version 0.13.9. However, the field was being incorrectly interpreted as relative to the importing file instead of to the `package.json` file, which caused an import failure when the importing file is in a subdirectory instead of being at the top level of the package. Import paths should now be interpreted as relative to the correct directory which should fix these path resolution failures.
+
+* Isolate implicit sibling scope lookup for `enum` and `namespace`
+
+    The previous release implemented sibling namespaces in TypeScript, which introduces a new kind of scope lookup that doesn't exist in JavaScript. Exported members inside an `enum` or `namespace` block can be implicitly referenced in a sibling `enum` or `namespace` block just by using the name without using a property reference. However, this behavior appears to only work for `enum`-to-`enum` and `namespace`-to-`namespace` interactions. Even though sibling enums and namespaces with the same name can be merged together into the same underlying object, this implicit reference behavior doesn't work for `enum`-to-`namespace` interactions and attempting to do this with a `namespace`-to-`enum` interaction [causes the TypeScript compiler itself to crash](https://github.com/microsoft/TypeScript/issues/46891). Here is an example of how the TypeScript compiler behaves in each case:
+
+    ```ts
+    // "b" is accessible
+    enum a { b = 1 }
+    enum a { c = b }
+
+    // "e" is accessible
+    namespace d { export let e = 1 }
+    namespace d { export let f = e }
+
+    // "h" is inaccessible
+    enum g { h = 1 }
+    namespace g { export let i = h }
+
+    // This causes the TypeScript compiler to crash
+    namespace j { export let k = 1 }
+    enum j { l = k }
+    ```
+
+    This release changes the implicit sibling scope lookup behavior to only work for `enum`-to-`enum` and `namespace`-to-`namespace` interactions. These implicit references no longer work with `enum`-to-`namespace` and `namespace`-to-`enum` interactions, which should more accurately match the behavior of the TypeScript compiler.
+
+## 0.14.0
+
+**This release contains backwards-incompatible changes.** Since esbuild is before version 1.0.0, these changes have been released as a new minor version to reflect this (as [recommended by npm](https://docs.npmjs.com/cli/v6/using-npm/semver/)). You should either be pinning the exact version of `esbuild` in your `package.json` file or be using a version range syntax that only accepts patch upgrades such as `~0.13.0`. See the documentation about [semver](https://docs.npmjs.com/cli/v6/using-npm/semver/) for more information.
+
+* Add support for TypeScript's `preserveValueImports` setting ([#1525](https://github.com/evanw/esbuild/issues/1525))
+
+    TypeScript 4.5, which was just released, added [a new setting called `preserveValueImports`](https://devblogs.microsoft.com/typescript/announcing-typescript-4-5/#preserve-value-imports). This release of esbuild implements support for this new setting. However, this release also changes esbuild's behavior regarding the `importsNotUsedAsValues` setting, so this release is being considered a breaking change. Now esbuild's behavior should more accurately match the behavior of the TypeScript compiler. This is described in more detail below.
+
+    The difference in behavior is around unused imports. By default, unused import names are considered to be types and are completely removed if they are unused. If all import names are removed for a given import statement, then the whole import statement is removed too. The two `tsconfig.json` settings [`importsNotUsedAsValues`](https://www.typescriptlang.org/tsconfig#importsNotUsedAsValues) and [`preserveValueImports`](https://www.typescriptlang.org/tsconfig#preserveValueImports) let you customize this. Here's what the TypeScript compiler's output looks like with these different settings enabled:
+
+    ```ts
+    // Original code
+    import { unused } from "foo";
+
+    // Default output
+    /* (the import is completely removed) */
+
+    // Output with "importsNotUsedAsValues": "preserve"
+    import "foo";
+
+    // Output with "preserveValueImports": true
+    import { unused } from "foo";
+    ```
+
+    Previously, since the `preserveValueImports` setting didn't exist yet, esbuild had treated the `importsNotUsedAsValues` setting as if it were what is now the `preserveValueImports` setting instead. This was a deliberate deviation from how the TypeScript compiler behaves, but was necessary to allow esbuild to be used as a TypeScript-to-JavaScript compiler inside of certain composite languages such as Svelte and Vue. These languages append additional code after converting the TypeScript to JavaScript so unused imports may actually turn out to be used later on:
+
+    ```svelte
+    <script>
+    import { someFunc } from "./some-module.js";
+    </script>
+    <button on:click={someFunc}>Click me!</button>
+    ```
+
+    Previously the implementers of these languages had to use the `importsNotUsedAsValues` setting as a hack for esbuild to preserve the import statements. With this release, esbuild now follows the behavior of the TypeScript compiler so implementers will need to use the new `preserveValueImports` setting to do this instead. This is the breaking change.
+
+* TypeScript code follows JavaScript class field semantics with `--target=esnext` ([#1480](https://github.com/evanw/esbuild/issues/1480))
+
+    TypeScript 4.3 included a subtle breaking change that wasn't mentioned in the [TypeScript 4.3 blog post](https://devblogs.microsoft.com/typescript/announcing-typescript-4-3/): class fields will now be compiled with different semantics if `"target": "ESNext"` is present in `tsconfig.json`. Specifically in this case `useDefineForClassFields` will default to `true` when not specified instead of `false`. This means class field behavior in TypeScript code will now match JavaScript instead of doing something else:
+
+    ```js
+    class Base {
+      set foo(value) { console.log('set', value) }
+    }
+    class Derived extends Base {
+      foo = 123
+    }
+    new Derived()
+    ```
+
+    In TypeScript 4.2 and below, the TypeScript compiler would generate code that prints `set 123` when `tsconfig.json` contains `"target": "ESNext"` but in TypeScript 4.3 and above, the TypeScript compiler will now generate code that doesn't print anything. This is the difference between "assign" semantics and "define" semantics.
+
+    Previously you had to create a `tsconfig.json` file and specify `"target": "ESNext"` to get this behavior in esbuild. With this release, you can now also just pass `--target=esnext` to esbuild to force-enable this behavior. Note that esbuild doesn't do this by default even though the default value of `--target=` otherwise behaves like `esnext`. Since TypeScript's compiler doesn't do this behavior by default, it seems like a good idea for esbuild to not do this behavior by default either.
+
+In addition to the breaking changes above, the following changes are also included in this release:
+
+* Allow certain keywords as tuple type labels in TypeScript ([#1797](https://github.com/evanw/esbuild/issues/1797))
+
+    Apparently TypeScript lets you use certain keywords as tuple labels but not others. For example, `type x = [function: number]` is allowed while `type x = [class: number]` isn't. This release replicates this behavior in esbuild's TypeScript parser:
+
+    * Allowed keywords: `false`, `function`, `import`, `new`, `null`, `this`, `true`, `typeof`, `void`
+
+    * Forbidden keywords: `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default`, `delete`, `do`, `else`, `enum`, `export`, `extends`, `finally`, `for`, `if`, `in`, `instanceof`, `return`, `super`, `switch`, `throw`, `try`, `var`, `while`, `with`
+
+* Support sibling namespaces in TypeScript ([#1410](https://github.com/evanw/esbuild/issues/1410))
+
+    TypeScript has a feature where sibling namespaces with the same name can implicitly reference each other's exports without an explicit property access. This goes against how scope lookup works in JavaScript, so it previously didn't work with esbuild. This release adds support for this feature:
+
+    ```ts
+    // Original TypeScript code
+    namespace x {
+      export let y = 123
+    }
+    namespace x {
+      export let z = y
+    }
+
+    // Old JavaScript output
+    var x;
+    (function(x2) {
+      x2.y = 123;
+    })(x || (x = {}));
+    (function(x2) {
+      x2.z = y;
+    })(x || (x = {}));
+
+    // New JavaScript output
+    var x;
+    (function(x2) {
+      x2.y = 123;
+    })(x || (x = {}));
+    (function(x2) {
+      x2.z = x2.y;
+    })(x || (x = {}));
+    ```
+
+    Notice how the identifier `y` is now compiled to the property access `x2.y` which references the export named `y` on the namespace, instead of being left as the identifier `y` which references the global named `y`. This matches how the TypeScript compiler treats namespace objects. This new behavior also works for enums:
+
+    ```ts
+    // Original TypeScript code
+    enum x {
+      y = 123
+    }
+    enum x {
+      z = y + 1
+    }
+
+    // Old JavaScript output
+    var x;
+    (function(x2) {
+      x2[x2["y"] = 123] = "y";
+    })(x || (x = {}));
+    (function(x2) {
+      x2[x2["z"] = y + 1] = "z";
+    })(x || (x = {}));
+
+    // New JavaScript output
+    var x;
+    (function(x2) {
+      x2[x2["y"] = 123] = "y";
+    })(x || (x = {}));
+    (function(x2) {
+      x2[x2["z"] = 124] = "z";
+    })(x || (x = {}));
+    ```
+
+    Note that this behavior does **not** work across files. Each file is still compiled independently so the namespaces in each file are still resolved independently per-file. Implicit namespace cross-references still do not work across files. Getting this to work is counter to esbuild's parallel architecture and does not fit in with esbuild's design. It also doesn't make sense with esbuild's bundling model where input files are either in ESM or CommonJS format and therefore each have their own scope.
+
+* Change output for top-level TypeScript enums
+
+    The output format for top-level TypeScript enums has been changed to reduce code size and improve tree shaking, which means that esbuild's enum output is now somewhat different than TypeScript's enum output. The behavior of both output formats should still be equivalent though. Here's an example that shows the difference:
+
+    ```ts
+    // Original code
+    enum x {
+      y = 1,
+      z = 2
+    }
+
+    // Old output
+    var x;
+    (function(x2) {
+      x2[x2["y"] = 1] = "y";
+      x2[x2["z"] = 2] = "z";
+    })(x || (x = {}));
+
+    // New output
+    var x = /* @__PURE__ */ ((x2) => {
+      x2[x2["y"] = 1] = "y";
+      x2[x2["z"] = 2] = "z";
+      return x2;
+    })(x || {});
+    ```
+
+    The function expression has been changed to an arrow expression to reduce code size and the enum initializer has been moved into the variable declaration to make it possible to be marked as `/* @__PURE__ */` to improve tree shaking. The `/* @__PURE__ */` annotation is now automatically added when all of the enum values are side-effect free, which means the entire enum definition can be removed as dead code if it's never referenced. Direct enum value references within the same file that have been inlined do not count as references to the enum definition so this should eliminate enums from the output in many cases:
+
+    ```ts
+    // Original code
+    enum Foo { FOO = 1 }
+    enum Bar { BAR = 2 }
+    console.log(Foo, Bar.BAR)
+
+    // Old output (with --bundle --minify)
+    var n;(function(e){e[e.FOO=1]="FOO"})(n||(n={}));var l;(function(e){e[e.BAR=2]="BAR"})(l||(l={}));console.log(n,2);
+
+    // New output (with --bundle --minify)
+    var n=(e=>(e[e.FOO=1]="FOO",e))(n||{});console.log(n,2);
+    ```
+
+    Notice how the new output is much shorter because the entire definition for `Bar` has been completely removed as dead code by esbuild's tree shaking.
+
+    The output may seem strange since it would be simpler to just have a plain object literal as an initializer. However, TypeScript's enum feature behaves similarly to TypeScript's namespace feature which means enums can merge with existing enums and/or existing namespaces (and in some cases also existing objects) if the existing definition has the same name. This new output format keeps its similarity to the original output format so that it still handles all of the various edge cases that TypeScript's enum feature supports. Initializing the enum using a plain object literal would not merge with existing definitions and would break TypeScript's enum semantics.
+
+* Fix legal comment parsing in CSS ([#1796](https://github.com/evanw/esbuild/issues/1796))
+
+    Legal comments in CSS either start with `/*!` or contain `@preserve` or `@license` and are preserved by esbuild in the generated CSS output. This release fixes a bug where non-top-level legal comments inside a CSS file caused esbuild to skip any following legal comments even if those following comments are top-level:
+
+    ```css
+    /* Original code */
+    .example {
+      --some-var: var(--tw-empty, /*!*/ /*!*/);
+    }
+    /*! Some legal comment */
+    body {
+      background-color: red;
+    }
+
+    /* Old output (with --minify) */
+    .example{--some-var: var(--tw-empty, )}body{background-color:red}
+
+    /* New output (with --minify) */
+    .example{--some-var: var(--tw-empty, )}/*! Some legal comment */body{background-color:red}
+    ```
+
+* Fix panic when printing invalid CSS ([#1803](https://github.com/evanw/esbuild/issues/1803))
+
+    This release fixes a panic caused by a conditional CSS `@import` rule with a URL token. Code like this caused esbuild to enter an unexpected state because the case where tokens in the import condition with associated import records wasn't handled. This case is now handled correctly:
+
+    ```css
+    @import "example.css" url(foo);
+    ```
+
+* Mark `Set` and `Map` with array arguments as pure ([#1791](https://github.com/evanw/esbuild/issues/1791))
+
+    This release introduces special behavior for references to the global `Set` and `Map` constructors that marks them as `/* @__PURE__ */` if they are known to not have any side effects. These constructors evaluate the iterator of whatever is passed to them and the iterator could have side effects, so this is only safe if whatever is passed to them is an array, since the array iterator has no side effects.
+
+    Marking a constructor call as `/* @__PURE__ */` means it's safe to remove if the result is unused. This is an existing feature that you can trigger by manually adding a `/* @__PURE__ */` comment before a constructor call. The difference is that this release contains special behavior to automatically mark `Set` and `Map` as pure for you as long as it's safe to do so. As with all constructor calls that are marked `/* @__PURE__ */`, any internal expressions which could cause side effects are still preserved even though the constructor call itself is removed:
+
+    ```js
+    // Original code
+    new Map([
+      ['a', b()],
+      [c(), new Set(['d', e()])],
+    ]);
+
+    // Old output (with --minify)
+    new Map([["a",b()],[c(),new Set(["d",e()])]]);
+
+    // New output (with --minify)
+    b(),c(),e();
+    ```
+
 ## 0.13.15
 
 * Fix `super` in lowered `async` arrow functions ([#1777](https://github.com/evanw/esbuild/issues/1777))

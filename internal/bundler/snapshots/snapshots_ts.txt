@@ -102,6 +102,142 @@ TestTSDeclareVar
 var foo = bar();
 
 ================================================================================
+TestTSEnumDefine
+---------- /out/entry.js ----------
+var a = /* @__PURE__ */ ((a2) => {
+  a2[a2["b"] = 123] = "b";
+  a2[a2["c"] = 123] = "c";
+  return a2;
+})(a || {});
+
+================================================================================
+TestTSEnumJSX
+---------- /out/element.js ----------
+export var Foo = /* @__PURE__ */ ((Foo2) => {
+  Foo2["Div"] = "div";
+  return Foo2;
+})(Foo || {});
+console.log(/* @__PURE__ */ React.createElement("div", null));
+
+---------- /out/fragment.js ----------
+export var React = /* @__PURE__ */ ((React2) => {
+  React2["Fragment"] = "div";
+  return React2;
+})(React || {});
+console.log(/* @__PURE__ */ React.createElement("div", null, "test"));
+
+---------- /out/nested-element.js ----------
+var x;
+((x2) => {
+  let y;
+  ((y2) => {
+    let Foo;
+    ((Foo2) => {
+      Foo2["Div"] = "div";
+    })(Foo = y2.Foo || (y2.Foo = {}));
+  })(y = x2.y || (x2.y = {}));
+})(x || (x = {}));
+((x2) => {
+  let y;
+  ((y2) => {
+    console.log(/* @__PURE__ */ React.createElement("div", null));
+  })(y = x2.y || (x2.y = {}));
+})(x || (x = {}));
+
+---------- /out/nested-fragment.js ----------
+var x;
+((x2) => {
+  let y;
+  ((y2) => {
+    let React;
+    ((React2) => {
+      React2["Fragment"] = "div";
+    })(React = y2.React || (y2.React = {}));
+  })(y = x2.y || (x2.y = {}));
+})(x || (x = {}));
+((x2) => {
+  let y;
+  ((y2) => {
+    console.log(/* @__PURE__ */ y2.React.createElement("div", null, "test"));
+  })(y = x2.y || (x2.y = {}));
+})(x || (x = {}));
+
+================================================================================
+TestTSEnumTreeShaking
+---------- /out/simple-member.js ----------
+// simple-member.ts
+console.log(123);
+
+---------- /out/simple-enum.js ----------
+// simple-enum.ts
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 123] = "y";
+  return x2;
+})(x || {});
+console.log(x);
+
+---------- /out/sibling-member.js ----------
+// sibling-member.ts
+console.log(123, 246);
+
+---------- /out/sibling-enum-before.js ----------
+// sibling-enum-before.ts
+console.log(x);
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 123] = "y";
+  return x2;
+})(x || {});
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["z"] = 246] = "z";
+  return x2;
+})(x || {});
+
+---------- /out/sibling-enum-middle.js ----------
+// sibling-enum-middle.ts
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 123] = "y";
+  return x2;
+})(x || {});
+console.log(x);
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["z"] = 246] = "z";
+  return x2;
+})(x || {});
+
+---------- /out/sibling-enum-after.js ----------
+// sibling-enum-after.ts
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 123] = "y";
+  return x2;
+})(x || {});
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["z"] = 246] = "z";
+  return x2;
+})(x || {});
+console.log(x);
+
+---------- /out/namespace-before.js ----------
+// namespace-before.ts
+var x;
+((x2) => {
+  console.log(x2, y);
+})(x || (x = {}));
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 123] = "y";
+  return x2;
+})(x || {});
+
+---------- /out/namespace-after.js ----------
+// namespace-after.ts
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 123] = "y";
+  return x2;
+})(x || {});
+((x2) => {
+  console.log(x2, y);
+})(x || (x = {}));
+
+================================================================================
 TestTSExportDefaultTypeIssue316
 ---------- /out.js ----------
 // keep/declare-class.ts
@@ -134,7 +270,7 @@ var bar5 = 123;
 
 // keep/value-namespace.ts
 var foo3;
-(function(foo5) {
+((foo5) => {
   foo5.num = 0;
 })(foo3 || (foo3 = {}));
 var value_namespace_default = foo3;
@@ -142,7 +278,7 @@ var bar6 = 123;
 
 // keep/value-namespace-merged.ts
 var foo4;
-(function(foo5) {
+((foo5) => {
   foo5.num = 0;
 })(foo4 || (foo4 = {}));
 var value_namespace_merged_default = foo4;
@@ -225,10 +361,10 @@ TestTSExportNamespace
 // b.ts
 var Foo = class {
 };
-(function(Foo2) {
+((Foo2) => {
   Foo2.foo = 1;
 })(Foo || (Foo = {}));
-(function(Foo2) {
+((Foo2) => {
   Foo2.bar = 2;
 })(Foo || (Foo = {}));
 
@@ -340,18 +476,195 @@ class Foo extends Bar {
 ================================================================================
 TestTSMinifyEnum
 ---------- /a.js ----------
-var Foo;(function(e){e[e.A=0]="A",e[e.B=1]="B",e[e.C=e]="C"})(Foo||(Foo={}));
+var Foo=(e=>(e[e.A=0]="A",e[e.B=1]="B",e[e.C=e]="C",e))(Foo||{});
 
 ---------- /b.js ----------
-export var Foo;(function(e){e[e.X=0]="X",e[e.Y=1]="Y",e[e.Z=e]="Z"})(Foo||(Foo={}));
+export var Foo=(e=>(e[e.X=0]="X",e[e.Y=1]="Y",e[e.Z=e]="Z",e))(Foo||{});
 
 ================================================================================
 TestTSMinifyNamespace
 ---------- /a.js ----------
-var Foo;(function(e){let a;(function(p){foo(e,p)})(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+var Foo;(e=>{let a;(p=>{foo(e,p)})(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
 
 ---------- /b.js ----------
-export var Foo;(function(e){let a;(function(p){foo(e,p)})(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+export var Foo;(e=>{let a;(p=>{foo(e,p)})(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+
+================================================================================
+TestTSSiblingEnum
+---------- /out/number.js ----------
+export var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["y"] = 0] = "y";
+  x2[x2["yy"] = 0] = "yy";
+  return x2;
+})(x || {});
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["z"] = 1] = "z";
+  return x2;
+})(x || {});
+((x2) => {
+  console.log(y, z);
+})(x || (x = {}));
+console.log(0, 1);
+
+---------- /out/string.js ----------
+export var x = /* @__PURE__ */ ((x2) => {
+  x2["y"] = "a";
+  x2["yy"] = "a";
+  return x2;
+})(x || {});
+var x = /* @__PURE__ */ ((x2) => {
+  x2["z"] = "a";
+  return x2;
+})(x || {});
+((x2) => {
+  console.log(y, z);
+})(x || (x = {}));
+console.log("a", "a");
+
+---------- /out/propagation.js ----------
+export var a = /* @__PURE__ */ ((a2) => {
+  a2[a2["b"] = 100] = "b";
+  return a2;
+})(a || {});
+export var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["c"] = 100] = "c";
+  x2[x2["d"] = 200] = "d";
+  x2[x2["e"] = 4e4] = "e";
+  x2[x2["f"] = 1e4] = "f";
+  return x2;
+})(x || {});
+var x = /* @__PURE__ */ ((x2) => {
+  x2[x2["g"] = 625] = "g";
+  return x2;
+})(x || {});
+console.log(100, 100, 625, 625);
+
+---------- /out/nested-number.js ----------
+export var foo;
+((foo2) => {
+  let x;
+  ((x2) => {
+    x2[x2["y"] = 0] = "y";
+    x2[x2["yy"] = 0] = "yy";
+  })(x = foo2.x || (foo2.x = {}));
+})(foo || (foo = {}));
+((foo2) => {
+  let x;
+  ((x2) => {
+    x2[x2["z"] = 1] = "z";
+  })(x = foo2.x || (foo2.x = {}));
+})(foo || (foo = {}));
+((foo2) => {
+  let x;
+  ((x2) => {
+    console.log(y, z);
+    console.log(0, 1);
+  })(x = foo2.x || (foo2.x = {}));
+})(foo || (foo = {}));
+
+---------- /out/nested-string.js ----------
+export var foo;
+((foo2) => {
+  let x;
+  ((x2) => {
+    x2["y"] = "a";
+    x2["yy"] = "a";
+  })(x = foo2.x || (foo2.x = {}));
+})(foo || (foo = {}));
+((foo2) => {
+  let x;
+  ((x2) => {
+    x2["z"] = "a";
+  })(x = foo2.x || (foo2.x = {}));
+})(foo || (foo = {}));
+((foo2) => {
+  let x;
+  ((x2) => {
+    console.log(y, z);
+    console.log("a", "a");
+  })(x = foo2.x || (foo2.x = {}));
+})(foo || (foo = {}));
+
+---------- /out/nested-propagation.js ----------
+export var n;
+((n2) => {
+  let a;
+  ((a2) => {
+    a2[a2["b"] = 100] = "b";
+  })(a = n2.a || (n2.a = {}));
+})(n || (n = {}));
+((n2) => {
+  let x;
+  ((x2) => {
+    x2[x2["c"] = 100] = "c";
+    x2[x2["d"] = 200] = "d";
+    x2[x2["e"] = 4e4] = "e";
+    x2[x2["f"] = 1e4] = "f";
+  })(x = n2.x || (n2.x = {}));
+})(n || (n = {}));
+((n2) => {
+  let x;
+  ((x2) => {
+    x2[x2["g"] = 625] = "g";
+  })(x = n2.x || (n2.x = {}));
+  console.log(100, 100, 100, 625, 625, 625);
+})(n || (n = {}));
+
+================================================================================
+TestTSSiblingNamespace
+---------- /out/let.js ----------
+export var x;
+((x2) => {
+  x2.y = 123;
+})(x || (x = {}));
+((x2) => {
+  x2.z = x2.y;
+})(x || (x = {}));
+
+---------- /out/function.js ----------
+export var x;
+((x2) => {
+  function y() {
+  }
+  x2.y = y;
+})(x || (x = {}));
+((x2) => {
+  x2.z = x2.y;
+})(x || (x = {}));
+
+---------- /out/class.js ----------
+export var x;
+((x2) => {
+  class y {
+  }
+  x2.y = y;
+})(x || (x = {}));
+((x2) => {
+  x2.z = x2.y;
+})(x || (x = {}));
+
+---------- /out/namespace.js ----------
+export var x;
+((x2) => {
+  let y;
+  ((y2) => {
+    0;
+  })(y = x2.y || (x2.y = {}));
+})(x || (x = {}));
+((x2) => {
+  x2.z = x2.y;
+})(x || (x = {}));
+
+---------- /out/enum.js ----------
+export var x;
+((x2) => {
+  let y;
+  ((y2) => {
+  })(y = x2.y || (x2.y = {}));
+})(x || (x = {}));
+((x2) => {
+  x2.z = x2.y;
+})(x || (x = {}));
 
 ================================================================================
 TestTypeScriptDecorators

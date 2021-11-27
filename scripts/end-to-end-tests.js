@@ -81,6 +81,82 @@
     }),
   )
 
+  // Test TypeScript enum scope merging
+  tests.push(
+    test(['entry.ts', '--bundle', '--minify', '--outfile=node.js'], {
+      'entry.ts': `
+        const id = x => x
+        enum a { b = 1 }
+        enum a { c = 2 }
+        if (id(a).c !== 2 || id(a)[2] !== 'c' || id(a).b !== 1 || id(a)[1] !== 'b') throw 'fail'
+      `,
+    }),
+    test(['entry.ts', '--bundle', '--minify', '--outfile=node.js'], {
+      'entry.ts': `
+        const id = x => x
+        {
+          enum a { b = 1 }
+        }
+        {
+          enum a { c = 2 }
+          if (id(a).c !== 2 || id(a)[2] !== 'c' || id(a).b !== void 0 || id(a)[1] !== void 0) throw 'fail'
+        }
+      `,
+    }),
+    test(['entry.ts', '--bundle', '--minify', '--outfile=node.js'], {
+      'entry.ts': `
+        const id = x => x
+        enum a { b = 1 }
+        namespace a {
+          if (id(a).b !== 1 || id(a)[1] !== 'b') throw 'fail'
+        }
+      `,
+    }),
+    test(['entry.ts', '--bundle', '--minify', '--outfile=node.js'], {
+      'entry.ts': `
+        const id = x => x
+        namespace a {
+          export function foo() {
+            if (id(a).b !== 1 || id(a)[1] !== 'b') throw 'fail'
+          }
+        }
+        enum a { b = 1 }
+        a.foo()
+      `,
+    }),
+    test(['entry.ts', '--bundle', '--minify', '--outfile=node.js'], {
+      'entry.ts': `
+        import './enum-to-namespace'
+        import './namespace-to-enum'
+        import './namespace-to-namespace'
+      `,
+      'enum-to-namespace.ts': `
+        let foo, bar, y = 2, z = 4
+        enum x { y = 1 }
+        namespace x { foo = y }
+        enum x { z = y * 3 }
+        namespace x { bar = z }
+        if (foo !== 2 || bar !== 4) throw 'fail'
+      `,
+      'namespace-to-enum.ts': `
+        let y = 2, z = 4
+        namespace x { export let y = 1 }
+        enum x { foo = y }
+        namespace x { export let z = y * 3 }
+        enum x { bar = z }
+        if (x.foo !== 2 || x.bar !== 4) throw 'fail'
+      `,
+      'namespace-to-namespace.ts': `
+        let foo, bar, y = 2, z = 4
+        namespace x { export const y = 1 }
+        namespace x { foo = y }
+        namespace x { export const z = y * 3 }
+        namespace x { bar = z }
+        if (foo !== 1 || bar !== 3) throw 'fail'
+      `,
+    }),
+  )
+
   // Test coverage for a special JSX error message
   tests.push(
     test(['example.jsx', '--outfile=node.js'], {
@@ -2138,7 +2214,7 @@
     }),
     test(['entry.js', '--outfile=node.js', '--target=es6'], {
       'entry.js': `
-        //! @license comment
+        //! @legal comment
         'use strict'
         function f(a) {
           a **= 2

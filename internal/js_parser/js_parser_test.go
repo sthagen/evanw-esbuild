@@ -234,14 +234,14 @@ func TestStrictMode(t *testing.T) {
 
 	expectPrinted(t, "'use strict'", "\"use strict\";\n")
 	expectPrinted(t, "`use strict`", "`use strict`;\n")
-	expectPrinted(t, "//! @license comment\n 'use strict'", "\"use strict\";\n//! @license comment\n")
-	expectPrinted(t, "/*! @license comment */ 'use strict'", "\"use strict\";\n/*! @license comment */\n")
-	expectPrinted(t, "function f() { //! @license comment\n 'use strict' }", "function f() {\n  //! @license comment\n  \"use strict\";\n}\n")
-	expectPrinted(t, "function f() { /*! @license comment */ 'use strict' }", "function f() {\n  /*! @license comment */\n  \"use strict\";\n}\n")
-	expectParseError(t, "//! @license comment\n 'use strict'", "")
-	expectParseError(t, "/*! @license comment */ 'use strict'", "")
-	expectParseError(t, "function f() { //! @license comment\n 'use strict' }", "")
-	expectParseError(t, "function f() { /*! @license comment */ 'use strict' }", "")
+	expectPrinted(t, "//! @legal comment\n 'use strict'", "\"use strict\";\n//! @legal comment\n")
+	expectPrinted(t, "/*! @legal comment */ 'use strict'", "\"use strict\";\n/*! @legal comment */\n")
+	expectPrinted(t, "function f() { //! @legal comment\n 'use strict' }", "function f() {\n  //! @legal comment\n  \"use strict\";\n}\n")
+	expectPrinted(t, "function f() { /*! @legal comment */ 'use strict' }", "function f() {\n  /*! @legal comment */\n  \"use strict\";\n}\n")
+	expectParseError(t, "//! @legal comment\n 'use strict'", "")
+	expectParseError(t, "/*! @legal comment */ 'use strict'", "")
+	expectParseError(t, "function f() { //! @legal comment\n 'use strict' }", "")
+	expectParseError(t, "function f() { /*! @legal comment */ 'use strict' }", "")
 
 	nonSimple := "<stdin>: error: Cannot use a \"use strict\" directive in a function with a non-simple parameter list\n"
 	expectParseError(t, "function f() { 'use strict' }", "")
@@ -1682,7 +1682,7 @@ func TestClassStaticBlocks(t *testing.T) {
 		"<stdin>: error: \"yield\" is a reserved word and cannot be used in strict mode\n"+
 			"<stdin>: note: All code inside a class is implicitly in strict mode\n")
 	expectParseError(t, "class Foo { static { await } }", "<stdin>: error: The keyword \"await\" cannot be used here\n")
-	expectParseError(t, "class Foo { static { return } }", "<stdin>: error: A return statement cannot be used inside a class static block\n")
+	expectParseError(t, "class Foo { static { return } }", "<stdin>: error: A return statement cannot be used here\n")
 	expectParseError(t, "class Foo { static { break } }", "<stdin>: error: Cannot use \"break\" here\n")
 	expectParseError(t, "class Foo { static { continue } }", "<stdin>: error: Cannot use \"continue\" here\n")
 	expectParseError(t, "x: { class Foo { static { break x } } }", "<stdin>: error: There is no containing label named \"x\"\n")
@@ -4838,4 +4838,32 @@ func TestMangleCatch(t *testing.T) {
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { var x = 2 }", "try {\n  throw 1;\n} catch (x) {\n  var x = 2;\n}\n")
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { eval('x') }", "try {\n  throw 1;\n} catch (x) {\n  eval(\"x\");\n}\n")
 	expectPrintedMangle(t, "if (y) try { throw 1 } catch (x) {} else eval('x')", "if (y)\n  try {\n    throw 1;\n  } catch {\n  }\nelse\n  eval(\"x\");\n")
+}
+
+func TestAutoPureForSet(t *testing.T) {
+	expectPrinted(t, "new Set", "/* @__PURE__ */ new Set();\n")
+	expectPrinted(t, "new Set(null)", "/* @__PURE__ */ new Set(null);\n")
+	expectPrinted(t, "new Set(undefined)", "/* @__PURE__ */ new Set(void 0);\n")
+	expectPrinted(t, "new Set([])", "/* @__PURE__ */ new Set([]);\n")
+	expectPrinted(t, "new Set([x])", "/* @__PURE__ */ new Set([x]);\n")
+
+	expectPrinted(t, "new Set(x)", "new Set(x);\n")
+	expectPrinted(t, "new Set(false)", "new Set(false);\n")
+	expectPrinted(t, "new Set({})", "new Set({});\n")
+	expectPrinted(t, "new Set({ x })", "new Set({ x });\n")
+}
+
+func TestAutoPureForMap(t *testing.T) {
+	expectPrinted(t, "new Map", "/* @__PURE__ */ new Map();\n")
+	expectPrinted(t, "new Map(null)", "/* @__PURE__ */ new Map(null);\n")
+	expectPrinted(t, "new Map(undefined)", "/* @__PURE__ */ new Map(void 0);\n")
+	expectPrinted(t, "new Map([])", "/* @__PURE__ */ new Map([]);\n")
+	expectPrinted(t, "new Map([[]])", "/* @__PURE__ */ new Map([[]]);\n")
+	expectPrinted(t, "new Map([[], []])", "/* @__PURE__ */ new Map([[], []]);\n")
+
+	expectPrinted(t, "new Map(x)", "new Map(x);\n")
+	expectPrinted(t, "new Map(false)", "new Map(false);\n")
+	expectPrinted(t, "new Map([x])", "new Map([x]);\n")
+	expectPrinted(t, "new Map([x, []])", "new Map([x, []]);\n")
+	expectPrinted(t, "new Map([[], x])", "new Map([[], x]);\n")
 }

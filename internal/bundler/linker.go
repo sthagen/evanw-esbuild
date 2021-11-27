@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 	"path"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -174,8 +175,9 @@ type chunkReprCSS struct {
 }
 
 type externalImportCSS struct {
-	path       logger.Path
-	conditions []css_ast.Token
+	path                   logger.Path
+	conditions             []css_ast.Token
+	conditionImportRecords []ast.ImportRecord
 }
 
 // Returns a log where "log.HasErrors()" only returns true if any errors have
@@ -2822,10 +2824,15 @@ func (c *linkerContext) findImportedFilesInCSSOrder(entryPoints []uint32) (exter
 							external.conditions = append(external.conditions, atImport.ImportConditions)
 						}
 
+						// Clone any import records associated with the condition tokens
+						conditions, conditionImportRecords := css_ast.CloneTokensWithImportRecords(
+							atImport.ImportConditions, repr.AST.ImportRecords, nil, nil)
+
 						externals[record.Path] = external
 						externalOrder = append(externalOrder, externalImportCSS{
-							path:       record.Path,
-							conditions: atImport.ImportConditions,
+							path:                   record.Path,
+							conditions:             conditions,
+							conditionImportRecords: conditionImportRecords,
 						})
 					}
 				}
@@ -3580,6 +3587,8 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 	result *compileResultJS,
 	dataForSourceMaps []dataForSourceMap,
 ) {
+	defer c.recoverInternalError(waitGroup, partRange.sourceIndex)
+
 	file := &c.graph.Files[partRange.sourceIndex]
 	repr := file.InputFile.Repr.(*graph.JSRepr)
 	nsExportPartIndex := js_ast.NSExportPartIndex
@@ -4332,6 +4341,8 @@ func (c *linkerContext) renameSymbolsInChunk(chunk *chunkInfo, filesInOrder []ui
 }
 
 func (c *linkerContext) generateChunkJS(chunks []chunkInfo, chunkIndex int, chunkWaitGroup *sync.WaitGroup) {
+	defer c.recoverInternalError(chunkWaitGroup, runtime.SourceIndex)
+
 	chunk := &chunks[chunkIndex]
 
 	timer := c.timer.Fork()
@@ -4764,6 +4775,8 @@ type compileResultCSS struct {
 }
 
 func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chunkWaitGroup *sync.WaitGroup) {
+	defer c.recoverInternalError(chunkWaitGroup, runtime.SourceIndex)
+
 	chunk := &chunks[chunkIndex]
 
 	timer := c.timer.Fork()
@@ -4794,6 +4807,8 @@ func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chu
 		// Create a goroutine for this file
 		waitGroup.Add(1)
 		go func(sourceIndex uint32, compileResult *compileResultCSS) {
+			defer c.recoverInternalError(&waitGroup, sourceIndex)
+
 			file := &c.graph.Files[sourceIndex]
 			ast := file.InputFile.Repr.(*graph.CSSRepr).AST
 
@@ -4868,9 +4883,12 @@ func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chu
 		// Insert all external "@import" rules at the front. In CSS, all "@import"
 		// rules must come first or the browser will just ignore them.
 		for _, external := range chunkRepr.externalImportsInOrder {
+			var conditions []css_ast.Token
+			conditions, tree.ImportRecords = css_ast.CloneTokensWithImportRecords(
+				external.conditions, external.conditionImportRecords, conditions, tree.ImportRecords)
 			tree.Rules = append(tree.Rules, css_ast.Rule{Data: &css_ast.RAtImport{
 				ImportRecordIndex: uint32(len(tree.ImportRecords)),
-				ImportConditions:  external.conditions,
+				ImportConditions:  conditions,
 			}})
 			tree.ImportRecords = append(tree.ImportRecords, ast.ImportRecord{
 				Kind: ast.ImportAt,
@@ -5021,7 +5039,7 @@ func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chu
 	chunkWaitGroup.Done()
 }
 
-// Add all unique license comments to the end of the file. These are
+// Add all unique legal comments to the end of the file. These are
 // deduplicated because some projects have thousands of files with the same
 // comment. The comment must be preserved in the output for legal reasons but
 // at the same time we want to generate a small bundle when minifying.
@@ -5529,4 +5547,24 @@ func (c *linkerContext) generateSourceMapForChunk(
 		pieces.Suffix = bytes[mappingsEnd:]
 	}
 	return
+}
+
+// Recover from a panic by logging it as an internal error instead of crashing
+func (c *linkerContext) recoverInternalError(waitGroup *sync.WaitGroup, sourceIndex uint32) {
+	if r := recover(); r != nil {
+		stack := strings.TrimSpace(string(debug.Stack()))
+		data := logger.MsgData{
+			Text:     fmt.Sprintf("panic: %v", r),
+			Location: &logger.MsgLocation{},
+		}
+		if sourceIndex != runtime.SourceIndex {
+			data.Location.File = c.graph.Files[sourceIndex].InputFile.Source.PrettyPath
+		}
+		data.Location.LineText = fmt.Sprintf("%s\n%s", data.Location.LineText, stack)
+		c.log.AddMsg(logger.Msg{
+			Kind: logger.Error,
+			Data: data,
+		})
+		waitGroup.Done()
+	}
 }

@@ -41,8 +41,8 @@ var helpText = func(colors logger.Colors) string {
                         bundling, otherwise default is iife when platform
                         is browser and cjs when platform is node)
   --loader:X=L          Use loader L to load file extension X, where L is
-                        one of: js | jsx | ts | tsx | css | json | text | 
-												base64 | file | dataurl | binary
+                        one of: js | jsx | ts | tsx | css | json | text |
+                        base64 | file | dataurl | binary
   --minify              Minify the output (sets all --minify-* flags)
   --outdir=...          The output directory (for multiple entry points)
   --outfile=...         The output file (for one entry point)
@@ -80,7 +80,7 @@ var helpText = func(colors logger.Colors) string {
   --jsx-fragment=...        What to use for JSX instead of React.Fragment
   --jsx=...                 Set to "preserve" to disable transforming JSX to JS
   --keep-names              Preserve "name" on functions and classes
-  --legal-comments=...      Where to place license comments (none | inline |
+  --legal-comments=...      Where to place legal comments (none | inline |
                             eof | linked | external, default eof when bundling
                             and inline otherwise)
   --log-level=...           Disable logging (verbose | debug | info | warning |

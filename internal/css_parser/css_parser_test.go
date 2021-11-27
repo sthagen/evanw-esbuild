@@ -836,10 +836,11 @@ func TestAtImport(t *testing.T) {
 <stdin>: warning: Expected ";" but found end of file
 `)
 
-	expectParseError(t, "@import \"foo.css\" {}", "<stdin>: warning: Expected \";\" but found end of file\n")
+	expectParseError(t, "@import \"foo.css\" {}", "<stdin>: warning: Expected \";\"\n")
+	expectPrinted(t, "@import \"foo\"\na { color: red }\nb { color: blue }", "@import \"foo\" a { color: red }\nb {\n  color: blue;\n}\n")
 }
 
-func TestLicenseComment(t *testing.T) {
+func TestLegalComment(t *testing.T) {
 	expectPrinted(t, "/*!*/@import \"x\";", "/*!*/\n@import \"x\";\n")
 	expectPrinted(t, "/*!*/@charset \"UTF-8\";", "/*!*/\n@charset \"UTF-8\";\n")
 	expectPrinted(t, "/*!*/ @import \"x\";", "/*!*/\n@import \"x\";\n")
@@ -858,6 +859,8 @@ func TestLicenseComment(t *testing.T) {
 	expectPrinted(t, "@charset \"UTF-8\";/*!*/", "@charset \"UTF-8\";\n/*!*/\n")
 	expectPrinted(t, "@import \"x\"; /*!*/", "@import \"x\";\n/*!*/\n")
 	expectPrinted(t, "@charset \"UTF-8\"; /*!*/", "@charset \"UTF-8\";\n/*!*/\n")
+
+	expectPrinted(t, "/*! before */ a { --b: var(--c, /*!*/ /*!*/); } /*! after */\n", "/*! before */\na {\n  --b: var(--c, );\n}\n/*! after */\n")
 }
 
 func TestAtKeyframes(t *testing.T) {

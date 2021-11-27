@@ -82,10 +82,29 @@ type parser struct {
 	privateSetters map[js_ast.Ref]js_ast.Ref
 
 	// These are for TypeScript
+	//
+	// We build up enough information about the TypeScript namespace hierarchy to
+	// be able to resolve scope lookups and property accesses for TypeScript enum
+	// and namespace features. Each JavaScript scope object inside a namespace
+	// has a reference to a map of exported namespace members from sibling scopes.
+	//
+	// In addition, there is a map from each relevant symbol reference to the data
+	// associated with that namespace or namespace member: "refToTSNamespaceMemberData".
+	// This gives enough info to be able to resolve queries into the namespace.
+	//
+	// When visiting expressions, namespace metadata is associated with the most
+	// recently visited node. If namespace metadata is present, "tsNamespaceTarget"
+	// will be set to the most recently visited node (as a way to mark that this
+	// node has metadata) and "tsNamespaceMemberData" will be set to the metadata.
+	//
+	// The "shouldFoldNumericConstants" flag is enabled inside each enum body block
+	// since TypeScript requires numeric constant folding in enum definitions.
+	refToTSNamespaceMemberData map[js_ast.Ref]js_ast.TSNamespaceMemberData
+	tsNamespaceTarget          js_ast.E
+	tsNamespaceMemberData      js_ast.TSNamespaceMemberData
 	shouldFoldNumericConstants bool
 	emittedNamespaceVars       map[js_ast.Ref]bool
 	isExportedInsideNamespace  map[js_ast.Ref]js_ast.Ref
-	knownEnumValues            map[js_ast.Ref]map[string]float64
 	localTypeNames             map[string]bool
 
 	// This is the reference to the generated function argument for the namespace,
@@ -329,7 +348,7 @@ type optionsThatSupportStructuralEquality struct {
 	platform                config.Platform
 	outputFormat            config.Format
 	moduleType              config.ModuleType
-	isTargetUnconfigured    bool
+	targetFromAPI           config.TargetFromAPI
 	asciiOnly               bool
 	keepNames               bool
 	mangleSyntax            bool
@@ -337,7 +356,7 @@ type optionsThatSupportStructuralEquality struct {
 	omitRuntimeForTests     bool
 	ignoreDCEAnnotations    bool
 	treeShaking             bool
-	preserveUnusedImportsTS bool
+	unusedImportsTS         config.UnusedImportsTS
 	useDefineForClassFields config.MaybeBool
 }
 
@@ -355,7 +374,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			platform:                options.Platform,
 			outputFormat:            options.OutputFormat,
 			moduleType:              options.ModuleType,
-			isTargetUnconfigured:    options.IsTargetUnconfigured,
+			targetFromAPI:           options.TargetFromAPI,
 			asciiOnly:               options.ASCIIOnly,
 			keepNames:               options.KeepNames,
 			mangleSyntax:            options.MangleSyntax,
@@ -363,7 +382,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			omitRuntimeForTests:     options.OmitRuntimeForTests,
 			ignoreDCEAnnotations:    options.IgnoreDCEAnnotations,
 			treeShaking:             options.TreeShaking,
-			preserveUnusedImportsTS: options.PreserveUnusedImportsTS,
+			unusedImportsTS:         options.UnusedImportsTS,
 			useDefineForClassFields: options.UseDefineForClassFields,
 		},
 	}
@@ -481,7 +500,8 @@ type fnOrArrowDataParse struct {
 	isTopLevel          bool
 	isConstructor       bool
 	isTypeScriptDeclare bool
-	isClassStaticInit   bool
+	isThisDisallowed    bool
+	isReturnDisallowed  bool
 
 	// In TypeScript, forward declarations of functions have no bodies
 	allowMissingBodyForTypeScript bool
@@ -1338,8 +1358,12 @@ func (p *parser) canMergeSymbols(scope *js_ast.Scope, existing js_ast.SymbolKind
 	}
 
 	// "enum Foo {} enum Foo {}"
+	if new == js_ast.SymbolTSEnum && existing == js_ast.SymbolTSEnum {
+		return mergeKeepExisting
+	}
+
 	// "namespace Foo { ... } enum Foo {}"
-	if new == js_ast.SymbolTSEnum && (existing == js_ast.SymbolTSEnum || existing == js_ast.SymbolTSNamespace) {
+	if new == js_ast.SymbolTSEnum && existing == js_ast.SymbolTSNamespace {
 		return mergeReplaceWithNew
 	}
 
@@ -1616,6 +1640,27 @@ func (p *parser) ignoreUsage(ref js_ast.Ref) {
 
 	// Don't roll back the "tsUseCounts" increment. This must be counted even if
 	// the value is ignored because that's what the TypeScript compiler does.
+}
+
+func (p *parser) ignoreUsageOfIdentifierInDotChain(expr js_ast.Expr) {
+	for {
+		switch e := expr.Data.(type) {
+		case *js_ast.EIdentifier:
+			p.ignoreUsage(e.Ref)
+
+		case *js_ast.EDot:
+			expr = e.Target
+			continue
+
+		case *js_ast.EIndex:
+			if _, ok := e.Index.Data.(*js_ast.EString); ok {
+				expr = e.Target
+				continue
+			}
+		}
+
+		return
+	}
 }
 
 func (p *parser) importFromRuntime(loc logger.Loc, name string) js_ast.Expr {
@@ -1991,10 +2036,9 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 
 				oldFnOrArrowDataParse := p.fnOrArrowDataParse
 				p.fnOrArrowDataParse = fnOrArrowDataParse{
-					isClassStaticInit:  true,
+					isReturnDisallowed: true,
 					allowSuperProperty: true,
 					await:              forbidAll,
-					yield:              allowIdent,
 				}
 
 				p.pushScopeForParsePass(js_ast.ScopeClassStaticInit, loc)
@@ -2082,12 +2126,16 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 
 			p.lexer.Next()
 
-			// "super" property access is allowed in field initializers
+			// "this" and "super" property access is allowed in field initializers
+			oldIsThisDisallowed := p.fnOrArrowDataParse.isThisDisallowed
+			oldAllowSuperProperty := p.fnOrArrowDataParse.allowSuperProperty
+			p.fnOrArrowDataParse.isThisDisallowed = false
 			p.fnOrArrowDataParse.allowSuperProperty = true
 
 			initializerOrNil = p.parseExpr(js_ast.LComma)
 
-			p.fnOrArrowDataParse.allowSuperProperty = false
+			p.fnOrArrowDataParse.isThisDisallowed = oldIsThisDisallowed
+			p.fnOrArrowDataParse.allowSuperProperty = oldAllowSuperProperty
 		}
 
 		// Special-case private identifiers
@@ -2370,7 +2418,8 @@ func (p *parser) parseArrowBody(args []js_ast.Arg, data fnOrArrowDataParse) *js_
 		p.declareBinding(js_ast.SymbolHoisted, arg.Binding, parseStmtOpts{})
 	}
 
-	// The ability to use "super" is inherited by arrow functions
+	// The ability to use "this" and "super" is inherited by arrow functions
+	data.isThisDisallowed = p.fnOrArrowDataParse.isThisDisallowed
 	data.allowSuperCall = p.fnOrArrowDataParse.allowSuperCall
 	data.allowSuperProperty = p.fnOrArrowDataParse.allowSuperProperty
 
@@ -2918,6 +2967,9 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		return js_ast.Expr{Loc: loc, Data: js_ast.ENullShared}
 
 	case js_lexer.TThis:
+		if p.fnOrArrowDataParse.isThisDisallowed {
+			p.log.AddRangeError(&p.tracker, p.lexer.Range(), "Cannot use \"this\" here")
+		}
 		p.lexer.Next()
 		return js_ast.Expr{Loc: loc, Data: js_ast.EThisShared}
 
@@ -6557,8 +6609,8 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		return js_ast.Stmt{Loc: loc, Data: &js_ast.SContinue{Label: name}}
 
 	case js_lexer.TReturn:
-		if p.fnOrArrowDataParse.isClassStaticInit {
-			p.log.AddRangeError(&p.tracker, p.lexer.Range(), "A return statement cannot be used inside a class static block")
+		if p.fnOrArrowDataParse.isReturnDisallowed {
+			p.log.AddRangeError(&p.tracker, p.lexer.Range(), "A return statement cannot be used here")
 		}
 		p.lexer.Next()
 		var value js_ast.Expr
@@ -6974,6 +7026,31 @@ func (p *parser) findSymbol(loc logger.Loc, name string) findSymbolResult {
 			ref = member.Ref
 			declareLoc = member.Loc
 			break
+		}
+
+		// Is the symbol a member of this scope's TypeScript namespace?
+		if tsNamespace := s.TSNamespace; tsNamespace != nil {
+			if member, ok := tsNamespace.ExportedMembers[name]; ok && tsNamespace.IsEnumScope == member.IsEnumValue {
+				// If this is an identifier from a sibling TypeScript namespace, then we're
+				// going to have to generate a property access instead of a simple reference.
+				// Lazily-generate an identifier that represents this property access.
+				cache := tsNamespace.LazilyGeneratedProperyAccesses
+				if cache == nil {
+					cache = make(map[string]js_ast.Ref)
+					tsNamespace.LazilyGeneratedProperyAccesses = cache
+				}
+				ref, ok = cache[name]
+				if !ok {
+					ref = p.newSymbol(js_ast.SymbolOther, name)
+					p.symbols[ref.InnerIndex].NamespaceAlias = &js_ast.NamespaceAlias{
+						NamespaceRef: tsNamespace.ArgRef,
+						Alias:        name,
+					}
+					cache[name] = ref
+				}
+				declareLoc = member.Loc
+				break
+			}
 		}
 
 		s = s.Parent
@@ -9292,7 +9369,6 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 	case *js_ast.SEnum:
 		p.recordDeclaredSymbol(s.Name.Ref)
 		p.pushScopeForVisitPass(js_ast.ScopeEntry, stmt.Loc)
-		defer p.popScope()
 		p.recordDeclaredSymbol(s.Arg)
 
 		// Scan ahead for any variables inside this namespace. This must be done
@@ -9311,12 +9387,10 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		nextNumericValue := float64(0)
 		hasNumericValue := true
 		valueExprs := []js_ast.Expr{}
+		allValuesArePure := true
 
-		// Track values so they can be used by constant folding. We need to follow
-		// links here in case the enum was merged with a preceding namespace.
-		valuesSoFar := make(map[string]float64)
-		p.knownEnumValues[s.Name.Ref] = valuesSoFar
-		p.knownEnumValues[s.Arg] = valuesSoFar
+		// Update the exported members of this enum as we constant fold each one
+		exportedMembers := p.currentScope.TSNamespace.ExportedMembers
 
 		// We normally don't fold numeric constants because they might increase code
 		// size, but it's important to fold numeric constants inside enums since
@@ -9333,16 +9407,33 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 			if value.ValueOrNil.Data != nil {
 				value.ValueOrNil = p.visitExpr(value.ValueOrNil)
 				hasNumericValue = false
+
 				switch e := value.ValueOrNil.Data.(type) {
 				case *js_ast.ENumber:
-					valuesSoFar[name] = e.Value
+					member := exportedMembers[name]
+					member.Data = &js_ast.TSNamespaceMemberEnumNumber{Value: e.Value}
+					exportedMembers[name] = member
+					p.refToTSNamespaceMemberData[value.Ref] = member.Data
 					hasNumericValue = true
 					nextNumericValue = e.Value + 1
+
 				case *js_ast.EString:
+					member := exportedMembers[name]
+					member.Data = &js_ast.TSNamespaceMemberEnumString{Value: e.Value}
+					exportedMembers[name] = member
+					p.refToTSNamespaceMemberData[value.Ref] = member.Data
 					hasStringValue = true
+
+				default:
+					if !p.exprCanBeRemovedIfUnused(value.ValueOrNil) {
+						allValuesArePure = false
+					}
 				}
 			} else if hasNumericValue {
-				valuesSoFar[name] = nextNumericValue
+				member := exportedMembers[name]
+				member.Data = &js_ast.TSNamespaceMemberEnumNumber{Value: nextNumericValue}
+				exportedMembers[name] = member
+				p.refToTSNamespaceMemberData[value.Ref] = member.Data
 				value.ValueOrNil = js_ast.Expr{Loc: value.Loc, Data: &js_ast.ENumber{Value: nextNumericValue}}
 				nextNumericValue++
 			} else {
@@ -9383,29 +9474,16 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 					}},
 					js_ast.Expr{Loc: value.Loc, Data: &js_ast.EString{Value: value.Name}},
 				))
+				p.recordUsage(s.Arg)
 			}
-			p.recordUsage(s.Arg)
 		}
 
+		p.popScope()
 		p.shouldFoldNumericConstants = oldShouldFoldNumericConstants
 
-		// Generate statements from expressions
-		valueStmts := []js_ast.Stmt{}
-		if len(valueExprs) > 0 {
-			if p.options.mangleSyntax {
-				// "a; b; c;" => "a, b, c;"
-				joined := js_ast.JoinAllWithComma(valueExprs)
-				valueStmts = append(valueStmts, js_ast.Stmt{Loc: joined.Loc, Data: &js_ast.SExpr{Value: joined}})
-			} else {
-				for _, expr := range valueExprs {
-					valueStmts = append(valueStmts, js_ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
-				}
-			}
-		}
-
 		// Wrap this enum definition in a closure
-		stmts = p.generateClosureForTypeScriptNamespaceOrEnum(
-			stmts, stmt.Loc, s.IsExport, s.Name.Loc, s.Name.Ref, s.Arg, valueStmts)
+		stmts = p.generateClosureForTypeScriptEnum(
+			stmts, stmt.Loc, s.IsExport, s.Name.Loc, s.Name.Ref, s.Arg, valueExprs, allValuesArePure)
 		return stmts
 
 	case *js_ast.SNamespace:
@@ -10326,15 +10404,6 @@ func (p *parser) maybeRewritePropertyAccess(
 				return js_ast.Expr{Loc: nameLoc, Data: &js_ast.EIdentifier{Ref: p.requireRef}}, true
 			}
 		}
-
-		// If this is a known enum value, inline the value of the enum
-		if p.options.ts.Parse {
-			if enumValueMap, ok := p.knownEnumValues[id.Ref]; ok {
-				if number, ok := enumValueMap[name]; ok {
-					return js_ast.Expr{Loc: loc, Data: &js_ast.ENumber{Value: number}}, true
-				}
-			}
-		}
 	}
 
 	// Attempt to simplify statically-determined object literal property accesses
@@ -10393,6 +10462,42 @@ func (p *parser) maybeRewritePropertyAccess(
 				// We can only return "undefined" when a key is missing if the prototype is null
 				if hasProtoNull {
 					return js_ast.Expr{Loc: target.Loc, Data: js_ast.EUndefinedShared}, true
+				}
+			}
+		}
+	}
+
+	// Handle references to namespaces or namespace members
+	if target.Data == p.tsNamespaceTarget && assignTarget == js_ast.AssignTargetNone && !isDeleteTarget {
+		if ns, ok := p.tsNamespaceMemberData.(*js_ast.TSNamespaceMemberNamespace); ok {
+			if member, ok := ns.ExportedMembers[name]; ok {
+				switch m := member.Data.(type) {
+				case *js_ast.TSNamespaceMemberEnumNumber:
+					p.ignoreUsageOfIdentifierInDotChain(target)
+					return js_ast.Expr{Loc: loc, Data: &js_ast.ENumber{Value: m.Value}}, true
+
+				case *js_ast.TSNamespaceMemberEnumString:
+					p.ignoreUsageOfIdentifierInDotChain(target)
+					return js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: m.Value}}, true
+
+				case *js_ast.TSNamespaceMemberNamespace:
+					// If this isn't a constant, return a clone of this property access
+					// but with the namespace member data associated with it so that
+					// more property accesses off of this property access are recognized.
+					if preferQuotedKey || !js_lexer.IsIdentifier(name) {
+						p.tsNamespaceTarget = &js_ast.EIndex{
+							Target: target,
+							Index:  js_ast.Expr{Loc: nameLoc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}},
+						}
+					} else {
+						p.tsNamespaceTarget = &js_ast.EDot{
+							Target:  target,
+							Name:    name,
+							NameLoc: nameLoc,
+						}
+					}
+					p.tsNamespaceMemberData = member.Data
+					return js_ast.Expr{Loc: loc, Data: p.tsNamespaceTarget}, true
 				}
 			}
 		}
@@ -12641,6 +12746,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			e.Args[i] = p.visitExpr(arg)
 		}
 
+		p.maybeMarkKnownGlobalConstructorAsPure(e)
+
 	case *js_ast.EArrow:
 		asyncArrowNeedsToBeLowered := e.IsAsync && p.options.unsupportedJSFeatures.Has(compat.AsyncAwait)
 		oldFnOrArrowData := p.fnOrArrowDataVisit
@@ -12813,6 +12920,72 @@ func (p *parser) warnAboutImportNamespaceCall(target js_ast.Expr, kind importNam
 	}
 }
 
+func (p *parser) maybeMarkKnownGlobalConstructorAsPure(e *js_ast.ENew) {
+	if id, ok := e.Target.Data.(*js_ast.EIdentifier); ok {
+		if symbol := p.symbols[id.Ref.InnerIndex]; symbol.Kind == js_ast.SymbolUnbound {
+			switch symbol.OriginalName {
+			case "Set":
+				n := len(e.Args)
+
+				if n == 0 {
+					// "new Set()" is pure
+					e.CanBeUnwrappedIfUnused = true
+					break
+				}
+
+				if n == 1 {
+					switch e.Args[0].Data.(type) {
+					case *js_ast.EArray, *js_ast.ENull, *js_ast.EUndefined:
+						// "new Set([a, b, c])" is pure
+						// "new Set(null)" is pure
+						// "new Set(void 0)" is pure
+						e.CanBeUnwrappedIfUnused = true
+
+					default:
+						// "new Set(x)" is impure because the iterator for "x" could have side effects
+					}
+				}
+
+			case "Map":
+				n := len(e.Args)
+
+				if n == 0 {
+					// "new Map()" is pure
+					e.CanBeUnwrappedIfUnused = true
+					break
+				}
+
+				if n == 1 {
+					switch arg := e.Args[0].Data.(type) {
+					case *js_ast.ENull, *js_ast.EUndefined:
+						// "new Map(null)" is pure
+						// "new Map(void 0)" is pure
+						e.CanBeUnwrappedIfUnused = true
+
+					case *js_ast.EArray:
+						allEntriesAreArrays := true
+						for _, item := range arg.Items {
+							if _, ok := item.Data.(*js_ast.EArray); !ok {
+								// "new Map([x])" is impure because "x[0]" could have side effects
+								allEntriesAreArrays = false
+								break
+							}
+						}
+
+						// "new Map([[a, b], [c, d]])" is pure
+						if allEntriesAreArrays {
+							e.CanBeUnwrappedIfUnused = true
+						}
+
+					default:
+						// "new Map(x)" is impure because the iterator for "x" could have side effects
+					}
+				}
+			}
+		}
+	}
+}
+
 func (p *parser) valueForDefine(loc logger.Loc, defineFunc config.DefineFunc, opts identifierOpts) js_ast.Expr {
 	expr := js_ast.Expr{Loc: loc, Data: defineFunc(config.DefineArgs{
 		Loc:             loc,
@@ -12852,6 +13025,38 @@ func (p *parser) handleIdentifier(loc logger.Loc, e *js_ast.EIdentifier, opts id
 		p.log.AddRangeError(&p.tracker, r, fmt.Sprintf("Cannot assign to import %q", p.symbols[ref.InnerIndex].OriginalName))
 	}
 
+	// Substitute an EImportIdentifier now if this has a namespace alias
+	if opts.assignTarget == js_ast.AssignTargetNone && !opts.isDeleteTarget {
+		if nsAlias := p.symbols[ref.InnerIndex].NamespaceAlias; nsAlias != nil {
+			data := &js_ast.EImportIdentifier{
+				Ref:                     ref,
+				PreferQuotedKey:         opts.preferQuotedKey,
+				WasOriginallyIdentifier: opts.wasOriginallyIdentifier,
+			}
+
+			// Handle references to namespaces or namespace members
+			if tsMemberData, ok := p.refToTSNamespaceMemberData[nsAlias.NamespaceRef]; ok {
+				if ns, ok := tsMemberData.(*js_ast.TSNamespaceMemberNamespace); ok {
+					if member, ok := ns.ExportedMembers[nsAlias.Alias]; ok {
+						switch m := member.Data.(type) {
+						case *js_ast.TSNamespaceMemberEnumNumber:
+							return js_ast.Expr{Loc: loc, Data: &js_ast.ENumber{Value: m.Value}}
+
+						case *js_ast.TSNamespaceMemberEnumString:
+							return js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: m.Value}}
+
+						case *js_ast.TSNamespaceMemberNamespace:
+							p.tsNamespaceTarget = data
+							p.tsNamespaceMemberData = member.Data
+						}
+					}
+				}
+			}
+
+			return js_ast.Expr{Loc: loc, Data: data}
+		}
+	}
+
 	// Substitute an EImportIdentifier now if this is an import item
 	if p.isImportItem[ref] {
 		return js_ast.Expr{Loc: loc, Data: &js_ast.EImportIdentifier{
@@ -12861,25 +13066,37 @@ func (p *parser) handleIdentifier(loc logger.Loc, e *js_ast.EIdentifier, opts id
 		}}
 	}
 
+	// Handle references to namespaces or namespace members
+	if tsMemberData, ok := p.refToTSNamespaceMemberData[ref]; ok {
+		switch m := tsMemberData.(type) {
+		case *js_ast.TSNamespaceMemberEnumNumber:
+			return js_ast.Expr{Loc: loc, Data: &js_ast.ENumber{Value: m.Value}}
+
+		case *js_ast.TSNamespaceMemberEnumString:
+			return js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: m.Value}}
+
+		case *js_ast.TSNamespaceMemberNamespace:
+			p.tsNamespaceTarget = e
+			p.tsNamespaceMemberData = tsMemberData
+		}
+	}
+
 	// Substitute a namespace export reference now if appropriate
 	if p.options.ts.Parse {
 		if nsRef, ok := p.isExportedInsideNamespace[ref]; ok {
 			name := p.symbols[ref.InnerIndex].OriginalName
 
-			// If this is a known enum value, inline the value of the enum
-			if enumValueMap, ok := p.knownEnumValues[nsRef]; ok {
-				if number, ok := enumValueMap[name]; ok {
-					return js_ast.Expr{Loc: loc, Data: &js_ast.ENumber{Value: number}}
-				}
-			}
-
 			// Otherwise, create a property access on the namespace
 			p.recordUsage(nsRef)
-			return js_ast.Expr{Loc: loc, Data: &js_ast.EDot{
+			propertyAccess := &js_ast.EDot{
 				Target:  js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: nsRef}},
 				Name:    name,
 				NameLoc: loc,
-			}}
+			}
+			if p.tsNamespaceTarget == e {
+				p.tsNamespaceTarget = propertyAccess
+			}
+			return js_ast.Expr{Loc: loc, Data: propertyAccess}
 		}
 	}
 
@@ -13054,19 +13271,12 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 		case *js_ast.SImport:
 			record := &p.importRecords[s.ImportRecordIndex]
 
-			// The official TypeScript compiler always removes unused imported
-			// symbols. However, we deliberately deviate from the official
-			// TypeScript compiler's behavior doing this in a specific scenario:
-			// we are not bundling, symbol renaming is off, and the tsconfig.json
-			// "importsNotUsedAsValues" setting is present and is not set to
-			// "remove".
-			//
-			// This exists to support the use case of compiling partial modules for
-			// compile-to-JavaScript languages such as Svelte. These languages try
-			// to reference imports in ways that are impossible for esbuild to know
-			// about when esbuild is only given a partial module to compile. Here
-			// is an example of some Svelte code that might use esbuild to convert
-			// TypeScript to JavaScript:
+			// We implement TypeScript's "preserveValueImports" tsconfig.json setting
+			// to support the use case of compiling partial modules for compile-to-
+			// JavaScript languages such as Svelte. These languages try to reference
+			// imports in ways that are impossible for TypeScript and esbuild to know
+			// about when they are only given a partial module to compile. Here is an
+			// example of some Svelte code that contains a TypeScript snippet:
 			//
 			//   <script lang="ts">
 			//     import Counter from './Counter.svelte';
@@ -13079,24 +13289,11 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 			//
 			// Tools that use esbuild to compile TypeScript code inside a Svelte
 			// file like this only give esbuild the contents of the <script> tag.
-			// These tools work around this missing import problem when using the
-			// official TypeScript compiler by hacking the TypeScript AST to
-			// remove the "unused import" flags. This isn't possible in esbuild
-			// because esbuild deliberately does not expose an AST manipulation
-			// API for performance reasons.
+			// The "preserveValueImports" setting avoids removing unused import
+			// names, which means additional code appended after the TypeScript-
+			// to-JavaScript conversion can still access those unused imports.
 			//
-			// We deviate from the TypeScript compiler's behavior in this specific
-			// case because doing so is useful for these compile-to-JavaScript
-			// languages and is benign in other cases. The rationale is as follows:
-			//
-			//   * If "importsNotUsedAsValues" is absent or set to "remove", then
-			//     we don't know if these imports are values or types. It's not
-			//     safe to keep them because if they are types, the missing imports
-			//     will cause run-time failures because there will be no matching
-			//     exports. It's only safe keep imports if "importsNotUsedAsValues"
-			//     is set to "preserve" or "error" because then we can assume that
-			//     none of the imports are types (since the TypeScript compiler
-			//     would generate an error in that case).
+			// There are two scenarios where we don't do this:
 			//
 			//   * If we're bundling, then we know we aren't being used to compile
 			//     a partial module. The parser is seeing the entire code for the
@@ -13110,7 +13307,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 			//     user is expecting the output to be as small as possible. So we
 			//     should omit unused imports.
 			//
-			keepUnusedImports := p.options.ts.Parse && p.options.preserveUnusedImportsTS &&
+			keepUnusedImports := p.options.ts.Parse && p.options.unusedImportsTS == config.UnusedImportsKeepValues &&
 				p.options.mode != config.ModeBundle && !p.options.minifyIdentifiers
 
 			// TypeScript always trims unused imports. This is important for
@@ -13197,7 +13394,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 				//
 				// We do not want to do this culling in JavaScript though because the
 				// module may have side effects even if all imports are unused.
-				if p.options.ts.Parse && foundImports && isUnusedInTypeScript && !p.options.preserveUnusedImportsTS {
+				if p.options.ts.Parse && foundImports && isUnusedInTypeScript && p.options.unusedImportsTS == config.UnusedImportsRemoveStmt {
 					// Ignore import records with a pre-filled source index. These are
 					// for injected files and we definitely do not want to trim these.
 					if !record.SourceIndex.IsValid() {
@@ -14053,10 +14250,10 @@ func newParser(log logger.Log, source logger.Source, lexer js_lexer.Lexer, optio
 		privateSetters: make(map[js_ast.Ref]js_ast.Ref),
 
 		// These are for TypeScript
-		emittedNamespaceVars:      make(map[js_ast.Ref]bool),
-		isExportedInsideNamespace: make(map[js_ast.Ref]js_ast.Ref),
-		knownEnumValues:           make(map[js_ast.Ref]map[string]float64),
-		localTypeNames:            make(map[string]bool),
+		refToTSNamespaceMemberData: make(map[js_ast.Ref]js_ast.TSNamespaceMemberData),
+		emittedNamespaceVars:       make(map[js_ast.Ref]bool),
+		isExportedInsideNamespace:  make(map[js_ast.Ref]js_ast.Ref),
+		localTypeNames:             make(map[string]bool),
 
 		// These are for handling ES6 imports and exports
 		importItemsForNamespace: make(map[js_ast.Ref]map[string]js_ast.LocRef),
@@ -14118,7 +14315,8 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 		// silently changed in TypeScript 4.3. It's a breaking change even though
 		// it wasn't mentioned in the announcement blog post for TypeScript 4.3:
 		// https://devblogs.microsoft.com/typescript/announcing-typescript-4-3/.
-		if options.tsTarget != nil && strings.EqualFold(options.tsTarget.Target, "ESNext") {
+		if options.targetFromAPI == config.TargetWasConfiguredIncludingESNext ||
+			(options.tsTarget != nil && strings.EqualFold(options.tsTarget.Target, "ESNext")) {
 			options.useDefineForClassFields = config.True
 		} else {
 			options.useDefineForClassFields = config.False
@@ -14128,7 +14326,7 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	// If there is no top-level esbuild "target" setting, include unsupported
 	// JavaScript features from the TypeScript "target" setting. Otherwise the
 	// TypeScript "target" setting is ignored.
-	if options.isTargetUnconfigured && options.tsTarget != nil {
+	if options.targetFromAPI == config.TargetWasUnconfigured && options.tsTarget != nil {
 		options.unsupportedJSFeatures |= options.tsTarget.UnsupportedJSFeatures
 	}
 
