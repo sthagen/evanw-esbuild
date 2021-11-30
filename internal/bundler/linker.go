@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"hash"
 	"path"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -322,7 +321,7 @@ func (c *linkerContext) enforceNoCyclicChunkImports(chunks []chunkInfo) {
 	validate = func(chunkIndex int, path []int) {
 		for _, otherChunkIndex := range path {
 			if chunkIndex == otherChunkIndex {
-				c.log.AddError(nil, logger.Loc{}, "Internal error: generated chunks contain a circular import")
+				c.log.Add(logger.Error, nil, logger.Range{}, "Internal error: generated chunks contain a circular import")
 				return
 			}
 		}
@@ -587,7 +586,7 @@ func (c *linkerContext) pathBetweenChunks(fromRelDir string, toRelPath string) s
 	// Otherwise, return a relative path
 	relPath, ok := c.fs.Rel(fromRelDir, toRelPath)
 	if !ok {
-		c.log.AddError(nil, logger.Loc{},
+		c.log.Add(logger.Error, nil, logger.Range{},
 			fmt.Sprintf("Cannot traverse from directory %q to chunk %q", fromRelDir, toRelPath))
 		return ""
 	}
@@ -1978,7 +1977,7 @@ func (c *linkerContext) matchImportsWithExportsForFile(sourceIndex uint32) {
 
 		case matchImportCycle:
 			namedImport := repr.AST.NamedImports[importRef]
-			c.log.AddRangeError(file.LineColumnTracker(), js_lexer.RangeOfIdentifier(file.InputFile.Source, namedImport.AliasLoc),
+			c.log.Add(logger.Error, file.LineColumnTracker(), js_lexer.RangeOfIdentifier(file.InputFile.Source, namedImport.AliasLoc),
 				fmt.Sprintf("Detected cycle while resolving import %q", namedImport.Alias))
 
 		case matchImportProbablyTypeScriptType:
@@ -1996,8 +1995,8 @@ func (c *linkerContext) matchImportsWithExportsForFile(sourceIndex uint32) {
 				ra := js_lexer.RangeOfIdentifier(a.InputFile.Source, result.nameLoc)
 				rb := js_lexer.RangeOfIdentifier(b.InputFile.Source, result.otherNameLoc)
 				notes = []logger.MsgData{
-					logger.RangeData(a.LineColumnTracker(), ra, "One matching export is here"),
-					logger.RangeData(b.LineColumnTracker(), rb, "Another matching export is here"),
+					a.LineColumnTracker().MsgData(ra, "One matching export is here:"),
+					b.LineColumnTracker().MsgData(rb, "Another matching export is here:"),
 				}
 			}
 
@@ -2012,10 +2011,10 @@ func (c *linkerContext) matchImportsWithExportsForFile(sourceIndex uint32) {
 				// "undefined" instead of emitting an error.
 				symbol.ImportItemStatus = js_ast.ImportItemMissing
 				msg := fmt.Sprintf("Import %q will always be undefined because there are multiple matching exports", namedImport.Alias)
-				c.log.AddRangeWarningWithNotes(file.LineColumnTracker(), r, msg, notes)
+				c.log.AddWithNotes(logger.Warning, file.LineColumnTracker(), r, msg, notes)
 			} else {
 				msg := fmt.Sprintf("Ambiguous import %q has multiple matching exports", namedImport.Alias)
-				c.log.AddRangeErrorWithNotes(file.LineColumnTracker(), r, msg, notes)
+				c.log.AddWithNotes(logger.Error, file.LineColumnTracker(), r, msg, notes)
 			}
 		}
 	}
@@ -2117,7 +2116,7 @@ loop:
 			if status == importCommonJSWithoutExports {
 				symbol := c.graph.Symbols.Get(tracker.importRef)
 				symbol.ImportItemStatus = js_ast.ImportItemMissing
-				c.log.AddRangeWarning(
+				c.log.Add(logger.Warning,
 					trackerFile.LineColumnTracker(),
 					js_lexer.RangeOfIdentifier(trackerFile.InputFile.Source, namedImport.AliasLoc),
 					fmt.Sprintf("Import %q will always be undefined because the file %q has no exports",
@@ -2156,10 +2155,10 @@ loop:
 				// time, so we emit a warning and rewrite the value to the literal
 				// "undefined" instead of emitting an error.
 				symbol.ImportItemStatus = js_ast.ImportItemMissing
-				c.log.AddRangeWarning(trackerFile.LineColumnTracker(), r, fmt.Sprintf(
+				c.log.Add(logger.Warning, trackerFile.LineColumnTracker(), r, fmt.Sprintf(
 					"Import %q will always be undefined because there is no matching export", namedImport.Alias))
 			} else {
-				c.log.AddRangeError(trackerFile.LineColumnTracker(), r, fmt.Sprintf("No matching export in %q for import %q",
+				c.log.Add(logger.Error, trackerFile.LineColumnTracker(), r, fmt.Sprintf("No matching export in %q for import %q",
 					c.graph.Files[nextTracker.sourceIndex].InputFile.Source.PrettyPath, namedImport.Alias))
 			}
 
@@ -5552,19 +5551,12 @@ func (c *linkerContext) generateSourceMapForChunk(
 // Recover from a panic by logging it as an internal error instead of crashing
 func (c *linkerContext) recoverInternalError(waitGroup *sync.WaitGroup, sourceIndex uint32) {
 	if r := recover(); r != nil {
-		stack := strings.TrimSpace(string(debug.Stack()))
-		data := logger.MsgData{
-			Text:     fmt.Sprintf("panic: %v", r),
-			Location: &logger.MsgLocation{},
-		}
+		text := fmt.Sprintf("panic: %v", r)
 		if sourceIndex != runtime.SourceIndex {
-			data.Location.File = c.graph.Files[sourceIndex].InputFile.Source.PrettyPath
+			text = fmt.Sprintf("%s (while printing %q)", text, c.graph.Files[sourceIndex].InputFile.Source.PrettyPath)
 		}
-		data.Location.LineText = fmt.Sprintf("%s\n%s", data.Location.LineText, stack)
-		c.log.AddMsg(logger.Msg{
-			Kind: logger.Error,
-			Data: data,
-		})
+		c.log.AddWithNotes(logger.Error, nil, logger.Range{}, text,
+			[]logger.MsgData{{Text: helpers.PrettyPrintedStack()}})
 		waitGroup.Done()
 	}
 }

@@ -6,6 +6,7 @@ package js_parser
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/evanw/esbuild/internal/compat"
 	"github.com/evanw/esbuild/internal/js_ast"
@@ -210,7 +211,7 @@ func (p *parser) skipTypeScriptTypeWithOpts(level js_ast.L, opts skipTypeOpts) {
 
 			// "[const: number]"
 			if opts.allowTupleLabels && p.lexer.Token == js_lexer.TColon {
-				p.log.AddRangeError(&p.tracker, r, "Unexpected \"const\"")
+				p.log.Add(logger.Error, &p.tracker, r, "Unexpected \"const\"")
 			}
 
 		case js_lexer.TThis:
@@ -395,7 +396,7 @@ func (p *parser) skipTypeScriptTypeWithOpts(level js_ast.L, opts skipTypeOpts) {
 			// "[function: number]"
 			if opts.allowTupleLabels && p.lexer.IsIdentifierOrKeyword() {
 				if p.lexer.Token != js_lexer.TFunction {
-					p.log.AddRangeError(&p.tracker, p.lexer.Range(), fmt.Sprintf("Unexpected %q", p.lexer.Raw()))
+					p.log.Add(logger.Error, &p.tracker, p.lexer.Range(), fmt.Sprintf("Unexpected %q", p.lexer.Raw()))
 				}
 				p.lexer.Next()
 				if p.lexer.Token != js_lexer.TColon {
@@ -927,8 +928,9 @@ func (p *parser) parseTypeScriptEnumStmt(loc logger.Loc, opts parseStmtOpts) js_
 
 	// Parse the body
 	for p.lexer.Token != js_lexer.TCloseBrace {
+		nameRange := p.lexer.Range()
 		value := js_ast.EnumValue{
-			Loc: p.lexer.Loc(),
+			Loc: nameRange.Loc,
 			Ref: js_ast.InvalidRef,
 		}
 
@@ -966,6 +968,29 @@ func (p *parser) parseTypeScriptEnumStmt(loc logger.Loc, opts parseStmtOpts) js_
 		}
 
 		if p.lexer.Token != js_lexer.TComma && p.lexer.Token != js_lexer.TSemicolon {
+			if p.lexer.IsIdentifierOrKeyword() || p.lexer.Token == js_lexer.TStringLiteral {
+				var errorLoc logger.Loc
+				var errorText string
+
+				if value.ValueOrNil.Data == nil {
+					errorLoc = logger.Loc{Start: nameRange.End()}
+					errorText = fmt.Sprintf("Expected \",\" after %q in enum", nameText)
+				} else {
+					var nextName string
+					if p.lexer.Token == js_lexer.TStringLiteral {
+						nextName = js_lexer.UTF16ToString(p.lexer.StringLiteral())
+					} else {
+						nextName = p.lexer.Identifier
+					}
+					errorLoc = p.lexer.Loc()
+					errorText = fmt.Sprintf("Expected \",\" before %q in enum", nextName)
+				}
+
+				data := p.tracker.MsgData(logger.Range{Loc: errorLoc}, errorText)
+				data.Location.Suggestion = ","
+				p.log.AddMsg(logger.Msg{Kind: logger.Error, Data: data})
+				panic(js_lexer.LexerPanic{})
+			}
 			break
 		}
 		p.lexer.Next()
@@ -1560,4 +1585,17 @@ func (p *parser) generateClosureForTypeScriptEnum(
 	p.emittedNamespaceVars[nameRef] = true
 
 	return stmts
+}
+
+func (p *parser) wrapInlinedEnum(value js_ast.Expr, comment string) js_ast.Expr {
+	if p.shouldFoldNumericConstants || p.options.mangleSyntax || strings.Contains(comment, "*/") {
+		// Don't wrap with a comment
+		return value
+	}
+
+	// Wrap with a comment
+	return js_ast.Expr{Loc: value.Loc, Data: &js_ast.EInlinedEnum{
+		Value:   value,
+		Comment: comment,
+	}}
 }

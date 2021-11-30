@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.1
 
 * Fix `imports` in `package.json` ([#1807](https://github.com/evanw/esbuild/issues/1807))
 
@@ -29,6 +29,84 @@
     ```
 
     This release changes the implicit sibling scope lookup behavior to only work for `enum`-to-`enum` and `namespace`-to-`namespace` interactions. These implicit references no longer work with `enum`-to-`namespace` and `namespace`-to-`enum` interactions, which should more accurately match the behavior of the TypeScript compiler.
+
+* Add semicolon insertion before TypeScript-specific definite assignment assertion modifier ([#1810](https://github.com/evanw/esbuild/issues/1810))
+
+    TypeScript lets you add a `!` after a variable declaration to bypass TypeScript's definite assignment analysis:
+
+    ```ts
+    let x!: number[];
+    initialize();
+    x.push(4);
+
+    function initialize() { x = [0, 1, 2, 3]; }
+    ```
+
+    This `!` is called a [definite assignment assertion](https://devblogs.microsoft.com/typescript/announcing-typescript-2-7/#definite-assignment-assertions) and tells TypeScript to assume that the variable has been initialized somehow. However, JavaScript's automatic semicolon insertion rules should be able to insert a semicolon before it:
+
+    ```ts
+    let a
+    !function(){}()
+    ```
+
+    Previously the above code was incorrectly considered a syntax error in TypeScript. With this release, this code is now parsed correctly.
+
+* Log output to stderr has been overhauled
+
+    This release changes the way log messages are formatted to stderr. The changes make the kind of message (e.g. error vs. warning vs. note) more obvious, and they also give more room for paragraph-style notes that can provide more detail about the message. Here's an example:
+
+    Before:
+
+    ```
+     > example.tsx:14:25: warning: Comparison with -0 using the "===" operator will also match 0
+        14 │     case 1: return x === -0
+           ╵                          ~~
+     > example.tsx:21:23: error: Could not resolve "path" (use "--platform=node" when building for node)
+        21 │   const path = require('path')
+           ╵                        ~~~~~~
+    ```
+
+    After:
+
+    ```
+    ▲ [WARNING] Comparison with -0 using the "===" operator will also match 0
+
+        example.tsx:14:25:
+          14 │     case 1: return x === -0
+             ╵                          ~~
+
+      Floating-point equality is defined such that 0 and -0 are equal, so "x === -0" returns true for
+      both 0 and -0. You need to use "Object.is(x, -0)" instead to test for -0.
+
+    ✘ [ERROR] Could not resolve "path"
+
+        example.tsx:21:23:
+          21 │   const path = require('path')
+             ╵                        ~~~~~~
+
+      The package "path" wasn't found on the file system but is built into node. Are you trying to
+      bundle for node? You can use "--platform=node" to do that, which will remove this error.
+    ```
+
+    Note that esbuild's formatted log output is for humans, not for machines. If you need to output a stable machine-readable format, you should be using the API for that. Build and transform results have arrays called `errors` and `warnings` with objects that represent the log messages.
+
+* Show inlined enum value names in comments
+
+    When esbuild inlines an enum, it will now put a comment next to it with the original enum name:
+
+    ```ts
+    // Original code
+    const enum Foo { FOO }
+    console.log(Foo.FOO)
+
+    // Old output
+    console.log(0);
+
+    // New output
+    console.log(0 /* FOO */);
+    ```
+
+    This matches the behavior of the TypeScript compiler, and should help with debugging. These comments are not generated if minification is enabled.
 
 ## 0.14.0
 
