@@ -597,7 +597,7 @@ func extractSourceMapFromComment(
 	return logger.Path{}, nil
 }
 
-func sanetizeLocation(res resolver.Resolver, loc *logger.MsgLocation) {
+func sanitizeLocation(res resolver.Resolver, loc *logger.MsgLocation) {
 	if loc != nil {
 		if loc.Namespace == "" {
 			loc.Namespace = "file"
@@ -631,12 +631,12 @@ func logPluginMessages(
 
 		// Sanitize the locations
 		for _, note := range msg.Notes {
-			sanetizeLocation(res, note.Location)
+			sanitizeLocation(res, note.Location)
 		}
 		if msg.Data.Location == nil {
 			msg.Data.Location = tracker.MsgLocationOrNil(importPathRange)
 		} else {
-			sanetizeLocation(res, msg.Data.Location)
+			sanitizeLocation(res, msg.Data.Location)
 			if msg.Data.Location.File == "" && importSource != nil {
 				msg.Data.Location.File = importSource.PrettyPath
 			}
@@ -1812,21 +1812,22 @@ func (s *scanner) processScannedFiles() []scannerFile {
 
 			// Generate the input for the template
 			_, _, originalExt := logger.PlatformIndependentPathDirBaseExt(result.file.inputFile.Source.KeyPath.Text)
-			dir, base, ext := pathRelativeToOutbase(
+			dir, base := pathRelativeToOutbase(
 				&result.file.inputFile,
 				&s.options,
 				s.fs,
-				originalExt,
 				/* avoidIndex */ false,
 				/* customFilePath */ "",
 			)
 
 			// Apply the asset path template
+			templateExt := strings.TrimPrefix(originalExt, ".")
 			relPath := config.TemplateToString(config.SubstituteTemplate(s.options.AssetPathTemplate, config.PathPlaceholders{
 				Dir:  &dir,
 				Name: &base,
 				Hash: &hash,
-			})) + ext
+				Ext:  &templateExt,
+			})) + originalExt
 
 			// Optionally add metadata about the file
 			var jsonMetadataChunk string

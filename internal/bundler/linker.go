@@ -610,12 +610,10 @@ func pathRelativeToOutbase(
 	inputFile *graph.InputFile,
 	options *config.Options,
 	fs fs.FS,
-	stdExt string,
 	avoidIndex bool,
 	customFilePath string,
-) (relDir string, baseName string, baseExt string) {
+) (relDir string, baseName string) {
 	relDir = "/"
-	baseExt = stdExt
 	absPath := inputFile.Source.KeyPath.Text
 
 	if customFilePath != "" {
@@ -2156,7 +2154,8 @@ loop:
 				// "undefined" instead of emitting an error.
 				symbol.ImportItemStatus = js_ast.ImportItemMissing
 				c.log.Add(logger.Warning, trackerFile.LineColumnTracker(), r, fmt.Sprintf(
-					"Import %q will always be undefined because there is no matching export", namedImport.Alias))
+					"Import %q will always be undefined because there is no matching export in %q",
+					namedImport.Alias, c.graph.Files[nextTracker.sourceIndex].InputFile.Source.PrettyPath))
 			} else {
 				c.log.Add(logger.Error, trackerFile.LineColumnTracker(), r, fmt.Sprintf("No matching export in %q for import %q",
 					c.graph.Files[nextTracker.sourceIndex].InputFile.Source.PrettyPath, namedImport.Alias))
@@ -3033,14 +3032,14 @@ func (c *linkerContext) computeChunks() []chunkInfo {
 				}
 			} else {
 				// Otherwise, derive the output path from the input path
-				dir, base, ext = pathRelativeToOutbase(
+				dir, base = pathRelativeToOutbase(
 					&c.graph.Files[chunk.sourceIndex].InputFile,
 					c.options,
 					c.fs,
-					stdExt,
 					!file.IsUserSpecifiedEntryPoint(),
 					c.graph.EntryPoints()[chunk.entryPointBit].OutputPath,
 				)
+				ext = stdExt
 			}
 		} else {
 			dir = "/"
@@ -3050,10 +3049,12 @@ func (c *linkerContext) computeChunks() []chunkInfo {
 		}
 
 		// Determine the output path template
+		templateExt := strings.TrimPrefix(ext, ".")
 		template = append(append(make([]config.PathTemplate, 0, len(template)+1), template...), config.PathTemplate{Data: ext})
 		chunk.finalTemplate = config.SubstituteTemplate(template, config.PathPlaceholders{
 			Dir:  &dir,
 			Name: &base,
+			Ext:  &templateExt,
 		})
 	}
 

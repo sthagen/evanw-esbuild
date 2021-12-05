@@ -1,5 +1,80 @@
 # Changelog
 
+## Unreleased
+
+* Pass the current esbuild instance to JS plugins ([#1790](https://github.com/evanw/esbuild/issues/1790))
+
+    Previously JS plugins that wanted to run esbuild had to `require('esbuild')` to get the esbuild object. However, that could potentially result in a different version of esbuild. This is also more complicated to do outside of node (such as within a browser). With this release, the current esbuild instance is now passed to JS plugins as the `esbuild` property:
+
+    ```js
+    let examplePlugin = {
+      name: 'example',
+      setup(build) {
+        console.log(build.esbuild.version)
+        console.log(build.esbuild.transformSync('1+2'))
+      },
+    }
+    ```
+
+## 0.14.2
+
+* Add `[ext]` placeholder for path templates ([#1799](https://github.com/evanw/esbuild/pull/1799))
+
+    This release adds the `[ext]` placeholder to the `--entry-names=`, `--chunk-names=`, and `--asset-names=` configuration options. The `[ext]` placeholder takes the value of the file extension without the leading `.`, and can be used to place output files with different file extensions into different folders. For example, `--asset-names=assets/[ext]/[name]-[hash]` might generate an output path of `assets/png/image-LSAMBFUD.png`.
+
+    This feature was contributed by [@LukeSheard](https://github.com/LukeSheard).
+
+* Disable star-to-clause transform for external imports ([#1801](https://github.com/evanw/esbuild/issues/1801))
+
+    When bundling is enabled, esbuild automatically transforms `import * as x from 'y'; x.z()` into `import {z} as 'y'; z()` to improve tree shaking. This avoids needing to create the import namespace object `x` if it's unnecessary, which can result in the removal of large amounts of unused code. However, this transform shouldn't be done for external imports because that incorrectly changes the semantics of the import. If the export `z` doesn't exist in the previous example, the value `x.z` is a property access that is undefined at run-time, but the value `z` is an import error that will prevent the code from running entirely. This release fixes the problem by avoiding doing this transform for external imports:
+
+    ```js
+    // Original code
+    import * as x from 'y';
+    x.z();
+
+    // Old output (with --bundle --format=esm --external:y)
+    import { z } from "y";
+    z();
+
+    // New output (with --bundle --format=esm --external:y)
+    import * as x from "y";
+    x.z();
+    ```
+
+* Disable `calc()` transform for numbers with many fractional digits ([#1821](https://github.com/evanw/esbuild/issues/1821))
+
+    Version 0.13.12 introduced simplification of `calc()` expressions in CSS when minifying. For example, `calc(100% / 4)` turns into `25%`. However, this is problematic for numbers with many fractional digits because either the number is printed with reduced precision, which is inaccurate, or the number is printed with full precision, which could be longer than the original expression. For example, turning `calc(100% / 3)` into `33.33333%` is inaccurate and turning it into `33.333333333333336%` likely isn't desired. In this release, minification of `calc()` is now disabled when any number in the result cannot be represented to full precision with at most five fractional digits.
+
+* Fix an edge case with `catch` scope handling ([#1812](https://github.com/evanw/esbuild/issues/1812))
+
+    This release fixes a subtle edge case with `catch` scope and destructuring assignment. Identifiers in computed properties and/or default values inside the destructuring binding pattern should reference the outer scope, not the inner scope. The fix was to split the destructuring pattern into its own scope, separate from the `catch` body. Here's an example of code that was affected by this edge case:
+
+    ```js
+    // Original code
+    let foo = 1
+    try {
+      throw ['a', 'b']
+    } catch ({ [foo]: y }) {
+      let foo = 2
+      assert(y === 'b')
+    }
+
+    // Old output (with --minify)
+    let foo=1;try{throw["a","b"]}catch({[o]:t}){let o=2;assert(t==="b")}
+
+    // New output (with --minify)
+    let foo=1;try{throw["a","b"]}catch({[foo]:t}){let o=2;assert(t==="b")}
+    ```
+
+* Go 1.17.2 was upgraded to Go 1.17.4
+
+    The previous release was built with Go 1.17.2, but this release is built with Go 1.17.4. This is just a routine upgrade. There are no changes significant to esbuild outside of some security-related fixes to Go's HTTP stack (but you shouldn't be running esbuild's dev server in production anyway).
+
+    One notable change related to this is that esbuild's publishing script now ensures that git's state is free of uncommitted and/or untracked files before building. Previously this wasn't the case because publishing esbuild involved changing the version number, running the publishing script, and committing at the end, which meant that files were uncommitted during the build process. I also typically had some untracked test files in the same directory during publishing (which is harmless).
+
+    This matters because there's an upcoming change in Go 1.18 where the Go compiler will include metadata about whether there are untracked files or not when doing a build: https://github.com/golang/go/issues/37475. Changing esbuild's publishing script should mean that when esbuild upgrades to Go 1.18, esbuild's binary executables will be marked as being built off of a specific commit without any modifications. This is important for reproducibility. Checking out a specific esbuild commit and building it should give a bitwise-identical binary executable to one that I published. But if this metadata indicated that there were untracked files during the published build, then the resulting executable would no longer be bitwise-identical.
+
 ## 0.14.1
 
 * Fix `imports` in `package.json` ([#1807](https://github.com/evanw/esbuild/issues/1807))

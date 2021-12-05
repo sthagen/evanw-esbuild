@@ -1461,6 +1461,18 @@ func (p *parser) canMergeSymbols(scope *js_ast.Scope, existing js_ast.SymbolKind
 	return mergeForbidden
 }
 
+func (p *parser) addSymbolAlreadyDeclaredError(name string, newLoc logger.Loc, oldLoc logger.Loc) {
+	p.log.AddWithNotes(logger.Error, &p.tracker,
+		js_lexer.RangeOfIdentifier(p.source, newLoc),
+		fmt.Sprintf("The symbol %q has already been declared", name),
+
+		[]logger.MsgData{p.tracker.MsgData(
+			js_lexer.RangeOfIdentifier(p.source, oldLoc),
+			fmt.Sprintf("The symbol %q was originally declared here:", name),
+		)},
+	)
+}
+
 func (p *parser) declareSymbol(kind js_ast.SymbolKind, loc logger.Loc, name string) js_ast.Ref {
 	p.checkForUnrepresentableIdentifier(loc, name)
 
@@ -1473,10 +1485,7 @@ func (p *parser) declareSymbol(kind js_ast.SymbolKind, loc logger.Loc, name stri
 
 		switch p.canMergeSymbols(p.currentScope, symbol.Kind, kind) {
 		case mergeForbidden:
-			r := js_lexer.RangeOfIdentifier(p.source, loc)
-			p.log.AddWithNotes(logger.Error, &p.tracker, r, fmt.Sprintf("The symbol %q has already been declared", name),
-				[]logger.MsgData{p.tracker.MsgData(js_lexer.RangeOfIdentifier(p.source, existing.Loc),
-					fmt.Sprintf("The symbol %q was originally declared here:", name))})
+			p.addSymbolAlreadyDeclaredError(name, loc, existing.Loc)
 			return existing.Ref
 
 		case mergeKeepExisting:
@@ -1500,6 +1509,7 @@ func (p *parser) declareSymbol(kind js_ast.SymbolKind, loc logger.Loc, name stri
 	// Overwrite this name in the declaring scope
 	p.currentScope.Members[name] = js_ast.ScopeMember{Ref: ref, Loc: loc}
 	return ref
+
 }
 
 func (p *parser) hoistSymbols(scope *js_ast.Scope) {
@@ -1507,6 +1517,25 @@ func (p *parser) hoistSymbols(scope *js_ast.Scope) {
 	nextMember:
 		for _, member := range scope.Members {
 			symbol := &p.symbols[member.Ref.InnerIndex]
+
+			// Handle non-hoisted collisions between catch bindings and the catch body.
+			// This implements "B.3.4 VariableStatements in Catch Blocks" from Annex B
+			// of the ECMAScript standard version 6+ (except for the hoisted case, which
+			// is handled later on below):
+			//
+			// * It is a Syntax Error if any element of the BoundNames of CatchParameter
+			//   also occurs in the LexicallyDeclaredNames of Block.
+			//
+			// * It is a Syntax Error if any element of the BoundNames of CatchParameter
+			//   also occurs in the VarDeclaredNames of Block unless CatchParameter is
+			//   CatchParameter : BindingIdentifier .
+			//
+			if scope.Parent.Kind == js_ast.ScopeCatchBinding && symbol.Kind != js_ast.SymbolHoisted {
+				if existingMember, ok := scope.Parent.Members[symbol.OriginalName]; ok {
+					p.addSymbolAlreadyDeclaredError(symbol.OriginalName, member.Loc, existingMember.Loc)
+					continue
+				}
+			}
 
 			if !symbol.Kind.IsHoisted() {
 				continue
@@ -1587,16 +1616,13 @@ func (p *parser) hoistSymbols(scope *js_ast.Scope) {
 						continue nextMember
 					}
 
-					// Otherwise if this isn't a catch identifier, it's a collision
-					if existingSymbol.Kind != js_ast.SymbolCatchIdentifier {
+					// Otherwise if this isn't a catch identifier or "arguments", it's a collision
+					if existingSymbol.Kind != js_ast.SymbolCatchIdentifier && existingSymbol.Kind != js_ast.SymbolArguments {
 						// An identifier binding from a catch statement and a function
 						// declaration can both silently shadow another hoisted symbol
 						if symbol.Kind != js_ast.SymbolCatchIdentifier && symbol.Kind != js_ast.SymbolHoistedFunction {
 							if !isSloppyModeBlockLevelFnStmt {
-								r := js_lexer.RangeOfIdentifier(p.source, member.Loc)
-								p.log.AddWithNotes(logger.Error, &p.tracker, r, fmt.Sprintf("The symbol %q has already been declared", symbol.OriginalName),
-									[]logger.MsgData{p.tracker.MsgData(js_lexer.RangeOfIdentifier(p.source, existingMember.Loc),
-										fmt.Sprintf("The symbol %q was originally declared here:", symbol.OriginalName))})
+								p.addSymbolAlreadyDeclaredError(symbol.OriginalName, member.Loc, existingMember.Loc)
 							} else if s == scope.Parent {
 								// Never mind about this, turns out it's not needed after all
 								delete(p.hoistedRefForSloppyModeBlockFn, originalMemberRef)
@@ -5774,15 +5800,16 @@ const (
 )
 
 type parseStmtOpts struct {
-	tsDecorators        *deferredTSDecorators
-	lexicalDecl         lexicalDecl
-	isModuleScope       bool
-	isNamespaceScope    bool
-	isExport            bool
-	isNameOptional      bool // For "export default" pseudo-statements
-	isTypeScriptDeclare bool
-	isForLoopInit       bool
-	isForAwaitLoopInit  bool
+	tsDecorators           *deferredTSDecorators
+	lexicalDecl            lexicalDecl
+	isModuleScope          bool
+	isNamespaceScope       bool
+	isExport               bool
+	isNameOptional         bool // For "export default" pseudo-statements
+	isTypeScriptDeclare    bool
+	isForLoopInit          bool
+	isForAwaitLoopInit     bool
+	allowDirectivePrologue bool
 }
 
 func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
@@ -6300,7 +6327,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 
 		if p.lexer.Token == js_lexer.TCatch {
 			catchLoc := p.lexer.Loc()
-			p.pushScopeForParsePass(js_ast.ScopeBlock, catchLoc)
+			p.pushScopeForParsePass(js_ast.ScopeCatchBinding, catchLoc)
 			p.lexer.Next()
 			var bindingOrNil js_ast.Binding
 
@@ -6332,10 +6359,15 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 				p.declareBinding(kind, bindingOrNil, parseStmtOpts{})
 			}
 
+			bodyLoc := p.lexer.Loc()
 			p.lexer.Expect(js_lexer.TOpenBrace)
+
+			p.pushScopeForParsePass(js_ast.ScopeBlock, bodyLoc)
 			stmts := p.parseStmtsUpTo(js_lexer.TCloseBrace, parseStmtOpts{})
+			p.popScope()
+
 			p.lexer.Next()
-			catch = &js_ast.Catch{Loc: catchLoc, BindingOrNil: bindingOrNil, Body: stmts}
+			catch = &js_ast.Catch{Loc: catchLoc, BindingOrNil: bindingOrNil, BodyLoc: bodyLoc, Body: stmts}
 			p.popScope()
 		}
 
@@ -6927,7 +6959,9 @@ func (p *parser) parseFnBody(data fnOrArrowDataParse) js_ast.FnBody {
 	defer p.popScope()
 
 	p.lexer.Expect(js_lexer.TOpenBrace)
-	stmts := p.parseStmtsUpTo(js_lexer.TCloseBrace, parseStmtOpts{})
+	stmts := p.parseStmtsUpTo(js_lexer.TCloseBrace, parseStmtOpts{
+		allowDirectivePrologue: true,
+	})
 	p.lexer.Next()
 
 	p.allowIn = oldAllowIn
@@ -6944,7 +6978,7 @@ func (p *parser) parseStmtsUpTo(end js_lexer.T, opts parseStmtOpts) []js_ast.Stm
 	stmts := []js_ast.Stmt{}
 	returnWithoutSemicolonStart := int32(-1)
 	opts.lexicalDecl = lexicalDeclAllowAll
-	isDirectivePrologue := true
+	isDirectivePrologue := opts.allowDirectivePrologue
 
 	for {
 		// Preserve some statement-level comments
@@ -6986,6 +7020,21 @@ func (p *parser) parseStmtsUpTo(end js_lexer.T, opts parseStmtOpts) []js_ast.Stm
 						// Track "use strict" directives
 						p.currentScope.StrictMode = js_ast.ExplicitStrictMode
 						p.currentScope.UseStrictLoc = expr.Value.Loc
+
+						// Inside a function, strict mode actually propagates from the child
+						// scope to the parent scope:
+						//
+						//   // This is a syntax error
+						//   function fn(arguments) {
+						//     "use strict";
+						//   }
+						//
+						if p.currentScope.Kind == js_ast.ScopeFunctionBody &&
+							p.currentScope.Parent.Kind == js_ast.ScopeFunctionArgs &&
+							p.currentScope.Parent.StrictMode == js_ast.SloppyMode {
+							p.currentScope.Parent.StrictMode = js_ast.ExplicitStrictMode
+							p.currentScope.Parent.UseStrictLoc = expr.Value.Loc
+						}
 					} else if js_lexer.UTF16EqualsString(str.Value, "use asm") {
 						// Deliberately remove "use asm" directives. The asm.js subset of
 						// JavaScript has complicated validation rules that are triggered
@@ -9010,6 +9059,13 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		}
 
 	case *js_ast.SLabel:
+		// Forbid functions inside labels in strict mode
+		if p.isStrictMode() {
+			if _, ok := s.Stmt.Data.(*js_ast.SFunction); ok {
+				p.markStrictModeFeature(labelFunctionStmt, js_lexer.RangeOfIdentifier(p.source, s.Stmt.Loc), "")
+			}
+		}
+
 		p.pushScopeForVisitPass(js_ast.ScopeLabel, stmt.Loc)
 		name := p.loadNameFromRef(s.Name.Ref)
 		if js_lexer.StrictModeReservedWords[name] {
@@ -9359,11 +9415,15 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		p.popScope()
 
 		if s.Catch != nil {
-			p.pushScopeForVisitPass(js_ast.ScopeBlock, s.Catch.Loc)
+			p.pushScopeForVisitPass(js_ast.ScopeCatchBinding, s.Catch.Loc)
 			if s.Catch.BindingOrNil.Data != nil {
 				p.visitBinding(s.Catch.BindingOrNil, bindingOpts{})
 			}
+
+			p.pushScopeForVisitPass(js_ast.ScopeBlock, s.Catch.BodyLoc)
 			s.Catch.Body = p.visitStmts(s.Catch.Body, stmtsNormal)
+			p.popScope()
+
 			p.lowerObjectRestInCatchBinding(s.Catch)
 			p.popScope()
 		}
@@ -9978,6 +10038,10 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 			}
 
 			p.pushScopeForVisitPass(js_ast.ScopeClassStaticInit, property.ClassStaticBlock.Loc)
+
+			// Make it an error to use "arguments" in a static class block
+			p.currentScope.ForbidArguments = true
+
 			property.ClassStaticBlock.Stmts = p.visitStmts(property.ClassStaticBlock.Stmts, stmtsFnBody)
 			p.popScope()
 
@@ -13538,36 +13602,6 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 
 			if p.options.mode != config.ModePassThrough {
 				if s.StarNameLoc != nil {
-					// If we're bundling a star import and the namespace is only ever
-					// used for property accesses, then convert each unique property to
-					// a clause item in the import statement and remove the star import.
-					// That will cause the bundler to bundle them more efficiently when
-					// both this module and the imported module are in the same group.
-					//
-					// Before:
-					//
-					//   import * as ns from 'foo'
-					//   console.log(ns.a, ns.b)
-					//
-					// After:
-					//
-					//   import {a, b} from 'foo'
-					//   console.log(a, b)
-					//
-					// This is not done if the namespace itself is used, because in that
-					// case the code for the namespace will have to be generated. This is
-					// determined by the symbol count because the parser only counts the
-					// star import as used if it was used for something other than a
-					// property access:
-					//
-					//   import * as ns from 'foo'
-					//   console.log(ns, ns.a, ns.b)
-					//
-					convertStarToClause := p.symbols[s.NamespaceRef.InnerIndex].UseCountEstimate == 0
-					if convertStarToClause && !keepUnusedImports {
-						s.StarNameLoc = nil
-					}
-
 					// "importItemsForNamespace" has property accesses off the namespace
 					if importItems, ok := p.importItemsForNamespace[s.NamespaceRef]; ok && len(importItems) > 0 {
 						// Sort keys for determinism
@@ -13577,52 +13611,32 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 						}
 						sort.Strings(sorted)
 
-						if convertStarToClause {
-							// Create an import clause for these items. Named imports will be
-							// automatically created later on since there is now a clause.
-							items := make([]js_ast.ClauseItem, 0, len(importItems))
-							for _, alias := range sorted {
-								name := importItems[alias]
-								originalName := p.symbols[name.Ref.InnerIndex].OriginalName
-								items = append(items, js_ast.ClauseItem{
-									Alias:        alias,
-									AliasLoc:     name.Loc,
-									Name:         name,
-									OriginalName: originalName,
-								})
-								p.declaredSymbols = append(p.declaredSymbols, js_ast.DeclaredSymbol{
-									Ref:        name.Ref,
-									IsTopLevel: true,
-								})
+						// Create named imports for these property accesses. This will
+						// cause missing imports to generate useful warnings.
+						//
+						// It will also improve bundling efficiency for internal imports
+						// by still converting property accesses off the namespace into
+						// bare identifiers even if the namespace is still needed.
+						for _, alias := range sorted {
+							name := importItems[alias]
+							p.namedImports[name.Ref] = js_ast.NamedImport{
+								Alias:             alias,
+								AliasLoc:          name.Loc,
+								NamespaceRef:      s.NamespaceRef,
+								ImportRecordIndex: s.ImportRecordIndex,
 							}
-							if s.Items != nil {
-								// The syntax "import {x}, * as y from 'path'" isn't valid
-								panic("Internal error")
-							}
-							s.Items = &items
-						} else {
-							// If we aren't converting this star import to a clause, still
-							// create named imports for these property accesses. This will
-							// cause missing imports to generate useful warnings.
-							//
-							// It will also improve bundling efficiency for internal imports
-							// by still converting property accesses off the namespace into
-							// bare identifiers even if the namespace is still needed.
-							for _, alias := range sorted {
-								name := importItems[alias]
-								p.namedImports[name.Ref] = js_ast.NamedImport{
-									Alias:             alias,
-									AliasLoc:          name.Loc,
-									NamespaceRef:      s.NamespaceRef,
-									ImportRecordIndex: s.ImportRecordIndex,
-								}
 
-								// Make sure the printer prints this as a property access
-								p.symbols[name.Ref.InnerIndex].NamespaceAlias = &js_ast.NamespaceAlias{
-									NamespaceRef: s.NamespaceRef,
-									Alias:        alias,
-								}
+							// Make sure the printer prints this as a property access
+							p.symbols[name.Ref.InnerIndex].NamespaceAlias = &js_ast.NamespaceAlias{
+								NamespaceRef: s.NamespaceRef,
+								Alias:        alias,
 							}
+
+							// Also record these automatically-generated top-level namespace alias symbols
+							p.declaredSymbols = append(p.declaredSymbols, js_ast.DeclaredSymbol{
+								Ref:        name.Ref,
+								IsTopLevel: true,
+							})
 						}
 					}
 				}
@@ -14482,7 +14496,10 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	p.fnOrArrowDataParse.isTopLevel = true
 
 	// Parse the file in the first pass, but do not bind symbols
-	stmts := p.parseStmtsUpTo(js_lexer.TEndOfFile, parseStmtOpts{isModuleScope: true})
+	stmts := p.parseStmtsUpTo(js_lexer.TEndOfFile, parseStmtOpts{
+		isModuleScope:          true,
+		allowDirectivePrologue: true,
+	})
 	p.prepareForVisitPass()
 
 	// Strip off a leading "use strict" directive when not bundling

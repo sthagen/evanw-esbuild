@@ -1210,6 +1210,8 @@
       'in.js': `
         import a from './a'
         if (a !== 'runner1.js') throw 'fail'
+        import b from './b'
+        if (b !== 'runner2.js') throw 'fail'
       `,
       'a.js': `
         import { run } from './runner1'
@@ -1218,10 +1220,6 @@
       'runner1.js': `
         let data = eval('"runner1" + ".js"')
         export function run() { return data }
-
-        // Do this here instead of in "in.js" so that log order is deterministic
-        import b from './b'
-        if (b !== 'runner2.js') throw 'fail'
       `,
       'b.js': `
         import { run } from './runner2'
@@ -1232,7 +1230,9 @@
         export function run() { return data }
       `,
     }, {
-      expectedStderr: `▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
+      // There are two possible output orders due to log output order non-determinism
+      expectedStderr: [
+        `▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
 
     runner1.js:2:19:
       2 │         let data = eval('"runner1" + ".js"')
@@ -1248,7 +1248,24 @@
 
   You can read more about direct eval and bundling here: https://esbuild.github.io/link/direct-eval
 
+`, `▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
+
+    runner2.js:2:19:
+      2 │         let data = eval('"runner2" + ".js"')
+        ╵                    ~~~~
+
+  You can read more about direct eval and bundling here: https://esbuild.github.io/link/direct-eval
+
+▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
+
+    runner1.js:2:19:
+      2 │         let data = eval('"runner1" + ".js"')
+        ╵                    ~~~~
+
+  You can read more about direct eval and bundling here: https://esbuild.github.io/link/direct-eval
+
 `,
+      ],
     }),
     test(['--bundle', '--format=esm', '--splitting', 'in.js', 'in2.js', '--outdir=out'], {
       'in.js': `
@@ -1281,7 +1298,25 @@
         if (ab[0] !== 'runner1.js' || ab[1] !== 'runner2.js') throw 'fail'
       `,
     }, {
-      expectedStderr: `▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
+      // There are two possible output orders due to log output order non-determinism
+      expectedStderr: [
+        `▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
+
+    runner1.js:2:19:
+      2 │         let data = eval('"runner1" + ".js"')
+        ╵                    ~~~~
+
+  You can read more about direct eval and bundling here: https://esbuild.github.io/link/direct-eval
+
+▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
+
+    runner2.js:2:19:
+      2 │         let data = eval('"runner2" + ".js"')
+        ╵                    ~~~~
+
+  You can read more about direct eval and bundling here: https://esbuild.github.io/link/direct-eval
+
+`, `▲ [WARNING] Using direct eval with a bundler is not recommended and may cause problems
 
     runner2.js:2:19:
       2 │         let data = eval('"runner2" + ".js"')
@@ -1298,6 +1333,7 @@
   You can read more about direct eval and bundling here: https://esbuild.github.io/link/direct-eval
 
 `,
+      ],
     }),
   )
 
@@ -1480,7 +1516,7 @@
       `,
       'node_modules/pkg/index.mjs': ``,
     }, {
-      expectedStderr: `▲ [WARNING] Import "default" will always be undefined because there is no matching export
+      expectedStderr: `▲ [WARNING] Import "default" will always be undefined because there is no matching export in "node_modules/pkg/index.mjs"
 
     in.js:3:15:
       3 │         if (ns.default !== void 0) throw 'fail'
@@ -1495,7 +1531,7 @@
       `,
       'node_modules/pkg/index.mts': ``,
     }, {
-      expectedStderr: `▲ [WARNING] Import "default" will always be undefined because there is no matching export
+      expectedStderr: `▲ [WARNING] Import "default" will always be undefined because there is no matching export in "node_modules/pkg/index.mts"
 
     in.js:3:15:
       3 │         if (ns.default !== void 0) throw 'fail'
@@ -1523,13 +1559,27 @@
       }`,
       'node_modules/pkg/index.js': ``,
     }, {
-      expectedStderr: `▲ [WARNING] Import "default" will always be undefined because there is no matching export
+      expectedStderr: `▲ [WARNING] Import "default" will always be undefined because there is no matching export in "node_modules/pkg/index.js"
 
     in.js:3:15:
       3 │         if (ns.default !== void 0) throw 'fail'
         ╵                ~~~~~~~
 
 `,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle', '--external:pkg'], {
+      'in.js': `
+        import * as ns from 'pkg'
+        if (ns.default === void 0) throw 'fail'
+      `,
+      'node_modules/pkg/index.js': ``,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle', '--external:pkg'], {
+      'in.js': `
+        import * as ns from 'pkg'
+        if (ns.foo !== void 0) throw 'fail'
+      `,
+      'node_modules/pkg/index.js': ``,
     }),
   )
 
@@ -2236,6 +2286,41 @@
         }
         try { x; y.push('fail') } catch (e) {}
         if (y + '' !== '1') throw 'fail: ' + y
+      `,
+    }),
+
+    // https://github.com/evanw/esbuild/issues/1812
+    test(['in.js', '--outfile=node.js'], {
+      'in.js': `
+        let a = 1;
+        let def = "PASS2";
+        try {
+          throw [ "FAIL2", "PASS1" ];
+        } catch ({ [a]: b, 3: d = def }) {
+          let a = 0, def = "FAIL3";
+          if (b !== 'PASS1' || d !== 'PASS2') throw 'fail: ' + b + ' ' + d
+        }
+      `,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'], {
+      'in.js': `
+        let a = 1;
+        let def = "PASS2";
+        try {
+          throw [ "FAIL2", "PASS1" ];
+        } catch ({ [a]: b, 3: d = def }) {
+          let a = 0, def = "FAIL3";
+          if (b !== 'PASS1' || d !== 'PASS2') throw 'fail: ' + b + ' ' + d
+        }
+      `,
+    }),
+    test(['in.js', '--outfile=node.js'], {
+      'in.js': `
+        try {
+          throw { x: 'z', z: 123 }
+        } catch ({ x, [x]: y }) {
+          if (y !== 123) throw 'fail'
+        }
       `,
     }),
   )
@@ -5817,7 +5902,13 @@
           } else {
             stderr = (await execFileAsync(esbuildPath, modifiedArgs, { cwd: thisTestDir, stdio: 'pipe' })).stderr
           }
-          assert.strictEqual(stderr, expectedStderr);
+          if (Array.isArray(expectedStderr)) {
+            // An array of possible outputs (due to log output order non-determinism)
+            if (!expectedStderr.includes(stderr))
+              assert.strictEqual(stderr, expectedStderr[0]);
+          } else {
+            assert.strictEqual(stderr, expectedStderr);
+          }
 
           // Run the resulting node.js file and make sure it exits cleanly. The
           // use of "pathToFileURL" is a workaround for a problem where node
@@ -5854,7 +5945,13 @@
         catch (e) {
           if (e && e.stderr !== void 0) {
             try {
-              assert.strictEqual(e.stderr, expectedStderr);
+              if (Array.isArray(expectedStderr)) {
+                // An array of possible outputs (due to log output order non-determinism)
+                if (!expectedStderr.includes(e.stderr))
+                  assert.strictEqual(e.stderr, expectedStderr[0]);
+              } else {
+                assert.strictEqual(e.stderr, expectedStderr);
+              }
 
               // Clean up test output
               removeRecursiveSync(thisTestDir)

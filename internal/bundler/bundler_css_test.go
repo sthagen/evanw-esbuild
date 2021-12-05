@@ -160,7 +160,7 @@ func TestCSSFromJSMissingStarImport(t *testing.T) {
 			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",
 		},
-		expectedCompileLog: `entry.js: WARNING: Import "missing" will always be undefined because there is no matching export
+		expectedCompileLog: `entry.js: WARNING: Import "missing" will always be undefined because there is no matching export in "a.css"
 `,
 	})
 }
@@ -635,6 +635,54 @@ func TestCSSAndJavaScriptCodeSplittingIssue1064(t *testing.T) {
 			OutputFormat:  config.FormatESModule,
 			CodeSplitting: true,
 			AbsOutputDir:  "/out",
+		},
+	})
+}
+
+func TestCSSExternalQueryAndHashNoMatchIssue1822(t *testing.T) {
+	css_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.css": `
+				a { background: url(foo/bar.png?baz) }
+				b { background: url(foo/bar.png#baz) }
+			`,
+		},
+		entryPaths: []string{"/entry.css"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.css",
+			ExternalModules: config.ExternalModules{
+				Patterns: []config.WildcardPattern{
+					{Suffix: ".png"},
+				},
+			},
+		},
+		expectedScanLog: `entry.css: ERROR: Could not resolve "foo/bar.png?baz"
+NOTE: You can mark the path "foo/bar.png?baz" as external to exclude it from the bundle, which will remove this error.
+entry.css: ERROR: Could not resolve "foo/bar.png#baz"
+NOTE: You can mark the path "foo/bar.png#baz" as external to exclude it from the bundle, which will remove this error.
+`,
+	})
+}
+
+func TestCSSExternalQueryAndHashMatchIssue1822(t *testing.T) {
+	css_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.css": `
+				a { background: url(foo/bar.png?baz) }
+				b { background: url(foo/bar.png#baz) }
+			`,
+		},
+		entryPaths: []string{"/entry.css"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.css",
+			ExternalModules: config.ExternalModules{
+				Patterns: []config.WildcardPattern{
+					{Suffix: ".png?baz"},
+					{Suffix: ".png#baz"},
+				},
+			},
 		},
 	})
 }

@@ -1042,6 +1042,7 @@ func msgString(includeSource bool, terminalInfo TerminalInfo, kind MsgKind, data
 	if data.Location != nil {
 		maxMargin := len(fmt.Sprintf("%d", data.Location.Line))
 		d := detailStruct(data, terminalInfo, maxMargin)
+
 		if d.Suggestion != "" {
 			location = fmt.Sprintf("\n    %s:%d:%d:\n%s%s%s%s%s%s\n%s%s%s%s%s\n%s%s%s%s%s\n%s",
 				d.Path, d.Line, d.Column,
@@ -1113,9 +1114,14 @@ func msgString(includeSource bool, terminalInfo TerminalInfo, kind MsgKind, data
 		return sb.String()
 	}
 
-	return fmt.Sprintf("%s%s %s[%s%s%s]%s %s%s%s\n%s",
+	if pluginName != "" {
+		pluginName = fmt.Sprintf("%s%s[plugin %s]%s ", colors.Bold, colors.Magenta, pluginName, colors.Reset)
+	}
+
+	return fmt.Sprintf("%s%s %s[%s%s%s]%s %s%s%s%s\n%s",
 		iconColor, kind.Icon(),
 		kindColorBrackets, kindColorText, kind.String(), kindColorBrackets, colors.Reset,
+		pluginName,
 		colors.Bold, data.Text, colors.Reset,
 		location,
 	)
@@ -1417,6 +1423,9 @@ func detailStruct(data MsgData, terminalInfo TerminalInfo, maxMargin int) MsgDet
 	}
 	firstLine := loc.LineText[:endOfFirstLine]
 	afterFirstLine := loc.LineText[endOfFirstLine:]
+	if afterFirstLine != "" && !strings.HasSuffix(afterFirstLine, "\n") {
+		afterFirstLine += "\n"
+	}
 
 	// Clamp values in range
 	if loc.Line < 0 {

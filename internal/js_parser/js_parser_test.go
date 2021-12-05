@@ -336,10 +336,15 @@ func TestStrictMode(t *testing.T) {
 		"<stdin>: ERROR: Function declarations inside if statements cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "'use strict'; if (0) ; else function f() {}",
 		"<stdin>: ERROR: Function declarations inside if statements cannot be used in strict mode\n"+useStrict)
+	expectParseError(t, "'use strict'; x: function f() {}",
+		"<stdin>: ERROR: Function declarations inside labels cannot be used in strict mode\n"+useStrict)
+
 	expectParseError(t, "if (0) function f() {} export {}",
 		"<stdin>: ERROR: Function declarations inside if statements cannot be used in strict mode\n"+why)
 	expectParseError(t, "if (0) ; else function f() {} export {}",
 		"<stdin>: ERROR: Function declarations inside if statements cannot be used in strict mode\n"+why)
+	expectParseError(t, "x: function f() {} export {}",
+		"<stdin>: ERROR: Function declarations inside labels cannot be used in strict mode\n"+why)
 
 	expectPrinted(t, "eval++", "eval++;\n")
 	expectPrinted(t, "eval = 0", "eval = 0;\n")
@@ -358,26 +363,26 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "'use strict'; arguments += 0", "<stdin>: ERROR: Invalid assignment target\n")
 	expectParseError(t, "'use strict'; [arguments] = 0", "<stdin>: ERROR: Invalid assignment target\n")
 
+	evalDecl := "<stdin>: ERROR: Declarations with the name \"eval\" cannot be used in strict mode\n" + useStrict
+	argsDecl := "<stdin>: ERROR: Declarations with the name \"arguments\" cannot be used in strict mode\n" + useStrict
 	expectPrinted(t, "function eval() {}", "function eval() {\n}\n")
-	expectPrinted(t, "function f(eval) {}", "function f(eval) {\n}\n")
 	expectPrinted(t, "function arguments() {}", "function arguments() {\n}\n")
+	expectPrinted(t, "function f(eval) {}", "function f(eval) {\n}\n")
 	expectPrinted(t, "function f(arguments) {}", "function f(arguments) {\n}\n")
-	expectParseError(t, "'use strict'; function eval() {}",
-		"<stdin>: ERROR: Declarations with the name \"eval\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "'use strict'; function f(eval) {}",
-		"<stdin>: ERROR: Declarations with the name \"eval\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "'use strict'; function arguments() {}",
-		"<stdin>: ERROR: Declarations with the name \"arguments\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "'use strict'; function f(arguments) {}",
-		"<stdin>: ERROR: Declarations with the name \"arguments\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "function eval() { 'use strict' }",
-		"<stdin>: ERROR: Declarations with the name \"eval\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "function arguments() { 'use strict' }",
-		"<stdin>: ERROR: Declarations with the name \"arguments\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "'use strict'; class eval {}",
-		"<stdin>: ERROR: Declarations with the name \"eval\" cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "'use strict'; class arguments {}",
-		"<stdin>: ERROR: Declarations with the name \"arguments\" cannot be used in strict mode\n"+useStrict)
+	expectPrinted(t, "({ f(eval) {} })", "({ f(eval) {\n} });\n")
+	expectPrinted(t, "({ f(arguments) {} })", "({ f(arguments) {\n} });\n")
+	expectParseError(t, "'use strict'; function eval() {}", evalDecl)
+	expectParseError(t, "'use strict'; function arguments() {}", argsDecl)
+	expectParseError(t, "'use strict'; function f(eval) {}", evalDecl)
+	expectParseError(t, "'use strict'; function f(arguments) {}", argsDecl)
+	expectParseError(t, "function eval() { 'use strict' }", evalDecl)
+	expectParseError(t, "function arguments() { 'use strict' }", argsDecl)
+	expectParseError(t, "function f(eval) { 'use strict' }", evalDecl)
+	expectParseError(t, "function f(arguments) { 'use strict' }", argsDecl)
+	expectParseError(t, "({ f(eval) { 'use strict' } })", evalDecl)
+	expectParseError(t, "({ f(arguments) { 'use strict' } })", argsDecl)
+	expectParseError(t, "'use strict'; class eval {}", evalDecl)
+	expectParseError(t, "'use strict'; class arguments {}", argsDecl)
 
 	expectPrinted(t, "let protected", "let protected;\n")
 	expectPrinted(t, "let protecte\\u0064", "let protected;\n")
@@ -427,6 +432,12 @@ func TestStrictMode(t *testing.T) {
 	expectPrinted(t, "class f {} with (x) y", "class f {\n}\nwith (x)\n  y;\n")
 	expectPrinted(t, "with (x) y; class f {}", "with (x)\n  y;\nclass f {\n}\n")
 	expectPrinted(t, "`use strict`; with (x) y", "`use strict`;\nwith (x)\n  y;\n")
+	expectPrinted(t, "{ 'use strict'; with (x) y }", "{\n  \"use strict\";\n  with (x)\n    y;\n}\n")
+	expectPrinted(t, "if (0) { 'use strict'; with (x) y }", "if (0) {\n  \"use strict\";\n  with (x)\n    y;\n}\n")
+	expectPrinted(t, "while (0) { 'use strict'; with (x) y }", "while (0) {\n  \"use strict\";\n  with (x)\n    y;\n}\n")
+	expectPrinted(t, "try { 'use strict'; with (x) y } catch {}", "try {\n  \"use strict\";\n  with (x)\n    y;\n} catch {\n}\n")
+	expectPrinted(t, "try {} catch { 'use strict'; with (x) y }", "try {\n} catch {\n  \"use strict\";\n  with (x)\n    y;\n}\n")
+	expectPrinted(t, "try {} finally { 'use strict'; with (x) y }", "try {\n} finally {\n  \"use strict\";\n  with (x)\n    y;\n}\n")
 	expectParseError(t, "\"use strict\"; with (x) y", "<stdin>: ERROR: With statements cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "function f() { 'use strict'; with (x) y }", "<stdin>: ERROR: With statements cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "function f() { 'use strict'; function y() { with (x) y } }", "<stdin>: ERROR: With statements cannot be used in strict mode\n"+useStrict)
@@ -1292,10 +1303,13 @@ func TestLexicalDecl(t *testing.T) {
 	expectParseError(t, "while (1) function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "do function f() {} while (0)", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 
+	fnLabelAwait := "<stdin>: ERROR: Function declarations inside labels cannot be used in strict mode\n" +
+		"<stdin>: NOTE: This file is implicitly in strict mode because of the \"await\" keyword here:\n"
+
 	expectParseError(t, "for (;;) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "for (x in y) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "for (x of y) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
-	expectParseError(t, "for await (x of y) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
+	expectParseError(t, "for await (x of y) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n"+fnLabelAwait)
 	expectParseError(t, "with (1) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "while (1) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "do label: function f() {} while (0)", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
@@ -1303,7 +1317,7 @@ func TestLexicalDecl(t *testing.T) {
 	expectParseError(t, "for (;;) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "for (x in y) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "for (x of y) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
-	expectParseError(t, "for await (x of y) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
+	expectParseError(t, "for await (x of y) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n"+fnLabelAwait)
 	expectParseError(t, "with (1) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "while (1) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "do label: label2: function f() {} while (0)", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
@@ -1320,6 +1334,9 @@ func TestFunction(t *testing.T) {
 	expectPrinted(t, "(function arguments() {})", "(function arguments() {\n});\n")
 	expectPrinted(t, "function foo(arguments) {}", "function foo(arguments) {\n}\n")
 	expectPrinted(t, "(function foo(arguments) {})", "(function foo(arguments) {\n});\n")
+
+	expectPrinted(t, "(function foo() { var arguments })", "(function foo() {\n  var arguments;\n});\n")
+	expectPrinted(t, "(function foo() { { var arguments } })", "(function foo() {\n  {\n    var arguments;\n  }\n});\n")
 
 	expectPrintedMangle(t, "function foo() { return undefined }", "function foo() {\n}\n")
 	expectPrintedMangle(t, "function* foo() { return undefined }", "function* foo() {\n}\n")
@@ -1394,6 +1411,8 @@ func TestClass(t *testing.T) {
 	expectParseError(t, "class Foo { x = 1 ? 2 : arguments }", "<stdin>: ERROR: Cannot access \"arguments\" here:\n")
 	expectParseError(t, "class Foo { x = class { [arguments] } }", "<stdin>: ERROR: Cannot access \"arguments\" here:\n")
 	expectParseError(t, "class Foo { x = class { [arguments] = 1 } }", "<stdin>: ERROR: Cannot access \"arguments\" here:\n")
+	expectParseError(t, "class Foo { static { arguments } }", "<stdin>: ERROR: Cannot access \"arguments\" here:\n")
+	expectParseError(t, "class Foo { static { class Bar { [arguments] } } }", "<stdin>: ERROR: Cannot access \"arguments\" here:\n")
 
 	// The name "constructor" is sometimes forbidden
 	expectPrinted(t, "class Foo { get ['constructor']() {} }", "class Foo {\n  get [\"constructor\"]() {\n  }\n}\n")
@@ -2618,14 +2637,16 @@ func TestCatch(t *testing.T) {
 	expectPrinted(t, "try {} catch (e) { { function e() {} } }", "try {\n} catch (e) {\n  {\n    let e = function() {\n    };\n    var e = e;\n  }\n}\n")
 	expectPrinted(t, "try {} catch (e) { if (1) function e() {} }", "try {\n} catch (e) {\n  if (1) {\n    let e = function() {\n    };\n    var e = e;\n  }\n}\n")
 	expectPrinted(t, "try {} catch (e) { if (0) ; else function e() {} }", "try {\n} catch (e) {\n  if (0)\n    ;\n  else {\n    let e = function() {\n    };\n    var e = e;\n  }\n}\n")
+	expectPrinted(t, "try {} catch ({ e }) { { function e() {} } }", "try {\n} catch ({ e }) {\n  {\n    let e = function() {\n    };\n    var e = e;\n  }\n}\n")
 
 	errorText := `<stdin>: ERROR: The symbol "e" has already been declared
 <stdin>: NOTE: The symbol "e" was originally declared here:
 `
 
 	expectParseError(t, "try {} catch (e) { function e() {} }", errorText)
-	expectParseError(t, "try {} catch ({e}) { var e }", errorText)
-	expectParseError(t, "try {} catch ({e}) { function e() {} }", errorText)
+	expectParseError(t, "try {} catch ({ e }) { var e }", errorText)
+	expectParseError(t, "try {} catch ({ e }) { { var e } }", errorText)
+	expectParseError(t, "try {} catch ({ e }) { function e() {} }", errorText)
 	expectParseError(t, "try {} catch (e) { let e }", errorText)
 	expectParseError(t, "try {} catch (e) { const e = 0 }", errorText)
 }
