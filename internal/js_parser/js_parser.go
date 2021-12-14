@@ -348,7 +348,7 @@ type optionsThatSupportStructuralEquality struct {
 	mode                    config.Mode
 	platform                config.Platform
 	outputFormat            config.Format
-	moduleType              config.ModuleType
+	moduleType              js_ast.ModuleType
 	targetFromAPI           config.TargetFromAPI
 	asciiOnly               bool
 	keepNames               bool
@@ -12625,7 +12625,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			//     import(foo)
 			//
 			//   After:
-			//     Promise.resolve().then(() => require(foo))
+			//     Promise.resolve().then(() => __toESM(require(foo)))
 			//
 			// This is normally done by the printer since we don't know during the
 			// parsing stage whether this module is external or not. However, it's
@@ -12635,7 +12635,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			// correctly, and you need a string literal to get an import record.
 			if p.options.unsupportedJSFeatures.Has(compat.DynamicImport) {
 				var then js_ast.Expr
-				value := p.callRuntime(arg.Loc, "__toModule", []js_ast.Expr{{Loc: expr.Loc, Data: &js_ast.ECall{
+				value := p.callRuntime(arg.Loc, "__toESM", []js_ast.Expr{{Loc: expr.Loc, Data: &js_ast.ECall{
 					Target: p.valueToSubstituteForRequire(expr.Loc),
 					Args:   []js_ast.Expr{arg},
 				}}})
@@ -13103,6 +13103,35 @@ func (p *parser) maybeMarkKnownGlobalConstructorAsPure(e *js_ast.ENew) {
 	if id, ok := e.Target.Data.(*js_ast.EIdentifier); ok {
 		if symbol := p.symbols[id.Ref.InnerIndex]; symbol.Kind == js_ast.SymbolUnbound {
 			switch symbol.OriginalName {
+			case "WeakSet", "WeakMap":
+				n := len(e.Args)
+
+				if n == 0 {
+					// "new WeakSet()" is pure
+					e.CanBeUnwrappedIfUnused = true
+					break
+				}
+
+				if n == 1 {
+					switch arg := e.Args[0].Data.(type) {
+					case *js_ast.ENull, *js_ast.EUndefined:
+						// "new WeakSet(null)" is pure
+						// "new WeakSet(void 0)" is pure
+						e.CanBeUnwrappedIfUnused = true
+
+					case *js_ast.EArray:
+						if len(arg.Items) == 0 {
+							// "new WeakSet([])" is pure
+							e.CanBeUnwrappedIfUnused = true
+						} else {
+							// "new WeakSet([x])" is impure because an exception is thrown if "x" is not an object
+						}
+
+					default:
+						// "new WeakSet(x)" is impure because the iterator for "x" could have side effects
+					}
+				}
+
 			case "Set":
 				n := len(e.Args)
 
@@ -13368,9 +13397,6 @@ func (p *parser) recordExport(loc logger.Loc, alias string, ref js_ast.Ref) {
 			fmt.Sprintf("Multiple exports with the same name %q", alias),
 			[]logger.MsgData{p.tracker.MsgData(js_lexer.RangeOfIdentifier(p.source, name.AliasLoc),
 				fmt.Sprintf("The name %q was originally exported here:", alias))})
-	} else if alias == "__esModule" {
-		p.log.Add(logger.Error, &p.tracker, js_lexer.RangeOfIdentifier(p.source, loc),
-			"The export name \"__esModule\" is reserved and cannot be used (it's needed as an export marker when converting ES module syntax to CommonJS)")
 	} else {
 		p.namedExports[alias] = js_ast.NamedExport{AliasLoc: loc, Ref: ref}
 	}
@@ -14757,7 +14783,7 @@ func (p *parser) prepareForVisitPass() {
 	// CommonJS-style exports are only enabled if this isn't using ECMAScript-
 	// style exports. You can still use "require" in ESM, just not "module" or
 	// "exports". You can also still use "import" in CommonJS.
-	if p.options.moduleType != config.ModuleESM && p.options.mode != config.ModePassThrough &&
+	if p.options.moduleType != js_ast.ModuleESM && p.options.mode != config.ModePassThrough &&
 		p.es6ExportKeyword.Len == 0 && p.topLevelAwaitKeyword.Len == 0 {
 		p.exportsRef = p.declareCommonJSSymbol(js_ast.SymbolHoisted, "exports")
 		p.moduleRef = p.declareCommonJSSymbol(js_ast.SymbolHoisted, "module")
@@ -14853,6 +14879,13 @@ func (p *parser) computeCharacterFrequency() *js_ast.CharFreq {
 	// Subtract out all comments
 	for _, comment := range p.lexer.AllOriginalComments {
 		charFreq.Scan(comment.Text, -1)
+	}
+
+	// Subtract out all import paths
+	for _, record := range p.importRecords {
+		if !record.SourceIndex.IsValid() {
+			charFreq.Scan(record.Path.Text, -1)
+		}
 	}
 
 	// Subtract out all symbols that will be minified
@@ -15077,15 +15110,15 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 		// is by looking at node's "type" field in "package.json" and/or whether
 		// the file extension is ".mjs"/".mts" or ".cjs"/".cts".
 		switch p.options.moduleType {
-		case config.ModuleCommonJS:
+		case js_ast.ModuleCommonJS:
 			// "type: commonjs" or ".cjs" or ".cts"
 			exportsKind = js_ast.ExportsCommonJS
 
-		case config.ModuleESM:
+		case js_ast.ModuleESM:
 			// "type: module" or ".mjs" or ".mts"
 			exportsKind = js_ast.ExportsESM
 
-		case config.ModuleUnknown:
+		case js_ast.ModuleUnknown:
 			// Treat unknown modules containing an import statement as ESM. Otherwise
 			// the bundler will treat this file as CommonJS if it's imported and ESM
 			// if it's not imported.
@@ -15097,6 +15130,7 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 
 	return js_ast.AST{
 		Parts:                           parts,
+		ModuleType:                      p.options.moduleType,
 		ModuleScope:                     p.moduleScope,
 		CharFreq:                        p.computeCharacterFrequency(),
 		Symbols:                         p.symbols,

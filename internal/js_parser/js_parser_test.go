@@ -2546,13 +2546,6 @@ func TestExport(t *testing.T) {
 		"<stdin>: ERROR: This export alias is invalid because it contains the unpaired Unicode surrogate U+DC00\n")
 	expectParseErrorTarget(t, 2020, "export * as '' from 'foo'",
 		"<stdin>: ERROR: Using a string as a module namespace identifier name is not supported in the configured target environment\n")
-
-	// Exports with the name "__esModule" are forbidden
-	esModuleError := "<stdin>: ERROR: The export name \"__esModule\" is reserved and cannot be used " +
-		"(it's needed as an export marker when converting ES module syntax to CommonJS)\n"
-	expectParseError(t, "export var __esModule", esModuleError)
-	expectParseError(t, "export {__esModule}; var __esModule", esModuleError)
-	expectParseError(t, "export {__esModule} from 'foo'", esModuleError)
 }
 
 func TestExportDuplicates(t *testing.T) {
@@ -4910,4 +4903,32 @@ func TestAutoPureForMap(t *testing.T) {
 	expectPrinted(t, "new Map([x])", "new Map([x]);\n")
 	expectPrinted(t, "new Map([x, []])", "new Map([x, []]);\n")
 	expectPrinted(t, "new Map([[], x])", "new Map([[], x]);\n")
+}
+
+func TestAutoPureForWeakSet(t *testing.T) {
+	expectPrinted(t, "new WeakSet", "/* @__PURE__ */ new WeakSet();\n")
+	expectPrinted(t, "new WeakSet(null)", "/* @__PURE__ */ new WeakSet(null);\n")
+	expectPrinted(t, "new WeakSet(undefined)", "/* @__PURE__ */ new WeakSet(void 0);\n")
+	expectPrinted(t, "new WeakSet([])", "/* @__PURE__ */ new WeakSet([]);\n")
+
+	expectPrinted(t, "new WeakSet([x])", "new WeakSet([x]);\n")
+	expectPrinted(t, "new WeakSet(x)", "new WeakSet(x);\n")
+	expectPrinted(t, "new WeakSet(false)", "new WeakSet(false);\n")
+	expectPrinted(t, "new WeakSet({})", "new WeakSet({});\n")
+	expectPrinted(t, "new WeakSet({ x })", "new WeakSet({ x });\n")
+}
+
+func TestAutoPureForWeakMap(t *testing.T) {
+	expectPrinted(t, "new WeakMap", "/* @__PURE__ */ new WeakMap();\n")
+	expectPrinted(t, "new WeakMap(null)", "/* @__PURE__ */ new WeakMap(null);\n")
+	expectPrinted(t, "new WeakMap(undefined)", "/* @__PURE__ */ new WeakMap(void 0);\n")
+	expectPrinted(t, "new WeakMap([])", "/* @__PURE__ */ new WeakMap([]);\n")
+
+	expectPrinted(t, "new WeakMap([[]])", "new WeakMap([[]]);\n")
+	expectPrinted(t, "new WeakMap([[], []])", "new WeakMap([[], []]);\n")
+	expectPrinted(t, "new WeakMap(x)", "new WeakMap(x);\n")
+	expectPrinted(t, "new WeakMap(false)", "new WeakMap(false);\n")
+	expectPrinted(t, "new WeakMap([x])", "new WeakMap([x]);\n")
+	expectPrinted(t, "new WeakMap([x, []])", "new WeakMap([x, []]);\n")
+	expectPrinted(t, "new WeakMap([[], x])", "new WeakMap([[], x]);\n")
 }
