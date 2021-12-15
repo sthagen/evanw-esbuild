@@ -761,10 +761,10 @@ func isJumpStatement(data js_ast.S) bool {
 	return false
 }
 
-func isPrimitiveToReorder(data js_ast.E) bool {
+func isPrimitiveLiteral(data js_ast.E) bool {
 	switch e := data.(type) {
 	case *js_ast.EInlinedEnum:
-		return isPrimitiveToReorder(e.Value.Data)
+		return isPrimitiveLiteral(e.Value.Data)
 
 	case *js_ast.ENull, *js_ast.EUndefined, *js_ast.EString, *js_ast.EBoolean, *js_ast.ENumber, *js_ast.EBigInt:
 		return true
@@ -10396,9 +10396,9 @@ func (p *parser) warnAboutTypeofAndString(a js_ast.Expr, b js_ast.Expr) {
 }
 
 func canChangeStrictToLoose(a js_ast.Expr, b js_ast.Expr) bool {
-	return (js_ast.IsBooleanValue(a) && js_ast.IsBooleanValue(b)) ||
-		(js_ast.IsNumericValue(a) && js_ast.IsNumericValue(b)) ||
-		(js_ast.IsStringValue(a) && js_ast.IsStringValue(b))
+	x := js_ast.KnownPrimitiveType(a)
+	y := js_ast.KnownPrimitiveType(b)
+	return x == y && x != js_ast.PrimitiveUnknown && x != js_ast.PrimitiveMixed
 }
 
 func maybeSimplifyEqualityComparison(e *js_ast.EBinary, isNotEqual bool) (js_ast.Expr, bool) {
@@ -10406,7 +10406,7 @@ func maybeSimplifyEqualityComparison(e *js_ast.EBinary, isNotEqual bool) (js_ast
 	// "!x === false" => "!!x"
 	// "!x !== true" => "!!x"
 	// "!x !== false" => "!x"
-	if boolean, ok := e.Right.Data.(*js_ast.EBoolean); ok && js_ast.IsBooleanValue(e.Left) {
+	if boolean, ok := e.Right.Data.(*js_ast.EBoolean); ok && js_ast.KnownPrimitiveType(e.Left) == js_ast.PrimitiveBoolean {
 		if boolean.Value == isNotEqual {
 			return js_ast.Not(e.Left), true
 		} else {
@@ -10677,24 +10677,29 @@ func joinStrings(a []uint16, b []uint16) []uint16 {
 	return data
 }
 
-func foldStringAddition(left js_ast.Expr, right js_ast.Expr) *js_ast.Expr {
+func foldStringAddition(left js_ast.Expr, right js_ast.Expr) js_ast.Expr {
 	switch l := left.Data.(type) {
 	case *js_ast.EString:
 		switch r := right.Data.(type) {
 		case *js_ast.EString:
-			return &js_ast.Expr{Loc: left.Loc, Data: &js_ast.EString{
+			return js_ast.Expr{Loc: left.Loc, Data: &js_ast.EString{
 				Value:          joinStrings(l.Value, r.Value),
 				PreferTemplate: l.PreferTemplate || r.PreferTemplate,
 			}}
 
 		case *js_ast.ETemplate:
 			if r.TagOrNil.Data == nil {
-				return &js_ast.Expr{Loc: left.Loc, Data: &js_ast.ETemplate{
+				return js_ast.Expr{Loc: left.Loc, Data: &js_ast.ETemplate{
 					HeadLoc:    left.Loc,
 					HeadCooked: joinStrings(l.Value, r.HeadCooked),
 					Parts:      r.Parts,
 				}}
 			}
+		}
+
+		// "'' + typeof x" => "typeof x"
+		if len(l.Value) == 0 && js_ast.KnownPrimitiveType(right) == js_ast.PrimitiveString {
+			return right
 		}
 
 	case *js_ast.ETemplate:
@@ -10710,7 +10715,7 @@ func foldStringAddition(left js_ast.Expr, right js_ast.Expr) *js_ast.Expr {
 					copy(parts, l.Parts)
 					parts[n-1].TailCooked = joinStrings(parts[n-1].TailCooked, r.Value)
 				}
-				return &js_ast.Expr{Loc: left.Loc, Data: &js_ast.ETemplate{
+				return js_ast.Expr{Loc: left.Loc, Data: &js_ast.ETemplate{
 					HeadLoc:    l.HeadLoc,
 					HeadCooked: head,
 					Parts:      parts,
@@ -10728,7 +10733,7 @@ func foldStringAddition(left js_ast.Expr, right js_ast.Expr) *js_ast.Expr {
 						copy(parts[:n], l.Parts)
 						parts[n-1].TailCooked = joinStrings(parts[n-1].TailCooked, r.HeadCooked)
 					}
-					return &js_ast.Expr{Loc: left.Loc, Data: &js_ast.ETemplate{
+					return js_ast.Expr{Loc: left.Loc, Data: &js_ast.ETemplate{
 						HeadLoc:    l.HeadLoc,
 						HeadCooked: head,
 						Parts:      parts,
@@ -10738,7 +10743,12 @@ func foldStringAddition(left js_ast.Expr, right js_ast.Expr) *js_ast.Expr {
 		}
 	}
 
-	return nil
+	// "typeof x + ''" => "typeof x"
+	if r, ok := right.Data.(*js_ast.EString); ok && len(r.Value) == 0 && js_ast.KnownPrimitiveType(left) == js_ast.PrimitiveString {
+		return left
+	}
+
+	return js_ast.Expr{}
 }
 
 // Simplify syntax when we know it's used inside a boolean context
@@ -11450,7 +11460,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		// can only reorder expressions that do not have any side effects.
 		switch e.Op {
 		case js_ast.BinOpLooseEq, js_ast.BinOpLooseNe, js_ast.BinOpStrictEq, js_ast.BinOpStrictNe:
-			if isPrimitiveToReorder(e.Left.Data) && !isPrimitiveToReorder(e.Right.Data) {
+			if isPrimitiveLiteral(e.Left.Data) && !isPrimitiveLiteral(e.Right.Data) {
 				e.Left, e.Right = e.Right, e.Left
 			}
 		}
@@ -11653,14 +11663,14 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 			// "'abc' + 'xyz'" => "'abcxyz'"
-			if result := foldStringAddition(e.Left, e.Right); result != nil {
-				return *result, exprOut{}
+			if result := foldStringAddition(e.Left, e.Right); result.Data != nil {
+				return result, exprOut{}
 			}
 
 			if left, ok := e.Left.Data.(*js_ast.EBinary); ok && left.Op == js_ast.BinOpAdd {
 				// "x + 'abc' + 'xyz'" => "x + 'abcxyz'"
-				if result := foldStringAddition(left.Right, e.Right); result != nil {
-					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBinary{Op: left.Op, Left: left.Left, Right: *result}}, exprOut{}
+				if result := foldStringAddition(left.Right, e.Right); result.Data != nil {
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBinary{Op: left.Op, Left: left.Left, Right: result}}, exprOut{}
 				}
 			}
 
@@ -14135,6 +14145,19 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		case js_ast.BinOpLooseEq, js_ast.BinOpLooseNe:
 			return canChangeStrictToLoose(e.Left, e.Right) && p.exprCanBeRemovedIfUnused(e.Left) && p.exprCanBeRemovedIfUnused(e.Right)
 		}
+
+	case *js_ast.ETemplate:
+		// A template can be removed if it has no tag and every value has no side
+		// effects and results in some kind of primitive, since all primitives
+		// have a "ToString" operation with no side effects.
+		if e.TagOrNil.Data == nil {
+			for _, part := range e.Parts {
+				if !p.exprCanBeRemovedIfUnused(part.Value) || js_ast.KnownPrimitiveType(part.Value) == js_ast.PrimitiveUnknown {
+					return false
+				}
+			}
+			return true
+		}
 	}
 
 	// Assume all other expression types have side effects and cannot be removed
@@ -14194,19 +14217,33 @@ func (p *parser) simplifyUnusedExpr(expr js_ast.Expr) js_ast.Expr {
 
 	case *js_ast.ETemplate:
 		if e.TagOrNil.Data == nil {
-			var result js_ast.Expr
+			var comma js_ast.Expr
+			var templateLoc logger.Loc
+			var template *js_ast.ETemplate
 			for _, part := range e.Parts {
-				// Make sure "ToString" is still evaluated on the value
-				if result.Data == nil {
-					result = js_ast.Expr{Loc: part.Value.Loc, Data: &js_ast.EString{}}
+				// If we know this value is some kind of primitive, then we know that
+				// "ToString" has no side effects and can be avoided.
+				if js_ast.KnownPrimitiveType(part.Value) != js_ast.PrimitiveUnknown {
+					if template != nil {
+						comma = js_ast.JoinWithComma(comma, js_ast.Expr{Loc: templateLoc, Data: template})
+						template = nil
+					}
+					comma = js_ast.JoinWithComma(comma, p.simplifyUnusedExpr(part.Value))
+					continue
 				}
-				result = js_ast.Expr{Loc: part.Value.Loc, Data: &js_ast.EBinary{
-					Op:    js_ast.BinOpAdd,
-					Left:  result,
-					Right: part.Value,
-				}}
+
+				// Make sure "ToString" is still evaluated on the value. We can't use
+				// string addition here because that may evaluate "ValueOf" instead.
+				if template == nil {
+					template = &js_ast.ETemplate{}
+					templateLoc = part.Value.Loc
+				}
+				template.Parts = append(template.Parts, js_ast.TemplatePart{Value: part.Value})
 			}
-			return result
+			if template != nil {
+				comma = js_ast.JoinWithComma(comma, js_ast.Expr{Loc: templateLoc, Data: template})
+			}
+			return comma
 		}
 
 	case *js_ast.EArray:

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+* Fix a minifier bug with BigInt literals
+
+    Previously expression simplification optimizations in the minifier incorrectly assumed that numeric operators always return numbers. This used to be true but has no longer been true since the introduction of BigInt literals in ES2020. Now numeric operators can return either a number or a BigInt depending on the arguments. This oversight could potentially have resulted in behavior changes. For example, this code printed `false` before being minified and `true` after being minified because esbuild shortened `===` to `==` under the false assumption that both operands were numbers:
+
+    ```js
+    var x = 0;
+    console.log((x ? 2 : -1n) === -1);
+    ```
+
+    The type checking logic has been rewritten to take into account BigInt literals in this release, so this incorrect simplification is no longer applied.
+
+* Enable removal of certain unused template literals ([#1853](https://github.com/evanw/esbuild/issues/1853))
+
+    This release contains improvements to the minification of unused template literals containing primitive values:
+
+    ```js
+    // Original code
+    `${1}${2}${3}`;
+    `${x ? 1 : 2}${y}`;
+
+    // Old output (with --minify)
+    ""+1+2+3,""+(x?1:2)+y;
+
+    // New output (with --minify)
+    x,`${y}`;
+    ```
+
+    This can arise when the template literals are nested inside of another function call that was determined to be unnecessary such as an unused call to a function marked with the `/* @__PURE__ */` pragma.
+
+    This release also fixes a bug with this transformation where minifying the unused expression `` `foo ${bar}` `` into `"" + bar` changed the meaning of the expression. Template string interpolation always calls `toString` while string addition may call `valueOf` instead. This unused expression is now minified to `` `${bar}` ``, which is slightly longer but which avoids the behavior change.
+
 ## 0.14.5
 
 * Fix an issue with the publishing script
