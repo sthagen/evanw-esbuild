@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.6
 
 * Fix a minifier bug with BigInt literals
 
@@ -32,6 +32,22 @@
     This can arise when the template literals are nested inside of another function call that was determined to be unnecessary such as an unused call to a function marked with the `/* @__PURE__ */` pragma.
 
     This release also fixes a bug with this transformation where minifying the unused expression `` `foo ${bar}` `` into `"" + bar` changed the meaning of the expression. Template string interpolation always calls `toString` while string addition may call `valueOf` instead. This unused expression is now minified to `` `${bar}` ``, which is slightly longer but which avoids the behavior change.
+
+* Allow `keyof`/`readonly`/`infer` in TypeScript index signatures ([#1859](https://github.com/evanw/esbuild/pull/1859))
+
+    This release fixes a bug that prevented these keywords from being used as names in index signatures. The following TypeScript code was previously rejected, but is now accepted:
+
+    ```ts
+    interface Foo {
+      [keyof: string]: number
+    }
+    ```
+
+    This fix was contributed by [@magic-akari](https://github.com/magic-akari).
+
+* Avoid warning about `import.meta` if it's replaced ([#1868](https://github.com/evanw/esbuild/issues/1868))
+
+    It's possible to replace the `import.meta` expression using the `--define:` feature. Previously doing that still warned that the `import.meta` syntax was not supported when targeting ES5. With this release, there will no longer be a warning in this case.
 
 ## 0.14.5
 
