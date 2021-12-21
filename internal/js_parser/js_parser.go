@@ -106,6 +106,7 @@ type parser struct {
 	emittedNamespaceVars       map[js_ast.Ref]bool
 	isExportedInsideNamespace  map[js_ast.Ref]js_ast.Ref
 	localTypeNames             map[string]bool
+	tsEnums                    map[js_ast.Ref]map[string]js_ast.TSEnumValue
 
 	// This is the reference to the generated function argument for the namespace,
 	// which is different than the reference to the namespace itself:
@@ -6665,7 +6666,9 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 
 		pathLoc, pathText, assertions := p.parsePath()
 		stmt.ImportRecordIndex = p.addImportRecord(ast.ImportStmt, pathLoc, pathText, assertions)
-		p.importRecords[stmt.ImportRecordIndex].WasOriginallyBareImport = wasOriginallyBareImport
+		if wasOriginallyBareImport {
+			p.importRecords[stmt.ImportRecordIndex].Flags |= ast.WasOriginallyBareImport
+		}
 		p.lexer.ExpectOrInsertSemicolon()
 
 		if stmt.StarNameLoc != nil {
@@ -9507,6 +9510,12 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		return stmts
 
 	case *js_ast.SEnum:
+		// Track cross-module enum constants during bundling
+		var tsExportedTopLevelEnumValues map[string]js_ast.TSEnumValue
+		if s.IsExport && p.currentScope == p.moduleScope && p.options.mode == config.ModeBundle {
+			tsExportedTopLevelEnumValues = make(map[string]js_ast.TSEnumValue)
+		}
+
 		p.recordDeclaredSymbol(s.Name.Ref)
 		p.pushScopeForVisitPass(js_ast.ScopeEntry, stmt.Loc)
 		p.recordDeclaredSymbol(s.Arg)
@@ -9550,6 +9559,9 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 
 				switch e := value.ValueOrNil.Data.(type) {
 				case *js_ast.ENumber:
+					if tsExportedTopLevelEnumValues != nil {
+						tsExportedTopLevelEnumValues[name] = js_ast.TSEnumValue{Number: e.Value}
+					}
 					member := exportedMembers[name]
 					member.Data = &js_ast.TSNamespaceMemberEnumNumber{Value: e.Value}
 					exportedMembers[name] = member
@@ -9558,6 +9570,9 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 					nextNumericValue = e.Value + 1
 
 				case *js_ast.EString:
+					if tsExportedTopLevelEnumValues != nil {
+						tsExportedTopLevelEnumValues[name] = js_ast.TSEnumValue{String: e.Value}
+					}
 					member := exportedMembers[name]
 					member.Data = &js_ast.TSNamespaceMemberEnumString{Value: e.Value}
 					exportedMembers[name] = member
@@ -9570,6 +9585,9 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 					}
 				}
 			} else if hasNumericValue {
+				if tsExportedTopLevelEnumValues != nil {
+					tsExportedTopLevelEnumValues[name] = js_ast.TSEnumValue{Number: nextNumericValue}
+				}
 				member := exportedMembers[name]
 				member.Data = &js_ast.TSNamespaceMemberEnumNumber{Value: nextNumericValue}
 				exportedMembers[name] = member
@@ -9620,6 +9638,14 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 
 		p.popScope()
 		p.shouldFoldNumericConstants = oldShouldFoldNumericConstants
+
+		// Track all exported top-level enums for cross-module inlining
+		if tsExportedTopLevelEnumValues != nil {
+			if p.tsEnums == nil {
+				p.tsEnums = make(map[js_ast.Ref]map[string]js_ast.TSEnumValue)
+			}
+			p.tsEnums[s.Name.Ref] = tsExportedTopLevelEnumValues
+		}
 
 		// Wrap this enum definition in a closure
 		stmts = p.generateClosureForTypeScriptEnum(
@@ -12623,7 +12649,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 
 				importRecordIndex := p.addImportRecord(ast.ImportDynamic, arg.Loc, js_lexer.UTF16ToString(str.Value), assertions)
-				p.importRecords[importRecordIndex].HandlesImportErrors = (isAwaitTarget && p.fnOrArrowDataVisit.tryBodyCount != 0) || isThenCatchTarget
+				if (isAwaitTarget && p.fnOrArrowDataVisit.tryBodyCount != 0) || isThenCatchTarget {
+					p.importRecords[importRecordIndex].Flags |= ast.HandlesImportErrors
+				}
 				p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, importRecordIndex)
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EImportString{
 					ImportRecordIndex:       importRecordIndex,
@@ -12750,7 +12778,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 								}
 
 								importRecordIndex := p.addImportRecord(ast.ImportRequireResolve, e.Args[0].Loc, js_lexer.UTF16ToString(str.Value), nil)
-								p.importRecords[importRecordIndex].HandlesImportErrors = p.fnOrArrowDataVisit.tryBodyCount != 0
+								if p.fnOrArrowDataVisit.tryBodyCount != 0 {
+									p.importRecords[importRecordIndex].Flags |= ast.HandlesImportErrors
+								}
 								p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, importRecordIndex)
 
 								// Create a new expression to represent the operation
@@ -12884,7 +12914,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 								}
 
 								importRecordIndex := p.addImportRecord(ast.ImportRequire, arg.Loc, js_lexer.UTF16ToString(str.Value), nil)
-								p.importRecords[importRecordIndex].HandlesImportErrors = p.fnOrArrowDataVisit.tryBodyCount != 0
+								if p.fnOrArrowDataVisit.tryBodyCount != 0 {
+									p.importRecords[importRecordIndex].Flags |= ast.HandlesImportErrors
+								}
 								p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, importRecordIndex)
 
 								// Create a new expression to represent the operation
@@ -13638,7 +13670,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					// Ignore import records with a pre-filled source index. These are
 					// for injected files and we definitely do not want to trim these.
 					if !record.SourceIndex.IsValid() {
-						record.IsUnused = true
+						record.Flags |= ast.IsUnused
 						continue
 					}
 				}
@@ -13718,15 +13750,15 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 			p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, s.ImportRecordIndex)
 
 			if s.StarNameLoc != nil {
-				record.ContainsImportStar = true
+				record.Flags |= ast.ContainsImportStar
 			}
 
 			if s.DefaultName != nil {
-				record.ContainsDefaultAlias = true
+				record.Flags |= ast.ContainsDefaultAlias
 			} else if s.Items != nil {
 				for _, item := range *s.Items {
 					if item.Alias == "default" {
-						record.ContainsDefaultAlias = true
+						record.Flags |= ast.ContainsDefaultAlias
 					}
 				}
 			}
@@ -15183,6 +15215,7 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 		Directive:                       directive,
 		NamedImports:                    p.namedImports,
 		NamedExports:                    p.namedExports,
+		TSEnums:                         p.tsEnums,
 		NestedScopeSlotCounts:           nestedScopeSlotCounts,
 		TopLevelSymbolToPartsFromParser: p.topLevelSymbolToParts,
 		ExportStarImportRecords:         p.exportStarImportRecords,

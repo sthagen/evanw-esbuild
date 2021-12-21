@@ -197,8 +197,13 @@ loop:
 		}
 
 		switch p.current().Kind {
-		case css_lexer.TEndOfFile, css_lexer.TCloseBrace:
+		case css_lexer.TEndOfFile:
 			break loop
+
+		case css_lexer.TCloseBrace:
+			if !context.isTopLevel {
+				break loop
+			}
 
 		case css_lexer.TWhitespace:
 			p.advance()
@@ -967,11 +972,15 @@ loop:
 
 		case css_lexer.TURL:
 			token.ImportRecordIndex = uint32(len(p.importRecords))
+			var flags ast.ImportRecordFlags
+			if !opts.allowImports {
+				flags |= ast.IsUnused
+			}
 			p.importRecords = append(p.importRecords, ast.ImportRecord{
-				Kind:     ast.ImportURL,
-				Path:     logger.Path{Text: token.Text},
-				Range:    t.Range,
-				IsUnused: !opts.allowImports,
+				Kind:  ast.ImportURL,
+				Path:  logger.Path{Text: token.Text},
+				Range: t.Range,
+				Flags: flags,
 			})
 			token.Text = ""
 
@@ -1000,11 +1009,15 @@ loop:
 				token.Text = ""
 				token.Children = nil
 				token.ImportRecordIndex = uint32(len(p.importRecords))
+				var flags ast.ImportRecordFlags
+				if !opts.allowImports {
+					flags |= ast.IsUnused
+				}
 				p.importRecords = append(p.importRecords, ast.ImportRecord{
-					Kind:     ast.ImportURL,
-					Path:     logger.Path{Text: nested[0].Text},
-					Range:    original[0].Range,
-					IsUnused: !opts.allowImports,
+					Kind:  ast.ImportURL,
+					Path:  logger.Path{Text: nested[0].Text},
+					Range: original[0].Range,
+					Flags: flags,
 				})
 			}
 
