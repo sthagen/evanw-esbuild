@@ -1275,7 +1275,7 @@ func (p *parser) popScope() {
 				continue
 			}
 
-			p.symbols[member.Ref.InnerIndex].MustNotBeRenamed = true
+			p.symbols[member.Ref.InnerIndex].Flags |= js_ast.MustNotBeRenamed
 		}
 	}
 
@@ -1370,10 +1370,7 @@ func (p *parser) mergeSymbols(old js_ast.Ref, new js_ast.Ref) {
 	oldSymbol := &p.symbols[old.InnerIndex]
 	newSymbol := &p.symbols[new.InnerIndex]
 	oldSymbol.Link = new
-	newSymbol.UseCountEstimate += oldSymbol.UseCountEstimate
-	if oldSymbol.MustNotBeRenamed {
-		newSymbol.MustNotBeRenamed = true
-	}
+	newSymbol.MergeContentsWith(oldSymbol)
 }
 
 type mergeResult int
@@ -1429,7 +1426,7 @@ func (p *parser) canMergeSymbols(scope *js_ast.Scope, existing js_ast.SymbolKind
 	if new.IsHoistedOrFunction() && existing.IsHoistedOrFunction() &&
 		(scope.Kind == js_ast.ScopeEntry || scope.Kind == js_ast.ScopeFunctionBody ||
 			(new.IsHoisted() && existing.IsHoisted())) {
-		return mergeKeepExisting
+		return mergeReplaceWithNew
 	}
 
 	// "get #foo() {} set #foo() {}"
@@ -1493,6 +1490,11 @@ func (p *parser) declareSymbol(kind js_ast.SymbolKind, loc logger.Loc, name stri
 
 		case mergeReplaceWithNew:
 			symbol.Link = ref
+
+			// If these are both functions, remove the overwritten declaration
+			if p.options.mangleSyntax && kind.IsFunction() && symbol.Kind.IsFunction() {
+				symbol.Flags |= js_ast.RemoveOverwrittenFunctionDeclaration
+			}
 
 		case mergeBecomePrivateGetSetPair:
 			ref = existing.Ref
@@ -1594,7 +1596,7 @@ func (p *parser) hoistSymbols(scope *js_ast.Scope) {
 				//   assert(obj.foo === 2)
 				//
 				if s.Kind == js_ast.ScopeWith {
-					symbol.MustNotBeRenamed = true
+					symbol.Flags |= js_ast.MustNotBeRenamed
 				}
 
 				if existingMember, ok := s.Members[symbol.OriginalName]; ok {
@@ -4455,6 +4457,36 @@ func (p *parser) parseCallArgs() []js_ast.Expr {
 	return args
 }
 
+func (p *parser) parseJSXNamespacedName() (logger.Range, string) {
+	nameRange := p.lexer.Range()
+	name := p.lexer.Identifier
+	p.lexer.ExpectInsideJSXElement(js_lexer.TIdentifier)
+
+	// Parse JSX namespaces. These are not supported by React or TypeScript
+	// but someone using JSX syntax in more obscure ways may find a use for
+	// them. A namespaced name is just always turned into a string so you
+	// can't use this feature to reference JavaScript identifiers.
+	if p.lexer.Token == js_lexer.TColon {
+		// Parse the colon
+		nameRange.Len = p.lexer.Range().End() - nameRange.Loc.Start
+		name += ":"
+		p.lexer.NextInsideJSXElement()
+
+		// Parse the second identifier
+		if p.lexer.Token == js_lexer.TIdentifier {
+			nameRange.Len = p.lexer.Range().End() - nameRange.Loc.Start
+			name += p.lexer.Identifier
+			p.lexer.NextInsideJSXElement()
+		} else {
+			p.log.Add(logger.Error, &p.tracker, logger.Range{Loc: logger.Loc{Start: nameRange.End()}},
+				fmt.Sprintf("Expected identifier after %q in namespaced JSX name", name))
+			panic(js_lexer.LexerPanic{})
+		}
+	}
+
+	return nameRange, name
+}
+
 func (p *parser) parseJSXTag() (logger.Range, string, js_ast.Expr) {
 	loc := p.lexer.Loc()
 
@@ -4464,17 +4496,15 @@ func (p *parser) parseJSXTag() (logger.Range, string, js_ast.Expr) {
 	}
 
 	// The tag is an identifier
-	name := p.lexer.Identifier
-	tagRange := p.lexer.Range()
-	p.lexer.ExpectInsideJSXElement(js_lexer.TIdentifier)
+	tagRange, tagName := p.parseJSXNamespacedName()
 
 	// Certain identifiers are strings
-	if strings.ContainsAny(name, "-:") || (p.lexer.Token != js_lexer.TDot && name[0] >= 'a' && name[0] <= 'z') {
-		return tagRange, name, js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}}
+	if strings.ContainsAny(tagName, "-:") || (p.lexer.Token != js_lexer.TDot && tagName[0] >= 'a' && tagName[0] <= 'z') {
+		return tagRange, tagName, js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(tagName)}}
 	}
 
 	// Otherwise, this is an identifier
-	tag := js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: p.storeNameInRef(name)}}
+	tag := js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: p.storeNameInRef(tagName)}}
 
 	// Parse a member expression chain
 	for p.lexer.Token == js_lexer.TDot {
@@ -4491,7 +4521,7 @@ func (p *parser) parseJSXTag() (logger.Range, string, js_ast.Expr) {
 			panic(js_lexer.LexerPanic{})
 		}
 
-		name += "." + member
+		tagName += "." + member
 		tag = js_ast.Expr{Loc: loc, Data: &js_ast.EDot{
 			Target:  tag,
 			Name:    member,
@@ -4500,7 +4530,7 @@ func (p *parser) parseJSXTag() (logger.Range, string, js_ast.Expr) {
 		tagRange.Len = memberRange.Loc.Start + memberRange.Len - tagRange.Loc.Start
 	}
 
-	return tagRange, name, tag
+	return tagRange, tagName, tag
 }
 
 func (p *parser) parseJSXElement(loc logger.Loc) js_ast.Expr {
@@ -4525,9 +4555,8 @@ func (p *parser) parseJSXElement(loc logger.Loc) js_ast.Expr {
 			switch p.lexer.Token {
 			case js_lexer.TIdentifier:
 				// Parse the key
-				keyRange := p.lexer.Range()
-				key := js_ast.Expr{Loc: keyRange.Loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(p.lexer.Identifier)}}
-				p.lexer.NextInsideJSXElement()
+				keyRange, keyName := p.parseJSXNamespacedName()
+				key := js_ast.Expr{Loc: keyRange.Loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(keyName)}}
 
 				// Parse the value
 				var value js_ast.Expr
@@ -5371,7 +5400,7 @@ func (p *parser) parseFn(name *js_ast.LocRef, data fnOrArrowDataParse) (fn js_as
 	// be called "arguments", in which case the real "arguments" is inaccessible.
 	if _, ok := p.currentScope.Members["arguments"]; !ok {
 		fn.ArgumentsRef = p.declareSymbol(js_ast.SymbolArguments, fn.OpenParenLoc, "arguments")
-		p.symbols[fn.ArgumentsRef.InnerIndex].MustNotBeRenamed = true
+		p.symbols[fn.ArgumentsRef.InnerIndex].Flags |= js_ast.MustNotBeRenamed
 	}
 
 	p.lexer.Expect(js_lexer.TCloseParen)
@@ -7198,7 +7227,7 @@ func (p *parser) findSymbol(loc logger.Loc, name string) findSymbolResult {
 	// property on the target object of the "with" statement. We must not rename
 	// it or we risk changing the behavior of the code.
 	if isInsideWithScope {
-		p.symbols[ref.InnerIndex].MustNotBeRenamed = true
+		p.symbols[ref.InnerIndex].Flags |= js_ast.MustNotBeRenamed
 	}
 
 	// Track how many times we've referenced this symbol
@@ -7576,7 +7605,7 @@ func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt 
 							// case there is actually more than one use even though it says
 							// there is only one. The "__name" use isn't counted so that
 							// tree shaking still works when names are kept.
-							if symbol := p.symbols[id.Ref.InnerIndex]; symbol.UseCountEstimate == 1 && !symbol.DidKeepName {
+							if symbol := p.symbols[id.Ref.InnerIndex]; symbol.UseCountEstimate == 1 && !symbol.Flags.Has(js_ast.DidKeepName) {
 								// Try to substitute the identifier with the initializer. This will
 								// fail if something with side effects is in between the declaration
 								// and the usage.
@@ -8848,7 +8877,7 @@ func (p *parser) keepExprSymbolName(value js_ast.Expr, name string) js_ast.Expr 
 }
 
 func (p *parser) keepStmtSymbolName(loc logger.Loc, ref js_ast.Ref, name string) js_ast.Stmt {
-	p.symbols[ref.InnerIndex].DidKeepName = true
+	p.symbols[ref.InnerIndex].Flags |= js_ast.DidKeepName
 
 	return js_ast.Stmt{Loc: loc, Data: &js_ast.SExpr{
 		Value: p.callRuntime(loc, "__name", []js_ast.Expr{
@@ -9461,6 +9490,11 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 	case *js_ast.SFunction:
 		p.visitFn(&s.Fn, s.Fn.OpenParenLoc)
 
+		// Strip this function declaration if it was overwritten
+		if p.symbols[s.Fn.Name.Ref.InnerIndex].Flags.Has(js_ast.RemoveOverwrittenFunctionDeclaration) && !s.IsExport {
+			return stmts
+		}
+
 		// Handle exporting this function from a namespace
 		if s.IsExport && p.enclosingNamespaceArgRef != nil {
 			s.IsExport = false
@@ -9975,7 +10009,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 			//
 			// The private getter must be lowered too.
 			if private, ok := prop.Key.Data.(*js_ast.EPrivateIdentifier); ok {
-				p.symbols[private.Ref.InnerIndex].PrivateSymbolMustBeLowered = true
+				p.symbols[private.Ref.InnerIndex].Flags |= js_ast.PrivateSymbolMustBeLowered
 			}
 		}
 	}
@@ -9986,7 +10020,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 		for _, prop := range class.Properties {
 			if private, ok := prop.Key.Data.(*js_ast.EPrivateIdentifier); ok {
 				if symbol := &p.symbols[private.Ref.InnerIndex]; p.classPrivateBrandChecksToLower[symbol.OriginalName] {
-					symbol.PrivateSymbolMustBeLowered = true
+					symbol.Flags |= js_ast.PrivateSymbolMustBeLowered
 				}
 			}
 		}
@@ -11318,10 +11352,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			// If the tag is an identifier, mark it as needing to be upper-case
 			switch tag := e.TagOrNil.Data.(type) {
 			case *js_ast.EIdentifier:
-				p.symbols[tag.Ref.InnerIndex].MustStartWithCapitalLetterForJSX = true
+				p.symbols[tag.Ref.InnerIndex].Flags |= js_ast.MustStartWithCapitalLetterForJSX
 
 			case *js_ast.EImportIdentifier:
-				p.symbols[tag.Ref.InnerIndex].MustStartWithCapitalLetterForJSX = true
+				p.symbols[tag.Ref.InnerIndex].Flags |= js_ast.MustStartWithCapitalLetterForJSX
 			}
 		} else {
 			// A missing tag is a fragment
@@ -12146,6 +12180,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			case js_ast.UnOpNeg:
 				if number, ok := toNumberWithoutSideEffects(e.Value.Data); ok {
 					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: -number}}, exprOut{}
+				}
+
+			case js_ast.UnOpCpl:
+				if p.shouldFoldNumericConstants {
+					if number, ok := toNumberWithoutSideEffects(e.Value.Data); ok {
+						return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(^toInt32(number))}}, exprOut{}
+					}
 				}
 
 				////////////////////////////////////////////////////////////////////////////////
@@ -13759,6 +13800,8 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 				for _, item := range *s.Items {
 					if item.Alias == "default" {
 						record.Flags |= ast.ContainsDefaultAlias
+					} else if item.Alias == "__esModule" {
+						record.Flags |= ast.ContainsESModuleAlias
 					}
 				}
 			}

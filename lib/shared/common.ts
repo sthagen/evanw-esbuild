@@ -445,7 +445,6 @@ export function createChannel(streamIn: StreamIn): StreamOut {
   let pluginCallbacks = new Map<number, PluginCallback>();
   let watchCallbacks = new Map<number, WatchCallback>();
   let serveCallbacks = new Map<number, ServeCallbacks>();
-  let nextServeID = 0;
   let isClosed = false;
   let nextRequestID = 0;
   let nextBuildKey = 0;
@@ -539,21 +538,21 @@ export function createChannel(streamIn: StreamIn): StreamOut {
           break;
         }
 
-        case 'start': {
+        case 'on-start': {
           let callback = pluginCallbacks.get(request.key);
           if (!callback) sendResponse(id, {});
           else sendResponse(id, await callback!(request) as any);
           break;
         }
 
-        case 'resolve': {
+        case 'on-resolve': {
           let callback = pluginCallbacks.get(request.key);
           if (!callback) sendResponse(id, {});
           else sendResponse(id, await callback!(request) as any);
           break;
         }
 
-        case 'load': {
+        case 'on-load': {
           let callback = pluginCallbacks.get(request.key);
           if (!callback) sendResponse(id, {});
           else sendResponse(id, await callback!(request) as any);
@@ -561,21 +560,21 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         }
 
         case 'serve-request': {
-          let callbacks = serveCallbacks.get(request.serveID);
+          let callbacks = serveCallbacks.get(request.key);
           if (callbacks && callbacks.onRequest) callbacks.onRequest(request.args);
           sendResponse(id, {});
           break;
         }
 
         case 'serve-wait': {
-          let callbacks = serveCallbacks.get(request.serveID);
+          let callbacks = serveCallbacks.get(request.key);
           if (callbacks) callbacks.onWait(request.error);
           sendResponse(id, {});
           break;
         }
 
         case 'watch-rebuild': {
-          let callback = watchCallbacks.get(request.watchID);
+          let callback = watchCallbacks.get(request.key);
           try {
             if (callback) callback(null, request.args);
           } catch (err) {
@@ -632,6 +631,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
     plugins: types.Plugin[],
     buildKey: number,
     stash: ObjectStash,
+    refs: Refs | null,
   ): Promise<
     | { ok: true, requestPlugins: protocol.BuildPlugin[], runOnEndCallbacks: RunOnEndCallbacks, pluginRefs: Refs }
     | { ok: false, error: any, pluginName: string }
@@ -669,6 +669,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
     let nextCallbackID = 0;
     let i = 0;
     let requestPlugins: protocol.BuildPlugin[] = [];
+    let isSetupDone = false;
 
     // Clone the plugin array to guard against mutation during iteration
     plugins = [...plugins];
@@ -676,7 +677,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
     for (let item of plugins) {
       let keys: OptionKeys = {};
       if (typeof item !== 'object') throw new Error(`Plugin at index ${i} must be an object`);
-      let name = getFlag(item, keys, 'name', mustBeString);
+      const name = getFlag(item, keys, 'name', mustBeString);
       if (typeof name !== 'string' || name === '') throw new Error(`Plugin at index ${i} is missing a name`);
       try {
         let setup = getFlag(item, keys, 'setup', mustBeFunction);
@@ -690,8 +691,50 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         };
         i++;
 
+        let resolve = (path: string, options: types.ResolveOptions = {}): Promise<types.ResolveResult> => {
+          if (!isSetupDone) throw new Error('Cannot call "resolve" before plugin setup has completed');
+          if (typeof path !== 'string') throw new Error(`The path to resolve must be a string`);
+          let keys: OptionKeys = Object.create(null);
+          let importer = getFlag(options, keys, 'importer', mustBeString);
+          let namespace = getFlag(options, keys, 'namespace', mustBeString);
+          let resolveDir = getFlag(options, keys, 'resolveDir', mustBeString);
+          let kind = getFlag(options, keys, 'kind', mustBeString);
+          let pluginData = getFlag(options, keys, 'pluginData', canBeAnything);
+          checkForInvalidFlags(options, keys, 'in resolve() call');
+
+          return new Promise((resolve, reject) => {
+            const request: protocol.ResolveRequest = {
+              command: 'resolve',
+              path,
+              key: buildKey,
+              pluginName: name,
+            }
+            if (importer != null) request.importer = importer
+            if (namespace != null) request.namespace = namespace
+            if (resolveDir != null) request.resolveDir = resolveDir
+            if (kind != null) request.kind = kind
+            if (pluginData != null) request.pluginData = stash.store(pluginData)
+
+            sendRequest<protocol.ResolveRequest, protocol.ResolveResponse>(refs, request, (error, response) => {
+              if (error !== null) reject(new Error(error))
+              else resolve({
+                errors: replaceDetailsInMessages(response!.errors, stash),
+                warnings: replaceDetailsInMessages(response!.warnings, stash),
+                path: response!.path,
+                external: response!.external,
+                sideEffects: response!.sideEffects,
+                namespace: response!.namespace,
+                suffix: response!.suffix,
+                pluginData: stash.load(response!.pluginData),
+              })
+            })
+          })
+        }
+
         let promise = setup({
           initialOptions,
+
+          resolve,
 
           onStart(callback) {
             let registeredText = `This error came from the "onStart" callback registered here:`
@@ -749,7 +792,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
 
     const callback: PluginCallback = async (request) => {
       switch (request.command) {
-        case 'start': {
+        case 'on-start': {
           let response: protocol.OnStartResponse = { errors: [], warnings: [] };
           await Promise.all(onStartCallbacks.map(async ({ name, callback, note }) => {
             try {
@@ -772,7 +815,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
           return response;
         }
 
-        case 'resolve': {
+        case 'on-resolve': {
           let response: protocol.OnResolveResponse = {}, name = '', callback, note;
           for (let id of request.ids) {
             try {
@@ -823,7 +866,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
           return response;
         }
 
-        case 'load': {
+        case 'on-load': {
           let response: protocol.OnLoadResponse = {}, name = '', callback, note;
           for (let id of request.ids) {
             try {
@@ -890,6 +933,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
       }
     }
 
+    isSetupDone = true;
     let refCount = 0;
     return {
       ok: true,
@@ -907,34 +951,33 @@ export function createChannel(streamIn: StreamIn): StreamOut {
     stop: () => void
   }
 
-  let buildServeData = (refs: Refs | null, options: types.ServeOptions, request: protocol.BuildRequest): ServeData => {
+  let buildServeData = (refs: Refs | null, options: types.ServeOptions, request: protocol.BuildRequest, key: number): ServeData => {
     let keys: OptionKeys = {};
     let port = getFlag(options, keys, 'port', mustBeInteger);
     let host = getFlag(options, keys, 'host', mustBeString);
     let servedir = getFlag(options, keys, 'servedir', mustBeString);
     let onRequest = getFlag(options, keys, 'onRequest', mustBeFunction);
-    let serveID = nextServeID++;
     let onWait: ServeCallbacks['onWait'];
     let wait = new Promise<void>((resolve, reject) => {
       onWait = error => {
-        serveCallbacks.delete(serveID);
+        serveCallbacks.delete(key);
         if (error !== null) reject(new Error(error));
         else resolve();
       };
     });
-    request.serve = { serveID };
+    request.serve = {};
     checkForInvalidFlags(options, keys, `in serve() call`);
     if (port !== void 0) request.serve.port = port;
     if (host !== void 0) request.serve.host = host;
     if (servedir !== void 0) request.serve.servedir = servedir;
-    serveCallbacks.set(serveID, {
+    serveCallbacks.set(key, {
       onRequest,
       onWait: onWait!,
     });
     return {
       wait,
       stop() {
-        sendRequest<protocol.ServeStopRequest, null>(refs, { command: 'serve-stop', serveID }, () => {
+        sendRequest<protocol.ServeStopRequest, null>(refs, { command: 'serve-stop', key }, () => {
           // We don't care about the result
         });
       },
@@ -974,7 +1017,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
       if (streamIn.isSync) return handleError(new Error('Cannot use plugins in synchronous API calls'), '');
 
       // Plugins can use async/await because they can't be run with "buildSync"
-      handlePlugins(options, plugins, key, details).then(
+      handlePlugins(options, plugins, key, details, refs).then(
         result => {
           if (!result.ok) {
             handleError(result.error, result.pluginName);
@@ -1082,7 +1125,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
       nodePaths,
     };
     if (requestPlugins) request.plugins = requestPlugins;
-    let serve = serveOptions && buildServeData(refs, serveOptions, request);
+    let serve = serveOptions && buildServeData(refs, serveOptions, request, key);
 
     // Factor out response handling so it can be reused for rebuilds
     let rebuild: types.BuildResult['rebuild'] | undefined;
@@ -1107,12 +1150,12 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         }
 
         // Handle incremental rebuilds
-        if (response!.rebuildID !== void 0) {
+        if (response!.rebuild) {
           if (!rebuild) {
             let isDisposed = false;
             (rebuild as any) = () => new Promise<types.BuildResult>((resolve, reject) => {
               if (isDisposed || isClosed) throw new Error('Cannot rebuild');
-              sendRequest<protocol.RebuildRequest, protocol.BuildResponse>(refs, { command: 'rebuild', rebuildID: response!.rebuildID! },
+              sendRequest<protocol.RebuildRequest, protocol.BuildResponse>(refs, { command: 'rebuild', key },
                 (error2, response2) => {
                   if (error2) {
                     const message: types.Message = { pluginName: '', text: error2, location: null, notes: [], detail: void 0 };
@@ -1128,7 +1171,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
             rebuild!.dispose = () => {
               if (isDisposed) return;
               isDisposed = true;
-              sendRequest<protocol.RebuildDisposeRequest, null>(refs, { command: 'rebuild-dispose', rebuildID: response!.rebuildID! }, () => {
+              sendRequest<protocol.RebuildDisposeRequest, null>(refs, { command: 'rebuild-dispose', key }, () => {
                 // We don't care about the result
               });
               refs.unref() // Do this after the callback so "sendRequest" can extend the lifetime
@@ -1138,21 +1181,21 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         }
 
         // Handle watch mode
-        if (response!.watchID !== void 0) {
+        if (response!.watch) {
           if (!stop) {
             let isStopped = false;
             refs.ref()
             stop = () => {
               if (isStopped) return;
               isStopped = true;
-              watchCallbacks.delete(response!.watchID!);
-              sendRequest<protocol.WatchStopRequest, null>(refs, { command: 'watch-stop', watchID: response!.watchID! }, () => {
+              watchCallbacks.delete(key);
+              sendRequest<protocol.WatchStopRequest, null>(refs, { command: 'watch-stop', key }, () => {
                 // We don't care about the result
               });
               refs.unref() // Do this after the callback so "sendRequest" can extend the lifetime
             }
             if (watch) {
-              watchCallbacks.set(response!.watchID, (serviceStopError, watchResponse) => {
+              watchCallbacks.set(key, (serviceStopError, watchResponse) => {
                 if (serviceStopError) {
                   if (watch!.onRebuild) watch!.onRebuild(serviceStopError as any, null);
                   return;

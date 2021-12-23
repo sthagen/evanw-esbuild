@@ -1,12 +1,90 @@
 # Changelog
 
+## 0.14.8
+
+* Add a `resolve` API for plugins ([#641](https://github.com/evanw/esbuild/issues/641), [#1652](https://github.com/evanw/esbuild/issues/1652))
+
+    Plugins now have access to a new API called `resolve` that runs esbuild's path resolution logic and returns the result to the caller. This lets you write plugins that can reuse esbuild's complex built-in path resolution logic to change the inputs and/or adjust the outputs. Here's an example:
+
+    ```js
+    let examplePlugin = {
+      name: 'example',
+      setup(build) {
+        build.onResolve({ filter: /^example$/ }, async () => {
+          const result = await build.resolve('./foo', { resolveDir: '/bar' })
+          if (result.errors.length > 0) return result
+          return { ...result, external: true }
+        })
+      },
+    }
+    ```
+
+    This plugin intercepts imports to the path `example`, tells esbuild to resolve the import `./foo` in the directory `/bar`, and then forces whatever path esbuild returns to be considered external. Here are some additional details:
+
+    * If you don't pass the optional `resolveDir` parameter, esbuild will still run `onResolve` plugin callbacks but will not attempt any path resolution itself. All of esbuild's path resolution logic depends on the `resolveDir` parameter including looking for packages in `node_modules` directories (since it needs to know where those `node_modules` directories might be).
+
+    * If you want to resolve a file name in a specific directory, make sure the input path starts with `./`. Otherwise the input path will be treated as a package path instead of a relative path. This behavior is identical to esbuild's normal path resolution logic.
+
+    * If path resolution fails, the `errors` property on the returned object will be a non-empty array containing the error information. This function does not always throw an error when it fails. You need to check for errors after calling it.
+
+    * The behavior of this function depends on the build configuration. That's why it's a property of the `build` object instead of being a top-level API call. This also means you can't call it until all plugin `setup` functions have finished since these give plugins the opportunity to adjust the build configuration before it's frozen at the start of the build. So the new `resolve` function is going to be most useful inside your `onResolve` and/or `onLoad` callbacks.
+
+    * There is currently no attempt made to detect infinite path resolution loops. Calling `resolve` from within `onResolve` with the same parameters is almost certainly a bad idea.
+
+* Avoid the CJS-to-ESM wrapper in some cases ([#1831](https://github.com/evanw/esbuild/issues/1831))
+
+    Import statements are converted into `require()` calls when the output format is set to CommonJS. To convert from CommonJS semantics to ES module semantics, esbuild wraps the return value in a call to esbuild's `__toESM()` helper function. However, the conversion is only needed if it's possible that the exports named `default` or `__esModule` could be accessed.
+
+    This release avoids calling this helper function in cases where esbuild knows it's impossible for the `default` or `__esModule` exports to be accessed, which results in smaller and faster code. To get this behavior, you have to use the `import {} from` import syntax:
+
+    ```js
+    // Original code
+    import { readFile } from "fs";
+    readFile();
+
+    // Old output (with --format=cjs)
+    var __toESM = (module, isNodeMode) => {
+      ...
+    };
+    var import_fs = __toESM(require("fs"));
+    (0, import_fs.readFile)();
+
+    // New output (with --format=cjs)
+    var import_fs = require("fs");
+    (0, import_fs.readFile)();
+    ```
+
+* Strip overwritten function declarations when minifying ([#610](https://github.com/evanw/esbuild/issues/610))
+
+    JavaScript allows functions to be re-declared, with each declaration overwriting the previous declaration. This type of code can sometimes be emitted by automatic code generators. With this release, esbuild now takes this behavior into account when minifying to drop all but the last declaration for a given function:
+
+    ```js
+    // Original code
+    function foo() { console.log(1) }
+    function foo() { console.log(2) }
+
+    // Old output (with --minify)
+    function foo(){console.log(1)}function foo(){console.log(2)}
+
+    // New output (with --minify)
+    function foo(){console.log(2)}
+    ```
+
+* Add support for the Linux IBM Z 64-bit Big Endian platform ([#1864](https://github.com/evanw/esbuild/pull/1864))
+
+    With this release, the esbuild package now includes a Linux binary executable for the IBM System/390 64-bit architecture. This new platform was contributed by [@shahidhs-ibm](https://github.com/shahidhs-ibm).
+
+* Allow whitespace around `:` in JSX elements ([#1877](https://github.com/evanw/esbuild/issues/1877))
+
+    This release allows you to write the JSX `<rdf:Description rdf:ID="foo" />` as `<rdf : Description rdf : ID="foo" />` instead. Doing this is not forbidden by [the JSX specification](https://facebook.github.io/jsx/). While this doesn't work in TypeScript, it does work with other JSX parsers in the ecosystem, so support for this has been added to esbuild.
+
 ## 0.14.7
 
 * Cross-module inlining of TypeScript `enum` constants ([#128](https://github.com/evanw/esbuild/issues/128))
 
     This release adds inlining of TypeScript `enum` constants across separate modules. It activates when bundling is enabled and when the enum is exported via the `export` keyword and imported via the `import` keyword:
 
-    ```js
+    ```ts
     // foo.ts
     export enum Foo { Bar }
 

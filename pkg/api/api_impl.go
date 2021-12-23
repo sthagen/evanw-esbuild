@@ -719,6 +719,11 @@ func buildImpl(buildOpts BuildOptions) internalBuildResult {
 	// Validate that the current working directory is an absolute path
 	realFS, err := fs.RealFS(fs.RealFSOptions{
 		AbsWorkingDir: buildOpts.AbsWorkingDir,
+
+		// This is a long-lived file system object so do not cache calls to
+		// ReadDirectory() (they are normally cached for the duration of a build
+		// for performance).
+		DoNotCache: true,
 	})
 	if err != nil {
 		log.Add(logger.Error, nil, logger.Range{}, err.Error())
@@ -728,13 +733,14 @@ func buildImpl(buildOpts BuildOptions) internalBuildResult {
 	// Do not re-evaluate plugins when rebuilding. Also make sure the working
 	// directory doesn't change, since breaking that invariant would break the
 	// validation that we just did above.
+	caches := cache.MakeCacheSet()
 	oldAbsWorkingDir := buildOpts.AbsWorkingDir
-	plugins, onEndCallbacks := loadPlugins(&buildOpts, realFS, log)
+	plugins, onEndCallbacks, finalizeBuildOptions := loadPlugins(&buildOpts, realFS, log, caches)
 	if buildOpts.AbsWorkingDir != oldAbsWorkingDir {
 		panic("Mutating \"AbsWorkingDir\" is not allowed")
 	}
 
-	internalResult := rebuildImpl(buildOpts, cache.MakeCacheSet(), plugins, onEndCallbacks, logOptions, log, false /* isRebuild */)
+	internalResult := rebuildImpl(buildOpts, caches, plugins, finalizeBuildOptions, onEndCallbacks, logOptions, log, false /* isRebuild */)
 
 	// Print a summary of the generated files to stderr. Except don't do
 	// this if the terminal is already being used for something else.
@@ -801,6 +807,7 @@ func rebuildImpl(
 	buildOpts BuildOptions,
 	caches *cache.CacheSet,
 	plugins []config.Plugin,
+	finalizeBuildOptions func(*config.Options),
 	onEndCallbacks []func(*BuildResult),
 	logOptions logger.OutputOptions,
 	log logger.Log,
@@ -976,6 +983,11 @@ func rebuildImpl(
 			timer = &helpers.Timer{}
 		}
 
+		// Finalize the build options, which will enable API methods that need them such as the "resolve" API
+		if finalizeBuildOptions != nil {
+			finalizeBuildOptions(&options)
+		}
+
 		// Scan over the bundle
 		bundle := bundler.ScanBundle(log, realFS, resolver, caches, entryPoints, options, timer)
 		watchData = realFS.WatchData()
@@ -1061,7 +1073,7 @@ func rebuildImpl(
 			data:     watchData,
 			resolver: resolver,
 			rebuild: func() fs.WatchData {
-				value := rebuildImpl(buildOpts, caches, plugins, onEndCallbacks, logOptions, logger.NewStderrLog(logOptions), true /* isRebuild */)
+				value := rebuildImpl(buildOpts, caches, plugins, nil, onEndCallbacks, logOptions, logger.NewStderrLog(logOptions), true /* isRebuild */)
 				if onRebuild != nil {
 					go onRebuild(value.result)
 				}
@@ -1078,7 +1090,7 @@ func rebuildImpl(
 	var rebuild func() BuildResult
 	if buildOpts.Incremental {
 		rebuild = func() BuildResult {
-			value := rebuildImpl(buildOpts, caches, plugins, onEndCallbacks, logOptions, logger.NewStderrLog(logOptions), true /* isRebuild */)
+			value := rebuildImpl(buildOpts, caches, plugins, nil, onEndCallbacks, logOptions, logger.NewStderrLog(logOptions), true /* isRebuild */)
 			if watch != nil {
 				watch.setWatchData(value.watchData)
 			}
@@ -1203,7 +1215,7 @@ func (w *watcher) tryToFindDirtyPath() string {
 			items = append(items, path)
 		}
 		rand.Seed(time.Now().UnixNano())
-		for i := int32(len(items) - 1); i > 0; i-- { // Fisher–Yates shuffle
+		for i := int32(len(items) - 1); i > 0; i-- { // Fisher-Yates shuffle
 			j := rand.Int31n(i + 1)
 			items[i], items[j] = items[j], items[i]
 		}
@@ -1421,7 +1433,7 @@ type pluginImpl struct {
 	plugin config.Plugin
 }
 
-func (impl *pluginImpl) OnStart(callback func() (OnStartResult, error)) {
+func (impl *pluginImpl) onStart(callback func() (OnStartResult, error)) {
 	impl.plugin.OnStart = append(impl.plugin.OnStart, config.OnStart{
 		Name: impl.plugin.Name,
 		Callback: func() (result config.OnStartResult) {
@@ -1445,7 +1457,49 @@ func (impl *pluginImpl) OnStart(callback func() (OnStartResult, error)) {
 	})
 }
 
-func (impl *pluginImpl) OnResolve(options OnResolveOptions, callback func(OnResolveArgs) (OnResolveResult, error)) {
+func importKindToResolveKind(kind ast.ImportKind) ResolveKind {
+	switch kind {
+	case ast.ImportEntryPoint:
+		return ResolveEntryPoint
+	case ast.ImportStmt:
+		return ResolveJSImportStatement
+	case ast.ImportRequire:
+		return ResolveJSRequireCall
+	case ast.ImportDynamic:
+		return ResolveJSDynamicImport
+	case ast.ImportRequireResolve:
+		return ResolveJSRequireResolve
+	case ast.ImportAt, ast.ImportAtConditional:
+		return ResolveCSSImportRule
+	case ast.ImportURL:
+		return ResolveCSSURLToken
+	default:
+		panic("Internal error")
+	}
+}
+
+func resolveKindToImportKind(kind ResolveKind) ast.ImportKind {
+	switch kind {
+	case ResolveEntryPoint:
+		return ast.ImportEntryPoint
+	case ResolveJSImportStatement:
+		return ast.ImportStmt
+	case ResolveJSRequireCall:
+		return ast.ImportRequire
+	case ResolveJSDynamicImport:
+		return ast.ImportDynamic
+	case ResolveJSRequireResolve:
+		return ast.ImportRequireResolve
+	case ResolveCSSImportRule:
+		return ast.ImportAt
+	case ResolveCSSURLToken:
+		return ast.ImportURL
+	default:
+		panic("Internal error")
+	}
+}
+
+func (impl *pluginImpl) onResolve(options OnResolveOptions, callback func(OnResolveArgs) (OnResolveResult, error)) {
 	filter, err := config.CompileFilterForPlugin(impl.plugin.Name, "OnResolve", options.Filter)
 	if filter == nil {
 		impl.log.Add(logger.Error, nil, logger.Range{}, err.Error())
@@ -1457,32 +1511,12 @@ func (impl *pluginImpl) OnResolve(options OnResolveOptions, callback func(OnReso
 		Filter:    filter,
 		Namespace: options.Namespace,
 		Callback: func(args config.OnResolveArgs) (result config.OnResolveResult) {
-			var kind ResolveKind
-			switch args.Kind {
-			case ast.ImportEntryPoint:
-				kind = ResolveEntryPoint
-			case ast.ImportStmt:
-				kind = ResolveJSImportStatement
-			case ast.ImportRequire:
-				kind = ResolveJSRequireCall
-			case ast.ImportDynamic:
-				kind = ResolveJSDynamicImport
-			case ast.ImportRequireResolve:
-				kind = ResolveJSRequireResolve
-			case ast.ImportAt, ast.ImportAtConditional:
-				kind = ResolveCSSImportRule
-			case ast.ImportURL:
-				kind = ResolveCSSURLToken
-			default:
-				panic("Internal error")
-			}
-
 			response, err := callback(OnResolveArgs{
 				Path:       args.Path,
 				Importer:   args.Importer.Text,
 				Namespace:  args.Importer.Namespace,
 				ResolveDir: args.ResolveDir,
-				Kind:       kind,
+				Kind:       importKindToResolveKind(args.Kind),
 				PluginData: args.PluginData,
 			})
 			result.PluginName = response.PluginName
@@ -1521,7 +1555,7 @@ func (impl *pluginImpl) OnResolve(options OnResolveOptions, callback func(OnReso
 	})
 }
 
-func (impl *pluginImpl) OnLoad(options OnLoadOptions, callback func(OnLoadArgs) (OnLoadResult, error)) {
+func (impl *pluginImpl) onLoad(options OnLoadOptions, callback func(OnLoadArgs) (OnLoadResult, error)) {
 	filter, err := config.CompileFilterForPlugin(impl.plugin.Name, "OnLoad", options.Filter)
 	if filter == nil {
 		impl.log.Add(logger.Error, nil, logger.Range{}, err.Error())
@@ -1580,13 +1614,29 @@ func (impl *pluginImpl) validatePathsArray(pathsIn []string, name string) (paths
 	return
 }
 
-func loadPlugins(initialOptions *BuildOptions, fs fs.FS, log logger.Log) (plugins []config.Plugin, onEndCallbacks []func(*BuildResult)) {
+func loadPlugins(initialOptions *BuildOptions, fs fs.FS, log logger.Log, caches *cache.CacheSet) (
+	plugins []config.Plugin,
+	onEndCallbacks []func(*BuildResult),
+	finalizeBuildOptions func(*config.Options),
+) {
 	onEnd := func(callback func(*BuildResult)) {
 		onEndCallbacks = append(onEndCallbacks, callback)
 	}
 
 	// Clone the plugin array to guard against mutation during iteration
 	clone := append(make([]Plugin, 0, len(initialOptions.Plugins)), initialOptions.Plugins...)
+
+	var resolveMutex sync.Mutex
+	var optionsForResolve *config.Options
+
+	// This is called when the build options are finalized
+	finalizeBuildOptions = func(options *config.Options) {
+		resolveMutex.Lock()
+		if optionsForResolve == nil {
+			optionsForResolve = options
+		}
+		resolveMutex.Unlock()
+	}
 
 	for i, item := range clone {
 		if item.Name == "" {
@@ -1600,16 +1650,87 @@ func loadPlugins(initialOptions *BuildOptions, fs fs.FS, log logger.Log) (plugin
 			plugin: config.Plugin{Name: item.Name},
 		}
 
+		resolve := func(path string, options ResolveOptions) (result ResolveResult) {
+			// Try to grab the resolver options
+			resolveMutex.Lock()
+			buildOptions := optionsForResolve
+			resolveMutex.Unlock()
+
+			// If we couldn't grab them, then this is being called before plugin setup
+			// has finished. That isn't allowed because plugin setup is allowed to
+			// change the initial options object, which can affect path resolution.
+			if buildOptions == nil {
+				return ResolveResult{Errors: []Message{{Text: "Cannot call \"resolve\" before plugin setup has completed"}}}
+			}
+
+			// Make a new resolver so it has its own log
+			log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug)
+			resolver := resolver.NewResolver(fs, log, caches, *buildOptions)
+
+			// Make sure the resolve directory is an absolute path, which can fail
+			absResolveDir := validatePath(log, fs, options.ResolveDir, "resolve directory")
+			if log.HasErrors() {
+				msgs := log.Done()
+				result.Errors = convertMessagesToPublic(logger.Error, msgs)
+				result.Warnings = convertMessagesToPublic(logger.Warning, msgs)
+				return
+			}
+
+			// Run path resolution
+			kind := resolveKindToImportKind(options.Kind)
+			resolveResult, _, _ := bundler.RunOnResolvePlugins(
+				plugins,
+				resolver,
+				log,
+				fs,
+				&caches.FSCache,
+				nil,            // importSource
+				logger.Range{}, // importPathRange
+				logger.Path{Text: options.Importer, Namespace: options.Namespace},
+				path,
+				kind,
+				absResolveDir,
+				options.PluginData,
+			)
+			msgs := log.Done()
+
+			// Populate the result
+			result.Errors = convertMessagesToPublic(logger.Error, msgs)
+			result.Warnings = convertMessagesToPublic(logger.Warning, msgs)
+			if resolveResult != nil {
+				result.Path = resolveResult.PathPair.Primary.Text
+				result.External = resolveResult.IsExternal
+				result.SideEffects = resolveResult.PrimarySideEffectsData == nil
+				result.Namespace = resolveResult.PathPair.Primary.Namespace
+				result.Suffix = resolveResult.PathPair.Primary.IgnoredSuffix
+				result.PluginData = resolveResult.PluginData
+			} else if len(result.Errors) == 0 {
+				// Always fail with at least one error
+				pluginName := item.Name
+				if options.PluginName != "" {
+					pluginName = options.PluginName
+				}
+				text, notes := bundler.ResolveFailureErrorTextAndNotes(resolver, path, kind, pluginName, fs, absResolveDir, buildOptions.Platform, "")
+				result.Errors = append(result.Errors, convertMessagesToPublic(logger.Error, []logger.Msg{{
+					Data:  logger.MsgData{Text: text},
+					Notes: notes,
+				}})...)
+			}
+			return
+		}
+
 		item.Setup(PluginBuild{
 			InitialOptions: initialOptions,
-			OnStart:        impl.OnStart,
+			Resolve:        resolve,
+			OnStart:        impl.onStart,
 			OnEnd:          onEnd,
-			OnResolve:      impl.OnResolve,
-			OnLoad:         impl.OnLoad,
+			OnResolve:      impl.onResolve,
+			OnLoad:         impl.onLoad,
 		})
 
 		plugins = append(plugins, impl.plugin)
 	}
+
 	return
 }
 

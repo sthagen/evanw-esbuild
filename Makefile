@@ -22,12 +22,23 @@ test-all:
 check-go-version:
 	@go version | grep ' go1\.17\.5 ' || (echo 'Please install Go version 1.17.5' && false)
 
-# This "ESBUILD_RACE" variable exists at the request of a user on GitHub who
-# wants to run "make test" on an unsupported version of macOS (version 10.9).
-# Go's race detector does not run correctly on that version. With this flag
-# you can run "ESBUILD_RACE= make test" to disable the race detector.
-ESBUILD_RACE ?= -race
-
+# Note: Don't add "-race" here by default. The Go race detector is currently
+# only supported on the following configurations:
+#
+#   darwin/amd64
+#   darwin/arm64
+#   freebsd/amd64,
+#   linux/amd64
+#   linux/arm64
+#   linux/ppc64le
+#   netbsd/amd64
+#   windows/amd64
+#
+# Also, it isn't necessarily supported on older OS versions even if the OS/CPU
+# combination is supported, such as on macOS 10.9. If you want to test using
+# the race detector, you can manually add it using the ESBUILD_RACE environment
+# variable like this: "ESBUILD_RACE=-race make test". Or you can permanently
+# enable it by adding "export ESBUILD_RACE=-race" to your shell profile.
 test-go:
 	go test $(ESBUILD_RACE) ./internal/...
 
@@ -230,6 +241,7 @@ platform-all:
 		platform-linux-arm64 \
 		platform-linux-mips64le \
 		platform-linux-ppc64le \
+		platform-linux-s390x \
 		platform-sunos \
 		platform-wasm \
 		platform-neutral \
@@ -293,6 +305,9 @@ platform-linux-mips64le:
 platform-linux-ppc64le:
 	@$(MAKE) --no-print-directory GOOS=linux GOARCH=ppc64le NPMDIR=npm/esbuild-linux-ppc64le platform-unixlike
 
+platform-linux-s390x:
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=s390x NPMDIR=npm/esbuild-linux-s390x platform-unixlike
+
 platform-sunos:
 	@$(MAKE) --no-print-directory GOOS=illumos GOARCH=amd64 NPMDIR=npm/esbuild-sunos-64 platform-unixlike
 
@@ -307,7 +322,7 @@ platform-neutral: esbuild
 platform-deno: esbuild
 	node scripts/esbuild.js ./esbuild --deno
 
-publish-all:
+publish-all: check-go-version
 	@npm --version > /dev/null || (echo "The 'npm' command must be in your path to publish" && false)
 	@echo "Checking for uncommitted/untracked changes..." && test -z "`git status --porcelain | grep -vE 'M (CHANGELOG\.md|version\.txt)'`" || \
 		(echo "Refusing to publish with these uncommitted/untracked changes:" && \
@@ -359,7 +374,8 @@ publish-all:
 	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
 		publish-linux-arm64 \
 		publish-linux-mips64le \
-		publish-linux-ppc64le
+		publish-linux-ppc64le \
+		publish-linux-s390x
 
 	# Do these last to avoid race conditions
 	@echo Enter one-time password:
@@ -418,6 +434,9 @@ publish-linux-mips64le: platform-linux-mips64le
 publish-linux-ppc64le: platform-linux-ppc64le
 	test -n "$(OTP)" && cd npm/esbuild-linux-ppc64le && npm publish --otp="$(OTP)"
 
+publish-linux-s390x: platform-linux-s390x
+	test -n "$(OTP)" && cd npm/esbuild-linux-s390x && npm publish --otp="$(OTP)"
+
 publish-sunos: platform-sunos
 	test -n "$(OTP)" && cd npm/esbuild-sunos-64 && npm publish --otp="$(OTP)"
 
@@ -453,6 +472,7 @@ clean:
 	rm -rf npm/esbuild-linux-arm64/bin
 	rm -rf npm/esbuild-linux-mips64le/bin
 	rm -rf npm/esbuild-linux-ppc64le/bin
+	rm -rf npm/esbuild-linux-s390x/bin
 	rm -rf npm/esbuild-sunos-64/bin
 	rm -f npm/esbuild-wasm/esbuild.wasm npm/esbuild-wasm/wasm_exec.js
 	rm -rf npm/esbuild/lib
