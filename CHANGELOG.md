@@ -1,5 +1,117 @@
 # Changelog
 
+## Unreleased
+
+* Enable tree shaking of classes with lowered static fields ([#175](https://github.com/evanw/esbuild/issues/175))
+
+    If the configured target environment doesn't support static class fields, they are converted into a call to esbuild's `__publicField` function instead. However, esbuild's tree-shaking pass treated this call as a side effect, which meant that all classes with static fields were ineligible for tree shaking. This release fixes the problem by explicitly ignoring calls to the `__publicField` function during tree shaking side-effect determination. Tree shaking is now enabled for these classes:
+
+    ```js
+    // Original code
+    class Foo { static foo = 'foo' }
+    class Bar { static bar = 'bar' }
+    new Bar()
+
+    // Old output (with --tree-shaking=true --target=es6)
+    class Foo {
+    }
+    __publicField(Foo, "foo", "foo");
+    class Bar {
+    }
+    __publicField(Bar, "bar", "bar");
+    new Bar();
+
+    // New output (with --tree-shaking=true --target=es6)
+    class Bar {
+    }
+    __publicField(Bar, "bar", "bar");
+    new Bar();
+    ```
+
+* Treat `--define:foo=undefined` as an undefined literal instead of an identifier ([#1407](https://github.com/evanw/esbuild/issues/1407))
+
+    References to the global variable `undefined` are automatically replaced with the literal value for undefined, which appears as `void 0` when printed. This allows for additional optimizations such as collapsing `undefined ?? bar` into just `bar`. However, this substitution was not done for values specified via `--define:`. As a result, esbuild could potentially miss out on certain optimizations in these cases. With this release, it's now possible to use `--define:` to substitute something with an undefined literal:
+
+    ```js
+    // Original code
+    let win = typeof window !== 'undefined' ? window : {}
+
+    // Old output (with --define:window=undefined --minify)
+    let win=typeof undefined!="undefined"?undefined:{};
+
+    // New output (with --define:window=undefined --minify)
+    let win={};
+    ```
+
+* Add the `--drop:debugger` flag ([#1809](https://github.com/evanw/esbuild/issues/1809))
+
+    Passing this flag causes all [`debugger;` statements](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/debugger) to be removed from the output. This is similar to the `drop_debugger: true` flag available in the popular UglifyJS and Terser JavaScript minifiers.
+
+* Add the `--drop:console` flag ([#28](https://github.com/evanw/esbuild/issues/28))
+
+    Passing this flag causes all [`console.xyz()` API calls](https://developer.mozilla.org/en-US/docs/Web/API/console#methods) to be removed from the output. This is similar to the `drop_console: true` flag available in the popular UglifyJS and Terser JavaScript minifiers.
+
+    WARNING: Using this flag can introduce bugs into your code! This flag removes the entire call expression including all call arguments. If any of those arguments had important side effects, using this flag will change the behavior of your code. Be very careful when using this flag. If you want to remove console API calls without removing arguments with side effects (which does not introduce bugs), you should mark the relevant API calls as pure instead like this: `--pure:console.log --minify`.
+
+## 0.14.9
+
+* Implement cross-module tree shaking of TypeScript enum values ([#128](https://github.com/evanw/esbuild/issues/128))
+
+    If your bundle uses TypeScript enums across multiple files, esbuild is able to inline the enum values as long as you export and import the enum using the ES module `export` and `import` keywords. However, this previously still left the definition of the enum in the bundle even when it wasn't used anymore. This was because esbuild's tree shaking (i.e. dead code elimination) is based on information recorded during parsing, and at that point we don't know which imported symbols are inlined enum values and which aren't.
+
+    With this release, esbuild will now remove enum definitions that become unused due to cross-module enum value inlining. Property accesses off of imported symbols are now tracked separately during parsing and then resolved during linking once all inlined enum values are known. This behavior change means esbuild's support for cross-module inlining of TypeScript enums is now finally complete. Here's an example:
+
+    ```js
+    // entry.ts
+    import { Foo } from './enum'
+    console.log(Foo.Bar)
+
+    // enum.ts
+    export enum Foo { Bar }
+    ```
+
+    Bundling the example code above now results in the enum definition being completely removed from the bundle:
+
+    ```js
+    // Old output (with --bundle --minify --format=esm)
+    var r=(o=>(o[o.Bar=0]="Bar",o))(r||{});console.log(0);
+
+    // New output (with --bundle --minify --format=esm)
+    console.log(0);
+    ```
+
+* Fix a regression with `export {} from` and CommonJS ([#1890](https://github.com/evanw/esbuild/issues/1890))
+
+    This release fixes a regression that was introduced by the change in 0.14.7 that avoids calling the `__toESM` wrapper for import statements that are converted to `require` calls and that don't use the `default` or `__esModule` export names. The previous change was correct for the `import {} from` syntax but not for the `export {} from` syntax, which meant that in certain cases with re-exported values, the value of the `default` import could be different than expected. This release fixes the regression.
+
+* Warn about using `module` or `exports` in ESM code ([#1887](https://github.com/evanw/esbuild/issues/1887))
+
+    CommonJS export variables cannot be referenced in ESM code. If you do this, they are treated as global variables instead. This release includes a warning for people that try to use both CommonJS and ES module export styles in the same file. Here's an example:
+
+    ```ts
+    export enum Something {
+      a,
+      b,
+    }
+    module.exports = { a: 1, b: 2 }
+    ```
+
+    Running esbuild on that code now generates a warning that looks like this:
+
+    ```
+    ▲ [WARNING] The CommonJS "module" variable is treated as a global variable in an ECMAScript module and may not work as expected
+
+        example.ts:5:0:
+          5 │ module.exports = { a: 1, b: 2 }
+            ╵ ~~~~~~
+
+      This file is considered to be an ECMAScript module because of the "export" keyword here:
+
+        example.ts:1:0:
+          1 │ export enum Something {
+            ╵ ~~~~~~
+    ```
+
 ## 0.14.8
 
 * Add a `resolve` API for plugins ([#641](https://github.com/evanw/esbuild/issues/641), [#1652](https://github.com/evanw/esbuild/issues/1652))

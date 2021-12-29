@@ -3692,10 +3692,45 @@ let transformTests = {
     assert.strictEqual(code, `console.log("ab"+c);\n`)
   },
 
+  async keepConsole({ esbuild }) {
+    const { code } = await esbuild.transform(`console.log('foo')`, { drop: [] })
+    assert.strictEqual(code, `console.log("foo");\n`)
+  },
+
+  async dropConsole({ esbuild }) {
+    const { code } = await esbuild.transform(`
+      console('foo')
+      console.log('foo')
+      console.log(foo())
+      x = console.log(bar())
+      console.abc.xyz('foo')
+      console['log']('foo')
+      console[abc][xyz]('foo')
+      console[foo()][bar()]('foo')
+    `, { drop: ['console'] })
+    assert.strictEqual(code, `console("foo");\nx = void 0;\n`)
+  },
+
+  async keepDebugger({ esbuild }) {
+    const { code } = await esbuild.transform(`if (x) debugger`, { drop: [] })
+    assert.strictEqual(code, `if (x)\n  debugger;\n`)
+  },
+
+  async dropDebugger({ esbuild }) {
+    const { code } = await esbuild.transform(`if (x) debugger`, { drop: ['debugger'] })
+    assert.strictEqual(code, `if (x)\n  ;\n`)
+  },
+
   async define({ esbuild }) {
     const define = { 'process.env.NODE_ENV': '"production"' }
     const { code } = await esbuild.transform(`console.log(process.env.NODE_ENV)`, { define })
     assert.strictEqual(code, `console.log("production");\n`)
+  },
+
+  async defineBuiltInConstants({ esbuild }) {
+    const define = { a: 'NaN', b: 'Infinity', c: 'undefined', d: 'something' }
+    const { code } = await esbuild.transform(`console.log([typeof a, typeof b, typeof c, typeof d])`, { define })
+    assert.strictEqual(code, `console.log(["number", "number", "undefined", typeof something]);\n`)
   },
 
   async defineArray({ esbuild }) {

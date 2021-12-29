@@ -408,6 +408,68 @@ func TestTSMinifyEnum(t *testing.T) {
 	})
 }
 
+func TestTSMinifyNestedEnum(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/a.ts": `
+				function foo() { enum Foo { A, B, C = Foo } return Foo }
+			`,
+			"/b.ts": `
+				export function foo() { enum Foo { X, Y, Z = Foo } return Foo }
+			`,
+		},
+		entryPaths: []string{"/a.ts", "/b.ts"},
+		options: config.Options{
+			MangleSyntax:      true,
+			RemoveWhitespace:  true,
+			MinifyIdentifiers: true,
+			AbsOutputDir:      "/",
+		},
+	})
+}
+
+func TestTSMinifyNestedEnumNoLogicalAssignment(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/a.ts": `
+				function foo() { enum Foo { A, B, C = Foo } return Foo }
+			`,
+			"/b.ts": `
+				export function foo() { enum Foo { X, Y, Z = Foo } return Foo }
+			`,
+		},
+		entryPaths: []string{"/a.ts", "/b.ts"},
+		options: config.Options{
+			MangleSyntax:          true,
+			RemoveWhitespace:      true,
+			MinifyIdentifiers:     true,
+			AbsOutputDir:          "/",
+			UnsupportedJSFeatures: compat.LogicalAssignment,
+		},
+	})
+}
+
+func TestTSMinifyNestedEnumNoArrow(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/a.ts": `
+				function foo() { enum Foo { A, B, C = Foo } return Foo }
+			`,
+			"/b.ts": `
+				export function foo() { enum Foo { X, Y, Z = Foo } return Foo }
+			`,
+		},
+		entryPaths: []string{"/a.ts", "/b.ts"},
+		options: config.Options{
+			MangleSyntax:          true,
+			RemoveWhitespace:      true,
+			MinifyIdentifiers:     true,
+			AbsOutputDir:          "/",
+			UnsupportedJSFeatures: compat.Arrow,
+		},
+	})
+}
+
 func TestTSMinifyNamespace(t *testing.T) {
 	ts_suite.expectBundled(t, bundled{
 		files: map[string]string{
@@ -432,6 +494,64 @@ func TestTSMinifyNamespace(t *testing.T) {
 			RemoveWhitespace:  true,
 			MinifyIdentifiers: true,
 			AbsOutputDir:      "/",
+		},
+	})
+}
+
+func TestTSMinifyNamespaceNoLogicalAssignment(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/a.ts": `
+				namespace Foo {
+					export namespace Bar {
+						foo(Foo, Bar)
+					}
+				}
+			`,
+			"/b.ts": `
+				export namespace Foo {
+					export namespace Bar {
+						foo(Foo, Bar)
+					}
+				}
+			`,
+		},
+		entryPaths: []string{"/a.ts", "/b.ts"},
+		options: config.Options{
+			MangleSyntax:          true,
+			RemoveWhitespace:      true,
+			MinifyIdentifiers:     true,
+			AbsOutputDir:          "/",
+			UnsupportedJSFeatures: compat.LogicalAssignment,
+		},
+	})
+}
+
+func TestTSMinifyNamespaceNoArrow(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/a.ts": `
+				namespace Foo {
+					export namespace Bar {
+						foo(Foo, Bar)
+					}
+				}
+			`,
+			"/b.ts": `
+				export namespace Foo {
+					export namespace Bar {
+						foo(Foo, Bar)
+					}
+				}
+			`,
+		},
+		entryPaths: []string{"/a.ts", "/b.ts"},
+		options: config.Options{
+			MangleSyntax:          true,
+			RemoveWhitespace:      true,
+			MinifyIdentifiers:     true,
+			AbsOutputDir:          "/",
+			UnsupportedJSFeatures: compat.Arrow,
 		},
 	})
 }
@@ -1682,6 +1802,58 @@ func TestTSEnumCrossModuleInliningReExport(t *testing.T) {
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+		},
+	})
+}
+
+func TestTSEnumCrossModuleTreeShaking(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.ts": `
+				import {
+					a_DROP,
+					b_DROP,
+					c_DROP,
+				} from './enums'
+
+				console.log([
+					a_DROP.x,
+					b_DROP['x'],
+					c_DROP.x,
+				])
+
+				import {
+					a_keep,
+					b_keep,
+					c_keep,
+					d_keep,
+					e_keep,
+				} from './enums'
+
+				console.log([
+					a_keep.x,
+					b_keep.x,
+					c_keep,
+					d_keep.y,
+					e_keep.x,
+				])
+			`,
+			"/enums.ts": `
+				export enum a_DROP { x = 1 }  // test a dot access
+				export enum b_DROP { x = 2 }  // test an index access
+				export enum c_DROP { x = '' } // test a string enum
+
+				export enum a_keep { x = false } // false is not inlinable
+				export enum b_keep { x = foo }   // foo has side effects
+				export enum c_keep { x = 3 }     // this enum object is captured
+				export enum d_keep { x = 4 }     // we access "y" on this object
+				export let e_keep = {}           // non-enum properties should be kept
+			`,
+		},
+		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
 			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",

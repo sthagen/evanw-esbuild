@@ -43,7 +43,6 @@ type parser struct {
 	allowPrivateIdentifiers    bool
 	hasTopLevelReturn          bool
 	latestReturnHadSemicolon   bool
-	hasESModuleSyntax          bool
 	warnedThisIsUndefined      bool
 	topLevelAwaitKeyword       logger.Range
 	fnOrArrowDataParse         fnOrArrowDataParse
@@ -66,11 +65,26 @@ type parser struct {
 	injectedDefineSymbols      []js_ast.Ref
 	injectedSymbolSources      map[js_ast.Ref]injectedSymbolSource
 	symbolUses                 map[js_ast.Ref]js_ast.SymbolUse
+	importSymbolPropertyUses   map[js_ast.Ref]map[string]js_ast.SymbolUse
 	declaredSymbols            []js_ast.DeclaredSymbol
 	runtimeImports             map[string]js_ast.Ref
+	runtimePublicFieldImport   js_ast.Ref
 	duplicateCaseChecker       duplicateCaseChecker
 	unrepresentableIdentifiers map[string]bool
 	legacyOctalLiterals        map[js_ast.E]logger.Range
+
+	// A file is considered to be an ECMAScript module if it has any of the
+	// features of one (e.g. the "export" keyword), otherwise it's considered
+	// a CommonJS module.
+	//
+	// However, we have a single exception: a file where the only ESM feature
+	// is the "import" keyword is allowed to have CommonJS exports. This feature
+	// is necessary to be able to synchronously import ESM code into CommonJS,
+	// which we need to enable in a few important cases. Some examples are:
+	// our runtime code, injected files (the "inject" feature is ESM-only),
+	// and certain automatically-generated virtual modules from plugins.
+	isFileConsideredToHaveESMExports bool // Use only for export-related stuff
+	isFileConsideredESM              bool // Use for all other stuff
 
 	// For strict mode handling
 	hoistedRefForSloppyModeBlockFn map[js_ast.Ref]js_ast.Ref
@@ -130,15 +144,16 @@ type parser struct {
 	exportStarImportRecords     []uint32
 
 	// These are for handling ES6 imports and exports
-	es6ImportKeyword        logger.Range
-	es6ExportKeyword        logger.Range
-	enclosingClassKeyword   logger.Range
-	importItemsForNamespace map[js_ast.Ref]map[string]js_ast.LocRef
-	isImportItem            map[js_ast.Ref]bool
-	namedImports            map[js_ast.Ref]js_ast.NamedImport
-	namedExports            map[string]js_ast.NamedExport
-	topLevelSymbolToParts   map[js_ast.Ref][]uint32
-	importNamespaceCCMap    map[importNamespaceCall]bool
+	esmImportStatementKeyword logger.Range
+	esmImportMeta             logger.Range
+	esmExportKeyword          logger.Range
+	enclosingClassKeyword     logger.Range
+	importItemsForNamespace   map[js_ast.Ref]map[string]js_ast.LocRef
+	isImportItem              map[js_ast.Ref]bool
+	namedImports              map[js_ast.Ref]js_ast.NamedImport
+	namedExports              map[string]js_ast.NamedExport
+	topLevelSymbolToParts     map[js_ast.Ref][]uint32
+	importNamespaceCCMap      map[importNamespaceCall]bool
 
 	// The parser does two passes and we need to pass the scope tree information
 	// from the first pass to the second pass. That's done by tracking the calls
@@ -348,7 +363,7 @@ type optionsThatSupportStructuralEquality struct {
 	mode                    config.Mode
 	platform                config.Platform
 	outputFormat            config.Format
-	moduleType              js_ast.ModuleType
+	moduleTypeData          js_ast.ModuleTypeData
 	targetFromAPI           config.TargetFromAPI
 	asciiOnly               bool
 	keepNames               bool
@@ -357,6 +372,7 @@ type optionsThatSupportStructuralEquality struct {
 	omitRuntimeForTests     bool
 	ignoreDCEAnnotations    bool
 	treeShaking             bool
+	dropDebugger            bool
 	unusedImportsTS         config.UnusedImportsTS
 	useDefineForClassFields config.MaybeBool
 }
@@ -374,7 +390,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			mode:                    options.Mode,
 			platform:                options.Platform,
 			outputFormat:            options.OutputFormat,
-			moduleType:              options.ModuleType,
+			moduleTypeData:          options.ModuleTypeData,
 			targetFromAPI:           options.TargetFromAPI,
 			asciiOnly:               options.ASCIIOnly,
 			keepNames:               options.KeepNames,
@@ -383,6 +399,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			omitRuntimeForTests:     options.OmitRuntimeForTests,
 			ignoreDCEAnnotations:    options.IgnoreDCEAnnotations,
 			treeShaking:             options.TreeShaking,
+			dropDebugger:            options.DropDebugger,
 			unusedImportsTS:         options.UnusedImportsTS,
 			useDefineForClassFields: options.UseDefineForClassFields,
 		},
@@ -1271,7 +1288,7 @@ func (p *parser) popScope() {
 			// symbols in an ESM file when bundling is enabled. We make no guarantee
 			// that "eval" will be able to reach these symbols and we allow them to be
 			// renamed or removed by tree shaking.
-			if p.options.mode == config.ModeBundle && p.currentScope.Parent == nil && p.hasESModuleSyntax {
+			if p.options.mode == config.ModeBundle && p.currentScope.Parent == nil && p.isFileConsideredESM {
 				continue
 			}
 
@@ -1742,6 +1759,9 @@ func (p *parser) importFromRuntime(loc logger.Loc, name string) js_ast.Expr {
 		ref = p.newSymbol(js_ast.SymbolOther, name)
 		p.moduleScope.Generated = append(p.moduleScope.Generated, ref)
 		p.runtimeImports[name] = ref
+		if name == "__publicField" {
+			p.runtimePublicFieldImport = ref
+		}
 	}
 	p.recordUsage(ref)
 	return js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}}
@@ -3618,15 +3638,13 @@ func (p *parser) willNeedBindingPattern() bool {
 func (p *parser) parseImportExpr(loc logger.Loc, level js_ast.L) js_ast.Expr {
 	// Parse an "import.meta" expression
 	if p.lexer.Token == js_lexer.TDot {
-		p.es6ImportKeyword = js_lexer.RangeOfIdentifier(p.source, loc)
 		p.lexer.Next()
-		if p.lexer.IsContextualKeyword("meta") {
-			rangeLen := p.lexer.Range().End() - loc.Start
-			p.lexer.Next()
-			return js_ast.Expr{Loc: loc, Data: &js_ast.EImportMeta{RangeLen: rangeLen}}
-		} else {
+		if !p.lexer.IsContextualKeyword("meta") {
 			p.lexer.ExpectedString("\"meta\"")
 		}
+		p.esmImportMeta = logger.Range{Loc: loc, Len: p.lexer.Range().End() - loc.Start}
+		p.lexer.Next()
+		return js_ast.Expr{Loc: loc, Data: &js_ast.EImportMeta{RangeLen: p.esmImportMeta.Len}}
 	}
 
 	if level > js_ast.LCall {
@@ -5845,9 +5863,9 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		return js_ast.Stmt{Loc: loc, Data: &js_ast.SEmpty{}}
 
 	case js_lexer.TExport:
-		previousExportKeyword := p.es6ExportKeyword
+		previousExportKeyword := p.esmExportKeyword
 		if opts.isModuleScope {
-			p.es6ExportKeyword = p.lexer.Range()
+			p.esmExportKeyword = p.lexer.Range()
 		} else if !opts.isNamespaceScope {
 			p.lexer.Unexpected()
 		}
@@ -6128,7 +6146,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 
 		case js_lexer.TEquals:
 			// "export = value;"
-			p.es6ExportKeyword = previousExportKeyword // This wasn't an ESM export statement after all
+			p.esmExportKeyword = previousExportKeyword // This wasn't an ESM export statement after all
 			if p.options.ts.Parse {
 				p.lexer.Next()
 				value := p.parseExpr(js_ast.LLowest)
@@ -6544,8 +6562,8 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		}}
 
 	case js_lexer.TImport:
-		previousImportKeyword := p.es6ImportKeyword
-		p.es6ImportKeyword = p.lexer.Range()
+		previousImportStatementKeyword := p.esmImportStatementKeyword
+		p.esmImportStatementKeyword = p.lexer.Range()
 		p.lexer.Next()
 		stmt := js_ast.SImport{}
 		wasOriginallyBareImport := false
@@ -6560,7 +6578,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		case js_lexer.TOpenParen, js_lexer.TDot:
 			// "import('path')"
 			// "import.meta"
-			p.es6ImportKeyword = previousImportKeyword // This wasn't an ESM import statement after all
+			p.esmImportStatementKeyword = previousImportStatementKeyword // This wasn't an ESM import statement after all
 			expr := p.parseSuffix(p.parseImportExpr(loc, js_ast.LLowest), js_ast.LLowest, nil, 0)
 			p.lexer.ExpectOrInsertSemicolon()
 			return js_ast.Stmt{Loc: loc, Data: &js_ast.SExpr{Value: expr}}
@@ -6658,7 +6676,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 
 				// Parse TypeScript import assignment statements
 				if p.lexer.Token == js_lexer.TEquals || opts.isExport || (opts.isNamespaceScope && !opts.isTypeScriptDeclare) {
-					p.es6ImportKeyword = previousImportKeyword // This wasn't an ESM import statement after all
+					p.esmImportStatementKeyword = previousImportStatementKeyword // This wasn't an ESM import statement after all
 					return p.parseTypeScriptImportEqualsStmt(loc, opts, stmt.DefaultName.Loc, defaultName)
 				}
 			}
@@ -8892,8 +8910,13 @@ func (p *parser) keepStmtSymbolName(loc logger.Loc, ref js_ast.Ref, name string)
 
 func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_ast.Stmt {
 	switch s := stmt.Data.(type) {
-	case *js_ast.SDebugger, *js_ast.SEmpty, *js_ast.SComment:
+	case *js_ast.SEmpty, *js_ast.SComment:
 		// These don't contain anything to traverse
+
+	case *js_ast.SDebugger:
+		if p.options.dropDebugger {
+			return stmts
+		}
 
 	case *js_ast.STypeScript:
 		// Erase TypeScript constructs from the output completely
@@ -9198,14 +9221,30 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		}
 
 	case *js_ast.SExpr:
+		shouldTrimUndefined := false
+		if !p.options.mangleSyntax {
+			if _, ok := s.Value.Data.(*js_ast.ECall); ok {
+				shouldTrimUndefined = true
+			}
+		}
+
 		p.stmtExprValue = s.Value.Data
 		s.Value = p.visitExpr(s.Value)
+
+		// If this was a call and is now undefined, then it probably was a console
+		// API call that was dropped with "--drop:console". Manually discard the
+		// undefined value even when we're not minifying for aesthetic reasons.
+		if shouldTrimUndefined {
+			if _, ok := s.Value.Data.(*js_ast.EUndefined); ok {
+				return stmts
+			}
+		}
 
 		// Trim expressions without side effects
 		if p.options.mangleSyntax {
 			s.Value = p.simplifyUnusedExpr(s.Value)
 			if s.Value.Data == nil {
-				stmt = js_ast.Stmt{Loc: stmt.Loc, Data: &js_ast.SEmpty{}}
+				return stmts
 			}
 		}
 
@@ -9215,7 +9254,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 	case *js_ast.SReturn:
 		// Forbid top-level return inside modules with ECMAScript syntax
 		if p.fnOrArrowDataVisit.isOutsideFnOrArrow {
-			if p.hasESModuleSyntax {
+			if p.isFileConsideredESM {
 				p.log.AddWithNotes(logger.Error, &p.tracker, js_lexer.RangeOfIdentifier(p.source, stmt.Loc),
 					"Top-level return cannot be used inside an ECMAScript module", p.whyESModule())
 			} else {
@@ -10721,6 +10760,34 @@ func (p *parser) maybeRewritePropertyAccess(
 		}
 	}
 
+	// Symbol uses due to a property access off of an imported symbol are tracked
+	// specially. This lets us do tree shaking for cross-file TypeScript enums.
+	if p.options.mode == config.ModeBundle && !p.isControlFlowDead {
+		if id, ok := target.Data.(*js_ast.EImportIdentifier); ok {
+			// Remove the normal symbol use
+			use := p.symbolUses[id.Ref]
+			use.CountEstimate--
+			if use.CountEstimate == 0 {
+				delete(p.symbolUses, id.Ref)
+			} else {
+				p.symbolUses[id.Ref] = use
+			}
+
+			// Add a special symbol use instead
+			if p.importSymbolPropertyUses == nil {
+				p.importSymbolPropertyUses = make(map[js_ast.Ref]map[string]js_ast.SymbolUse)
+			}
+			properties := p.importSymbolPropertyUses[id.Ref]
+			if properties == nil {
+				properties = make(map[string]js_ast.SymbolUse)
+				p.importSymbolPropertyUses[id.Ref] = properties
+			}
+			use = properties[name]
+			use.CountEstimate++
+			properties[name] = use
+		}
+	}
+
 	return js_ast.Expr{}, false
 }
 
@@ -10923,6 +10990,10 @@ type exprOut struct {
 	// with an IsOptionalChain value of true)
 	childContainsOptionalChain bool
 
+	// If true and this is used as a call target, the whole call expression
+	// must be replaced with undefined.
+	methodCallMustBeReplacedWithUndefined bool
+
 	// If our parent is an ECall node with an OptionalChain value of
 	// OptionalChainContinue, then we may need to return the value for "this"
 	// from this node or one of this node's children so that the parent that is
@@ -10978,7 +11049,7 @@ func (p *parser) valueForThis(
 
 		// Otherwise, replace top-level "this" with either "undefined" or "exports"
 		if p.options.mode != config.ModePassThrough {
-			if p.hasESModuleSyntax {
+			if p.isFileConsideredToHaveESMExports {
 				// Warn about "this" becoming undefined, but only once per file
 				if shouldWarn && !p.warnedThisIsUndefined {
 					p.warnedThisIsUndefined = true
@@ -11283,6 +11354,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// Substitute user-specified defines for unbound or injected symbols
+		methodCallMustBeReplacedWithUndefined := false
 		if p.symbols[e.Ref.InnerIndex].Kind.IsUnboundOrInjected() && !result.isInsideWithScope && e != p.deleteTarget {
 			if data, ok := p.options.defines.IdentifierDefines[name]; ok {
 				if data.DefineFunc != nil {
@@ -11307,15 +11379,20 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				if data.CallCanBeUnwrappedIfUnused && !p.options.ignoreDCEAnnotations {
 					e.CallCanBeUnwrappedIfUnused = true
 				}
+				if data.MethodCallsMustBeReplacedWithUndefined {
+					methodCallMustBeReplacedWithUndefined = true
+				}
 			}
 		}
 
 		return p.handleIdentifier(expr.Loc, e, identifierOpts{
-			assignTarget:            in.assignTarget,
-			isCallTarget:            isCallTarget,
-			isDeleteTarget:          isDeleteTarget,
-			wasOriginallyIdentifier: true,
-		}), exprOut{}
+				assignTarget:            in.assignTarget,
+				isCallTarget:            isCallTarget,
+				isDeleteTarget:          isDeleteTarget,
+				wasOriginallyIdentifier: true,
+			}), exprOut{
+				methodCallMustBeReplacedWithUndefined: methodCallMustBeReplacedWithUndefined,
+			}
 
 	case *js_ast.EPrivateIdentifier:
 		// We should never get here
@@ -11853,6 +11930,38 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				if result, ok := p.lowerAssign(e.Left, e.Right, mode); ok {
 					return result, exprOut{}
 				}
+
+				// If CommonJS-style exports are disabled, then references to them are
+				// treated as global variable references. This is consistent with how
+				// they work in node and the browser, so it's the correct interpretation.
+				//
+				// However, people sometimes try to use both types of exports within the
+				// same module and expect it to work. We warn about this when module
+				// format conversion is enabled.
+				//
+				// Only warn about this for uses in assignment position since there are
+				// some legitimate other uses. For example, some people do "typeof module"
+				// to check for a CommonJS environment, and we shouldn't warn on that.
+				if p.options.mode != config.ModePassThrough && p.isFileConsideredToHaveESMExports && !p.isControlFlowDead {
+					if dot, ok := e.Left.Data.(*js_ast.EDot); ok {
+						if id, ok := dot.Target.Data.(*js_ast.EIdentifier); ok {
+							if symbol := &p.symbols[id.Ref.InnerIndex]; symbol.Kind == js_ast.SymbolUnbound &&
+								((symbol.OriginalName == "module" && dot.Name == "exports") || symbol.OriginalName == "exports") &&
+								!symbol.Flags.Has(js_ast.DidWarnAboutCommonJSInESM) {
+								// "module.exports = ..."
+								// "exports.something = ..."
+								kind := logger.Warning
+								if p.suppressWarningsAboutWeirdCode {
+									kind = logger.Debug
+								}
+								p.log.AddWithNotes(kind, &p.tracker, js_lexer.RangeOfIdentifier(p.source, dot.Target.Loc),
+									fmt.Sprintf("The CommonJS %q variable is treated as a global variable in an ECMAScript module and may not work as expected", symbol.OriginalName),
+									p.whyESModule())
+								symbol.Flags |= js_ast.DidWarnAboutCommonJSInESM
+							}
+						}
+					}
+				}
 			}
 
 		case js_ast.BinOpAddAssign:
@@ -12039,9 +12148,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 
 		// Potentially rewrite this property access
 		out = exprOut{
-			childContainsOptionalChain: containsOptionalChain,
-			thisArgFunc:                out.thisArgFunc,
-			thisArgWrapFunc:            out.thisArgWrapFunc,
+			childContainsOptionalChain:            containsOptionalChain,
+			methodCallMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
+			thisArgFunc:                           out.thisArgFunc,
+			thisArgWrapFunc:                       out.thisArgWrapFunc,
 		}
 		if !in.hasChainParent {
 			out.thisArgFunc = nil
@@ -12280,9 +12390,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 
 		// Potentially rewrite this property access
 		out = exprOut{
-			childContainsOptionalChain: containsOptionalChain,
-			thisArgFunc:                out.thisArgFunc,
-			thisArgWrapFunc:            out.thisArgWrapFunc,
+			childContainsOptionalChain:            containsOptionalChain,
+			methodCallMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
+			thisArgFunc:                           out.thisArgFunc,
+			thisArgWrapFunc:                       out.thisArgWrapFunc,
 		}
 		if !in.hasChainParent {
 			out.thisArgFunc = nil
@@ -12765,11 +12876,16 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			hasCatch:        p.thenCatchChain.nextTarget == e && p.thenCatchChain.hasCatch,
 		}
 
-		// Prepare to recognize "require.resolve()" calls
+		// Prepare to recognize "require.resolve()" and "Object.create" calls
 		couldBeRequireResolve := false
-		if len(e.Args) == 1 && p.options.mode != config.ModePassThrough {
-			if dot, ok := e.Target.Data.(*js_ast.EDot); ok && dot.OptionalChain == js_ast.OptionalChainNone && dot.Name == "resolve" {
-				couldBeRequireResolve = true
+		couldBeObjectCreate := false
+		if len(e.Args) == 1 {
+			if dot, ok := e.Target.Data.(*js_ast.EDot); ok && dot.OptionalChain == js_ast.OptionalChainNone {
+				if p.options.mode != config.ModePassThrough && dot.Name == "resolve" {
+					couldBeRequireResolve = true
+				} else if dot.Name == "create" {
+					couldBeObjectCreate = true
+				}
 			}
 		}
 
@@ -12795,6 +12911,19 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		p.warnAboutImportNamespaceCall(e.Target, exprKindCall)
 
 		hasSpread := false
+		oldIsControlFlowDead := p.isControlFlowDead
+
+		// If we're removing this call, don't count any arguments as symbol uses
+		if out.methodCallMustBeReplacedWithUndefined {
+			switch e.Target.Data.(type) {
+			case *js_ast.EDot, *js_ast.EIndex:
+				p.isControlFlowDead = true
+			default:
+				out.methodCallMustBeReplacedWithUndefined = false
+			}
+		}
+
+		// Visit the arguments
 		for i, arg := range e.Args {
 			arg = p.visitExpr(arg)
 			if _, ok := arg.Data.(*js_ast.ESpread); ok {
@@ -12803,43 +12932,62 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			e.Args[i] = arg
 		}
 
+		// Stop now if this call must be removed
+		if out.methodCallMustBeReplacedWithUndefined {
+			p.isControlFlowDead = oldIsControlFlowDead
+			return js_ast.Expr{Loc: expr.Loc, Data: js_ast.EUndefinedShared}, exprOut{}
+		}
+
 		// Recognize "require.resolve()" calls
 		if couldBeRequireResolve {
-			if dot, ok := e.Target.Data.(*js_ast.EDot); ok {
-				if id, ok := dot.Target.Data.(*js_ast.EIdentifier); ok {
-					if id.Ref == p.requireRef {
-						p.ignoreUsage(p.requireRef)
-						return p.maybeTransposeIfExprChain(e.Args[0], func(arg js_ast.Expr) js_ast.Expr {
-							if str, ok := e.Args[0].Data.(*js_ast.EString); ok {
-								// Ignore calls to require.resolve() if the control flow is provably
-								// dead here. We don't want to spend time scanning the required files
-								// if they will never be used.
-								if p.isControlFlowDead {
-									return js_ast.Expr{Loc: arg.Loc, Data: js_ast.ENullShared}
-								}
-
-								importRecordIndex := p.addImportRecord(ast.ImportRequireResolve, e.Args[0].Loc, js_lexer.UTF16ToString(str.Value), nil)
-								if p.fnOrArrowDataVisit.tryBodyCount != 0 {
-									p.importRecords[importRecordIndex].Flags |= ast.HandlesImportErrors
-								}
-								p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, importRecordIndex)
-
-								// Create a new expression to represent the operation
-								return js_ast.Expr{Loc: arg.Loc, Data: &js_ast.ERequireResolveString{
-									ImportRecordIndex: importRecordIndex,
-								}}
+			if dot, ok := e.Target.Data.(*js_ast.EDot); ok && dot.Name == "resolve" {
+				if id, ok := dot.Target.Data.(*js_ast.EIdentifier); ok && id.Ref == p.requireRef {
+					p.ignoreUsage(p.requireRef)
+					return p.maybeTransposeIfExprChain(e.Args[0], func(arg js_ast.Expr) js_ast.Expr {
+						if str, ok := e.Args[0].Data.(*js_ast.EString); ok {
+							// Ignore calls to require.resolve() if the control flow is provably
+							// dead here. We don't want to spend time scanning the required files
+							// if they will never be used.
+							if p.isControlFlowDead {
+								return js_ast.Expr{Loc: arg.Loc, Data: js_ast.ENullShared}
 							}
 
-							// Otherwise just return a clone of the "require.resolve()" call
-							return js_ast.Expr{Loc: arg.Loc, Data: &js_ast.ECall{
-								Target: js_ast.Expr{Loc: e.Target.Loc, Data: &js_ast.EDot{
-									Target:  p.valueToSubstituteForRequire(dot.Target.Loc),
-									Name:    dot.Name,
-									NameLoc: dot.NameLoc,
-								}},
-								Args: []js_ast.Expr{arg},
+							importRecordIndex := p.addImportRecord(ast.ImportRequireResolve, e.Args[0].Loc, js_lexer.UTF16ToString(str.Value), nil)
+							if p.fnOrArrowDataVisit.tryBodyCount != 0 {
+								p.importRecords[importRecordIndex].Flags |= ast.HandlesImportErrors
+							}
+							p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, importRecordIndex)
+
+							// Create a new expression to represent the operation
+							return js_ast.Expr{Loc: arg.Loc, Data: &js_ast.ERequireResolveString{
+								ImportRecordIndex: importRecordIndex,
 							}}
-						}), exprOut{}
+						}
+
+						// Otherwise just return a clone of the "require.resolve()" call
+						return js_ast.Expr{Loc: arg.Loc, Data: &js_ast.ECall{
+							Target: js_ast.Expr{Loc: e.Target.Loc, Data: &js_ast.EDot{
+								Target:  p.valueToSubstituteForRequire(dot.Target.Loc),
+								Name:    dot.Name,
+								NameLoc: dot.NameLoc,
+							}},
+							Args: []js_ast.Expr{arg},
+						}}
+					}), exprOut{}
+				}
+			}
+		}
+
+		// Recognize "Object.create()" calls
+		if couldBeObjectCreate {
+			if dot, ok := e.Target.Data.(*js_ast.EDot); ok && dot.Name == "create" {
+				if id, ok := dot.Target.Data.(*js_ast.EIdentifier); ok {
+					if symbol := &p.symbols[id.Ref.InnerIndex]; symbol.Kind == js_ast.SymbolUnbound && symbol.OriginalName == "Object" {
+						switch e.Args[0].Data.(type) {
+						case *js_ast.ENull, *js_ast.EObject:
+							// Mark "Object.create(null)" and "Object.create({})" as pure
+							e.CanBeUnwrappedIfUnused = true
+						}
 					}
 				}
 			}
@@ -12859,9 +13007,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 					e.IsDirectEval = true
 
 					// Pessimistically assume that if this looks like a CommonJS module
-					// (no "import" or "export" keywords), a direct call to "eval" means
-					// that code could potentially access "module" or "exports".
-					if p.options.mode == config.ModeBundle && !p.hasESModuleSyntax {
+					// (e.g. no "export" keywords), a direct call to "eval" means that
+					// code could potentially access "module" or "exports".
+					if p.options.mode == config.ModeBundle && !p.isFileConsideredToHaveESMExports {
 						p.recordUsage(p.moduleRef)
 						p.recordUsage(p.exportsRef)
 					}
@@ -12880,7 +13028,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 					if p.options.mode == config.ModeBundle {
 						text := "Using direct eval with a bundler is not recommended and may cause problems"
 						kind := logger.Debug
-						if p.hasESModuleSyntax && !p.suppressWarningsAboutWeirdCode {
+						if p.isFileConsideredESM && !p.suppressWarningsAboutWeirdCode {
 							kind = logger.Warning
 						}
 						p.log.AddWithNotes(kind, &p.tracker, js_lexer.RangeOfIdentifier(p.source, e.Target.Loc), text,
@@ -13838,6 +13986,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 			}
 
 		case *js_ast.SExportStar:
+			record := &p.importRecords[s.ImportRecordIndex]
 			p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, s.ImportRecordIndex)
 
 			if s.Alias != nil {
@@ -13850,12 +13999,15 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					IsExported:        true,
 				}
 				p.recordExport(s.Alias.Loc, s.Alias.OriginalName, s.NamespaceRef)
+
+				record.Flags |= ast.ContainsImportStar
 			} else {
 				// "export * from 'path'"
 				p.exportStarImportRecords = append(p.exportStarImportRecords, s.ImportRecordIndex)
 			}
 
 		case *js_ast.SExportFrom:
+			record := &p.importRecords[s.ImportRecordIndex]
 			p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, s.ImportRecordIndex)
 
 			for _, item := range s.Items {
@@ -13870,6 +14022,12 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					IsExported:        true,
 				}
 				p.recordExport(item.Name.Loc, item.Alias, item.Name.Ref)
+
+				if item.OriginalName == "default" {
+					record.Flags |= ast.ContainsDefaultAlias
+				} else if item.OriginalName == "__esModule" {
+					record.Flags |= ast.ContainsESModuleAlias
+				}
 			}
 		}
 
@@ -13884,6 +14042,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 
 func (p *parser) appendPart(parts []js_ast.Part, stmts []js_ast.Stmt) []js_ast.Part {
 	p.symbolUses = make(map[js_ast.Ref]js_ast.SymbolUse)
+	p.importSymbolPropertyUses = nil
 	p.declaredSymbols = nil
 	p.importRecordsForCurrentPart = nil
 	p.scopesForCurrentPart = nil
@@ -13923,6 +14082,7 @@ func (p *parser) appendPart(parts []js_ast.Part, stmts []js_ast.Stmt) []js_ast.P
 		part.CanBeRemovedIfUnused = p.stmtsCanBeRemovedIfUnused(part.Stmts)
 		part.DeclaredSymbols = p.declaredSymbols
 		part.ImportRecordIndices = p.importRecordsForCurrentPart
+		part.ImportSymbolPropertyUses = p.importSymbolPropertyUses
 		part.Scopes = p.scopesForCurrentPart
 		parts = append(parts, part)
 	}
@@ -14155,9 +14315,20 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		return true
 
 	case *js_ast.ECall:
+		canCallBeRemoved := e.CanBeUnwrappedIfUnused
+
+		// Consider calls to our runtime "__publicField" function to be free of
+		// side effects for the purpose of expression removal. This allows class
+		// declarations with lowered static fields to be eligible for tree shaking.
+		if !canCallBeRemoved {
+			if id, ok := e.Target.Data.(*js_ast.EIdentifier); ok && id.Ref == p.runtimePublicFieldImport {
+				canCallBeRemoved = true
+			}
+		}
+
 		// A call that has been marked "__PURE__" can be removed if all arguments
 		// can be removed. The annotation causes us to ignore the target.
-		if e.CanBeUnwrappedIfUnused {
+		if canCallBeRemoved {
 			for _, arg := range e.Args {
 				if !p.exprCanBeRemovedIfUnused(arg) {
 					return false
@@ -14479,6 +14650,51 @@ func (p *parser) simplifyUnusedExpr(expr js_ast.Expr) js_ast.Expr {
 			}
 		}
 
+		// Attempt to shorten IIFEs
+		if len(e.Args) == 0 {
+			switch target := e.Target.Data.(type) {
+			case *js_ast.EFunction:
+				if len(target.Fn.Args) != 0 {
+					break
+				}
+
+				// Just delete "(function() {})()" completely
+				if len(target.Fn.Body.Stmts) == 0 {
+					return js_ast.Expr{}
+				}
+
+			case *js_ast.EArrow:
+				if len(target.Args) != 0 {
+					break
+				}
+
+				// Just delete "(() => {})()" completely
+				if len(target.Body.Stmts) == 0 {
+					return js_ast.Expr{}
+				}
+
+				if len(target.Body.Stmts) == 1 {
+					switch s := target.Body.Stmts[0].Data.(type) {
+					case *js_ast.SExpr:
+						if !target.IsAsync {
+							// Replace "(() => { foo() })()" with "foo()"
+							return s.Value
+						} else {
+							// Replace "(async () => { foo() })()" with "(async () => foo())()"
+							target.Body.Stmts[0].Data = &js_ast.SReturn{ValueOrNil: s.Value}
+							target.PreferExpr = true
+						}
+
+					case *js_ast.SReturn:
+						if !target.IsAsync {
+							// Replace "(() => foo())()" with "foo()"
+							return s.ValueOrNil
+						}
+					}
+				}
+			}
+		}
+
 	case *js_ast.ENew:
 		// A constructor call that has been marked "__PURE__" can be removed if all
 		// arguments can be removed. The annotation causes us to ignore the target.
@@ -14531,16 +14747,17 @@ func newParser(log logger.Log, source logger.Source, lexer js_lexer.Lexer, optio
 	}
 
 	p := &parser{
-		log:               log,
-		source:            source,
-		tracker:           logger.MakeLineColumnTracker(&source),
-		lexer:             lexer,
-		allowIn:           true,
-		options:           *options,
-		runtimeImports:    make(map[string]js_ast.Ref),
-		promiseRef:        js_ast.InvalidRef,
-		afterArrowBodyLoc: logger.Loc{Start: -1},
-		importMetaRef:     js_ast.InvalidRef,
+		log:                      log,
+		source:                   source,
+		tracker:                  logger.MakeLineColumnTracker(&source),
+		lexer:                    lexer,
+		allowIn:                  true,
+		options:                  *options,
+		runtimeImports:           make(map[string]js_ast.Ref),
+		promiseRef:               js_ast.InvalidRef,
+		afterArrowBodyLoc:        logger.Loc{Start: -1},
+		importMetaRef:            js_ast.InvalidRef,
+		runtimePublicFieldImport: js_ast.InvalidRef,
 
 		// For lowering private methods
 		weakMapRef:     js_ast.InvalidRef,
@@ -14860,18 +15077,37 @@ func ParseJSXExpr(text string, kind JSXExprKind) (config.JSXExpr, bool) {
 
 // Say why this the current file is being considered an ES module
 func (p *parser) whyESModule() (notes []logger.MsgData) {
-	var where logger.Range
+	because := "This file is considered to be an ECMAScript module because"
 	switch {
-	case p.es6ImportKeyword.Len > 0:
-		where = p.es6ImportKeyword
-	case p.es6ExportKeyword.Len > 0:
-		where = p.es6ExportKeyword
+	case p.esmExportKeyword.Len > 0:
+		notes = append(notes, p.tracker.MsgData(p.esmExportKeyword,
+			because+" of the \"export\" keyword here:"))
+
+	case p.esmImportMeta.Len > 0:
+		notes = append(notes, p.tracker.MsgData(p.esmImportMeta,
+			because+" of the use of \"import.meta\" here:"))
+
 	case p.topLevelAwaitKeyword.Len > 0:
-		where = p.topLevelAwaitKeyword
-	}
-	if where.Len > 0 {
-		notes = []logger.MsgData{p.tracker.MsgData(where,
-			fmt.Sprintf("This file is considered an ECMAScript module because of the %q keyword here:", p.source.TextForRange(where)))}
+		notes = append(notes, p.tracker.MsgData(p.topLevelAwaitKeyword,
+			because+" of the top-level \"await\" keyword here:"))
+
+	case p.options.moduleTypeData.Type == js_ast.ModuleESM_MJS:
+		notes = append(notes, logger.MsgData{Text: because + " the file name ends in \".mjs\"."})
+
+	case p.options.moduleTypeData.Type == js_ast.ModuleESM_MTS:
+		notes = append(notes, logger.MsgData{Text: because + " the file name ends in \".mts\"."})
+
+	case p.options.moduleTypeData.Type == js_ast.ModuleESM_PackageJSON:
+		tracker := logger.MakeLineColumnTracker(p.options.moduleTypeData.Source)
+		notes = append(notes, tracker.MsgData(p.options.moduleTypeData.Range,
+			because+" the enclosing \"package.json\" file sets the type of this file to \"module\":"))
+
+	// This case must come last because some code cares about the "import"
+	// statement keyword and some doesn't, and we don't want to give code
+	// that doesn't care about the "import" statement the wrong error message.
+	case p.esmImportStatementKeyword.Len > 0:
+		notes = append(notes, p.tracker.MsgData(p.esmImportStatementKeyword,
+			because+" of the \"import\" keyword here:"))
 	}
 	return
 }
@@ -14880,22 +15116,27 @@ func (p *parser) prepareForVisitPass() {
 	p.pushScopeForVisitPass(js_ast.ScopeEntry, logger.Loc{Start: locModuleScope})
 	p.fnOrArrowDataVisit.isOutsideFnOrArrow = true
 	p.moduleScope = p.currentScope
-	p.hasESModuleSyntax = p.es6ImportKeyword.Len > 0 || p.es6ExportKeyword.Len > 0 || p.topLevelAwaitKeyword.Len > 0
+
+	// Determine whether or not this file is ESM
+	p.isFileConsideredToHaveESMExports =
+		p.esmExportKeyword.Len > 0 ||
+			p.esmImportMeta.Len > 0 ||
+			p.topLevelAwaitKeyword.Len > 0 ||
+			p.options.moduleTypeData.Type.IsESM()
+	p.isFileConsideredESM =
+		p.isFileConsideredToHaveESMExports ||
+			p.esmImportStatementKeyword.Len > 0
 
 	// Legacy HTML comments are not allowed in ESM files
-	if p.hasESModuleSyntax && p.lexer.LegacyHTMLCommentRange.Len > 0 {
+	if p.isFileConsideredESM && p.lexer.LegacyHTMLCommentRange.Len > 0 {
 		p.log.AddWithNotes(logger.Error, &p.tracker, p.lexer.LegacyHTMLCommentRange,
 			"Legacy HTML single-line comments are not allowed in ECMAScript modules", p.whyESModule())
 	}
 
 	// ECMAScript modules are always interpreted as strict mode. This has to be
 	// done before "hoistSymbols" because strict mode can alter hoisting (!).
-	if p.es6ImportKeyword.Len > 0 {
-		p.moduleScope.RecursiveSetStrictMode(js_ast.ImplicitStrictModeImport)
-	} else if p.es6ExportKeyword.Len > 0 {
-		p.moduleScope.RecursiveSetStrictMode(js_ast.ImplicitStrictModeExport)
-	} else if p.topLevelAwaitKeyword.Len > 0 {
-		p.moduleScope.RecursiveSetStrictMode(js_ast.ImplicitStrictModeTopLevelAwait)
+	if p.isFileConsideredESM {
+		p.moduleScope.RecursiveSetStrictMode(js_ast.ImplicitStrictModeESM)
 	}
 
 	p.hoistSymbols(p.moduleScope)
@@ -14909,11 +15150,12 @@ func (p *parser) prepareForVisitPass() {
 	// CommonJS-style exports are only enabled if this isn't using ECMAScript-
 	// style exports. You can still use "require" in ESM, just not "module" or
 	// "exports". You can also still use "import" in CommonJS.
-	if p.options.moduleType != js_ast.ModuleESM && p.options.mode != config.ModePassThrough &&
-		p.es6ExportKeyword.Len == 0 && p.topLevelAwaitKeyword.Len == 0 {
+	if p.options.mode != config.ModePassThrough && !p.isFileConsideredToHaveESMExports {
+		// CommonJS-style exports
 		p.exportsRef = p.declareCommonJSSymbol(js_ast.SymbolHoisted, "exports")
 		p.moduleRef = p.declareCommonJSSymbol(js_ast.SymbolHoisted, "module")
 	} else {
+		// ESM-style exports
 		p.exportsRef = p.newSymbol(js_ast.SymbolHoisted, "exports")
 		p.moduleRef = p.newSymbol(js_ast.SymbolHoisted, "module")
 	}
@@ -14957,7 +15199,7 @@ func (p *parser) declareCommonJSSymbol(kind js_ast.SymbolKind, name string) js_a
 	// Both the "exports" argument and "var exports" are hoisted variables, so
 	// they don't collide.
 	if ok && p.symbols[member.Ref.InnerIndex].Kind == js_ast.SymbolHoisted &&
-		kind == js_ast.SymbolHoisted && !p.hasESModuleSyntax {
+		kind == js_ast.SymbolHoisted && !p.isFileConsideredToHaveESMExports {
 		return member.Ref
 	}
 
@@ -15177,29 +15419,6 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 
 		// Pulling in the exports of this module always pulls in the export part
 		p.topLevelSymbolToParts[p.exportsRef] = append(p.topLevelSymbolToParts[p.exportsRef], js_ast.NSExportPartIndex)
-
-		// Each part tracks the other parts it depends on within this file
-		localDependencies := make(map[uint32]uint32)
-		for partIndex := range parts {
-			part := &parts[partIndex]
-			for ref := range part.SymbolUses {
-				for _, otherPartIndex := range p.topLevelSymbolToParts[ref] {
-					if oldPartIndex, ok := localDependencies[otherPartIndex]; !ok || oldPartIndex != uint32(partIndex) {
-						localDependencies[otherPartIndex] = uint32(partIndex)
-						part.Dependencies = append(part.Dependencies, js_ast.Dependency{
-							SourceIndex: p.source.Index,
-							PartIndex:   otherPartIndex,
-						})
-					}
-				}
-
-				// Also map from imports to parts that use them
-				if namedImport, ok := p.namedImports[ref]; ok {
-					namedImport.LocalPartsWithUses = append(namedImport.LocalPartsWithUses, uint32(partIndex))
-					p.namedImports[ref] = namedImport
-				}
-			}
-		}
 	}
 
 	// Make a wrapper symbol in case we need to be wrapped in a closure
@@ -15218,7 +15437,7 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 	usesExportsRef := p.symbols[p.exportsRef.InnerIndex].UseCountEstimate > 0
 	usesModuleRef := p.symbols[p.moduleRef.InnerIndex].UseCountEstimate > 0
 
-	if p.es6ExportKeyword.Len > 0 || p.topLevelAwaitKeyword.Len > 0 {
+	if p.esmExportKeyword.Len > 0 || p.esmImportMeta.Len > 0 || p.topLevelAwaitKeyword.Len > 0 {
 		exportsKind = js_ast.ExportsESM
 	} else if usesExportsRef || usesModuleRef || p.hasTopLevelReturn {
 		exportsKind = js_ast.ExportsCommonJS
@@ -15226,20 +15445,20 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 		// If this module has no exports, try to determine what kind of module it
 		// is by looking at node's "type" field in "package.json" and/or whether
 		// the file extension is ".mjs"/".mts" or ".cjs"/".cts".
-		switch p.options.moduleType {
-		case js_ast.ModuleCommonJS:
+		switch {
+		case p.options.moduleTypeData.Type.IsCommonJS():
 			// "type: commonjs" or ".cjs" or ".cts"
 			exportsKind = js_ast.ExportsCommonJS
 
-		case js_ast.ModuleESM:
+		case p.options.moduleTypeData.Type.IsESM():
 			// "type: module" or ".mjs" or ".mts"
 			exportsKind = js_ast.ExportsESM
 
-		case js_ast.ModuleUnknown:
+		default:
 			// Treat unknown modules containing an import statement as ESM. Otherwise
 			// the bundler will treat this file as CommonJS if it's imported and ESM
 			// if it's not imported.
-			if p.es6ImportKeyword.Len > 0 {
+			if p.esmImportStatementKeyword.Len > 0 {
 				exportsKind = js_ast.ExportsESM
 			}
 		}
@@ -15247,7 +15466,7 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 
 	return js_ast.AST{
 		Parts:                           parts,
-		ModuleType:                      p.options.moduleType,
+		ModuleTypeData:                  p.options.moduleTypeData,
 		ModuleScope:                     p.moduleScope,
 		CharFreq:                        p.computeCharacterFrequency(),
 		Symbols:                         p.symbols,
@@ -15271,8 +15490,7 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 		ExportsKind:    exportsKind,
 
 		// ES6 features
-		ImportKeyword:        p.es6ImportKeyword,
-		ExportKeyword:        p.es6ExportKeyword,
+		ExportKeyword:        p.esmExportKeyword,
 		TopLevelAwaitKeyword: p.topLevelAwaitKeyword,
 	}
 }

@@ -107,6 +107,7 @@ function pushCommonFlags(flags: string[], options: CommonOptions, keys: OptionKe
   let minifySyntax = getFlag(options, keys, 'minifySyntax', mustBeBoolean);
   let minifyWhitespace = getFlag(options, keys, 'minifyWhitespace', mustBeBoolean);
   let minifyIdentifiers = getFlag(options, keys, 'minifyIdentifiers', mustBeBoolean);
+  let drop = getFlag(options, keys, 'drop', mustBeArray);
   let charset = getFlag(options, keys, 'charset', mustBeString);
   let treeShaking = getFlag(options, keys, 'treeShaking', mustBeBoolean);
   let ignoreAnnotations = getFlag(options, keys, 'ignoreAnnotations', mustBeBoolean);
@@ -134,6 +135,7 @@ function pushCommonFlags(flags: string[], options: CommonOptions, keys: OptionKe
   if (charset) flags.push(`--charset=${charset}`);
   if (treeShaking !== void 0) flags.push(`--tree-shaking=${treeShaking}`);
   if (ignoreAnnotations) flags.push(`--ignore-annotations`);
+  if (drop) for (let what of drop) flags.push(`--drop:${what}`);
 
   if (jsx) flags.push(`--jsx=${jsx}`);
   if (jsxFactory) flags.push(`--jsx-factory=${jsxFactory}`);
@@ -695,6 +697,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
           if (!isSetupDone) throw new Error('Cannot call "resolve" before plugin setup has completed');
           if (typeof path !== 'string') throw new Error(`The path to resolve must be a string`);
           let keys: OptionKeys = Object.create(null);
+          let pluginName = getFlag(options, keys, 'pluginName', mustBeString);
           let importer = getFlag(options, keys, 'importer', mustBeString);
           let namespace = getFlag(options, keys, 'namespace', mustBeString);
           let resolveDir = getFlag(options, keys, 'resolveDir', mustBeString);
@@ -709,6 +712,7 @@ export function createChannel(streamIn: StreamIn): StreamOut {
               key: buildKey,
               pluginName: name,
             }
+            if (pluginName != null) request.pluginName = pluginName
             if (importer != null) request.importer = importer
             if (namespace != null) request.namespace = namespace
             if (resolveDir != null) request.resolveDir = resolveDir

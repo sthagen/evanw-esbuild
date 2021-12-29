@@ -208,12 +208,12 @@ func TestComments(t *testing.T) {
 	expectParseError(t, "throw -->\n x", "<stdin>: ERROR: Unexpected \">\"\n")
 
 	expectParseError(t, "export {}\n<!--", `<stdin>: ERROR: Legacy HTML single-line comments are not allowed in ECMAScript modules
-<stdin>: NOTE: This file is considered an ECMAScript module because of the "export" keyword here:
+<stdin>: NOTE: This file is considered to be an ECMAScript module because of the "export" keyword here:
 <stdin>: WARNING: Treating "<!--" as the start of a legacy HTML single-line comment
 `)
 
 	expectParseError(t, "export {}\n-->", `<stdin>: ERROR: Legacy HTML single-line comments are not allowed in ECMAScript modules
-<stdin>: NOTE: This file is considered an ECMAScript module because of the "export" keyword here:
+<stdin>: NOTE: This file is considered to be an ECMAScript module because of the "export" keyword here:
 <stdin>: WARNING: Treating "-->" as the start of a legacy HTML single-line comment
 `)
 
@@ -264,7 +264,7 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "(x, ...y) => { 'use strict' }", nonSimple)
 	expectParseError(t, "(x, ...y) => { //! @license comment\n 'use strict' }", nonSimple)
 
-	why := "<stdin>: NOTE: This file is implicitly in strict mode because of the \"export\" keyword here:\n"
+	why := "<stdin>: NOTE: This file is considered to be an ECMAScript module because of the \"export\" keyword here:\n"
 
 	expectPrinted(t, "let x = '\\0'", "let x = \"\\0\";\n")
 	expectPrinted(t, "let x = '\\00'", "let x = \"\\0\";\n")
@@ -273,9 +273,9 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "'use strict'; let x = '\\00'", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "'use strict'; let x = '\\08'", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "'use strict'; let x = '\\008'", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "let x = '\\00'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+why)
-	expectParseError(t, "let x = '\\09'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+why)
-	expectParseError(t, "let x = '\\009'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+why)
+	expectParseError(t, "let x = '\\00'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in an ECMAScript module\n"+why)
+	expectParseError(t, "let x = '\\09'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in an ECMAScript module\n"+why)
+	expectParseError(t, "let x = '\\009'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in an ECMAScript module\n"+why)
 
 	expectPrinted(t, "'\\0'", "\"\\0\";\n")
 	expectPrinted(t, "'\\00'", "\"\\0\";\n")
@@ -286,23 +286,23 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "'\\00'; 'use strict';", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "'\\08'; 'use strict';", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "'\\008'; 'use strict';", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "'\\00'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+why)
-	expectParseError(t, "'\\09'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+why)
-	expectParseError(t, "'\\009'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in strict mode\n"+why)
+	expectParseError(t, "'\\00'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in an ECMAScript module\n"+why)
+	expectParseError(t, "'\\09'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in an ECMAScript module\n"+why)
+	expectParseError(t, "'\\009'; export {}", "<stdin>: ERROR: Legacy octal escape sequences cannot be used in an ECMAScript module\n"+why)
 
 	expectPrinted(t, "with (x) y", "with (x)\n  y;\n")
 	expectParseError(t, "'use strict'; with (x) y", "<stdin>: ERROR: With statements cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "with (x) y; export {}", "<stdin>: ERROR: With statements cannot be used in strict mode\n"+why)
+	expectParseError(t, "with (x) y; export {}", "<stdin>: ERROR: With statements cannot be used in an ECMAScript module\n"+why)
 
 	expectPrinted(t, "delete x", "delete x;\n")
 	expectParseError(t, "'use strict'; delete x", "<stdin>: ERROR: Delete of a bare identifier cannot be used in strict mode\n"+useStrict)
-	expectParseError(t, "delete x; export {}", "<stdin>: ERROR: Delete of a bare identifier cannot be used in strict mode\n"+why)
+	expectParseError(t, "delete x; export {}", "<stdin>: ERROR: Delete of a bare identifier cannot be used in an ECMAScript module\n"+why)
 
 	expectPrinted(t, "for (var x = y in z) ;", "x = y;\nfor (var x in z)\n  ;\n")
 	expectParseError(t, "'use strict'; for (var x = y in z) ;",
 		"<stdin>: ERROR: Variable initializers inside for-in loops cannot be used in strict mode\n"+useStrict)
 	expectParseError(t, "for (var x = y in z) ; export {}",
-		"<stdin>: ERROR: Variable initializers inside for-in loops cannot be used in strict mode\n"+why)
+		"<stdin>: ERROR: Variable initializers inside for-in loops cannot be used in an ECMAScript module\n"+why)
 
 	expectPrinted(t, "function f(a, a) {}", "function f(a, a) {\n}\n")
 	expectPrinted(t, "(function(a, a) {})", "(function(a, a) {\n});\n")
@@ -340,11 +340,11 @@ func TestStrictMode(t *testing.T) {
 		"<stdin>: ERROR: Function declarations inside labels cannot be used in strict mode\n"+useStrict)
 
 	expectParseError(t, "if (0) function f() {} export {}",
-		"<stdin>: ERROR: Function declarations inside if statements cannot be used in strict mode\n"+why)
+		"<stdin>: ERROR: Function declarations inside if statements cannot be used in an ECMAScript module\n"+why)
 	expectParseError(t, "if (0) ; else function f() {} export {}",
-		"<stdin>: ERROR: Function declarations inside if statements cannot be used in strict mode\n"+why)
+		"<stdin>: ERROR: Function declarations inside if statements cannot be used in an ECMAScript module\n"+why)
 	expectParseError(t, "x: function f() {} export {}",
-		"<stdin>: ERROR: Function declarations inside labels cannot be used in strict mode\n"+why)
+		"<stdin>: ERROR: Function declarations inside labels cannot be used in an ECMAScript module\n"+why)
 
 	expectPrinted(t, "eval++", "eval++;\n")
 	expectPrinted(t, "eval = 0", "eval = 0;\n")
@@ -445,8 +445,8 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "class f { x() { function y() { with (x) y } } }", "<stdin>: ERROR: With statements cannot be used in strict mode\n"+classNote)
 	expectParseError(t, "class f { x() { function protected() {} } }", "<stdin>: ERROR: \"protected\" is a reserved word and cannot be used in strict mode\n"+classNote)
 
-	reservedWordExport := "<stdin>: ERROR: \"protected\" is a reserved word and cannot be used in strict mode\n" +
-		"<stdin>: NOTE: This file is implicitly in strict mode because of the \"export\" keyword here:\n"
+	reservedWordExport := "<stdin>: ERROR: \"protected\" is a reserved word and cannot be used in an ECMAScript module\n" +
+		why
 
 	expectParseError(t, "var protected; export {}", reservedWordExport)
 	expectParseError(t, "class protected {} export {}", reservedWordExport)
@@ -454,12 +454,14 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "function protected() {} export {}", reservedWordExport)
 	expectParseError(t, "(function protected() {}); export {}", reservedWordExport)
 
-	importKeyword := "<stdin>: ERROR: With statements cannot be used in strict mode\n" +
-		"<stdin>: NOTE: This file is implicitly in strict mode because of the \"import\" keyword here:\n"
-	exportKeyword := "<stdin>: ERROR: With statements cannot be used in strict mode\n" +
-		"<stdin>: NOTE: This file is implicitly in strict mode because of the \"export\" keyword here:\n"
-	tlaKeyword := "<stdin>: ERROR: With statements cannot be used in strict mode\n" +
-		"<stdin>: NOTE: This file is implicitly in strict mode because of the \"await\" keyword here:\n"
+	importMeta := "<stdin>: ERROR: With statements cannot be used in an ECMAScript module\n" +
+		"<stdin>: NOTE: This file is considered to be an ECMAScript module because of the use of \"import.meta\" here:\n"
+	importStatement := "<stdin>: ERROR: With statements cannot be used in an ECMAScript module\n" +
+		"<stdin>: NOTE: This file is considered to be an ECMAScript module because of the \"import\" keyword here:\n"
+	exportKeyword := "<stdin>: ERROR: With statements cannot be used in an ECMAScript module\n" +
+		"<stdin>: NOTE: This file is considered to be an ECMAScript module because of the \"export\" keyword here:\n"
+	tlaKeyword := "<stdin>: ERROR: With statements cannot be used in an ECMAScript module\n" +
+		"<stdin>: NOTE: This file is considered to be an ECMAScript module because of the top-level \"await\" keyword here:\n"
 
 	expectPrinted(t, "import(x); with (y) z", "import(x);\nwith (y)\n  z;\n")
 	expectPrinted(t, "import('x'); with (y) z", "import(\"x\");\nwith (y)\n  z;\n")
@@ -470,14 +472,14 @@ func TestStrictMode(t *testing.T) {
 	expectPrinted(t, "with (y) z; (import(x))", "with (y)\n  z;\nimport(x);\n")
 	expectPrinted(t, "with (y) z; (import('x'))", "with (y)\n  z;\nimport(\"x\");\n")
 
-	expectParseError(t, "import.meta; with (y) z", importKeyword)
-	expectParseError(t, "with (y) z; import.meta", importKeyword)
-	expectParseError(t, "(import.meta); with (y) z", importKeyword)
-	expectParseError(t, "with (y) z; (import.meta)", importKeyword)
-	expectParseError(t, "import 'x'; with (y) z", importKeyword)
-	expectParseError(t, "import * as x from 'x'; with (y) z", importKeyword)
-	expectParseError(t, "import x from 'x'; with (y) z", importKeyword)
-	expectParseError(t, "import {x} from 'x'; with (y) z", importKeyword)
+	expectParseError(t, "import.meta; with (y) z", importMeta)
+	expectParseError(t, "with (y) z; import.meta", importMeta)
+	expectParseError(t, "(import.meta); with (y) z", importMeta)
+	expectParseError(t, "with (y) z; (import.meta)", importMeta)
+	expectParseError(t, "import 'x'; with (y) z", importStatement)
+	expectParseError(t, "import * as x from 'x'; with (y) z", importStatement)
+	expectParseError(t, "import x from 'x'; with (y) z", importStatement)
+	expectParseError(t, "import {x} from 'x'; with (y) z", importStatement)
 
 	expectParseError(t, "export {}; with (y) z", exportKeyword)
 	expectParseError(t, "export let x; with (y) z", exportKeyword)
@@ -568,8 +570,8 @@ func TestAwait(t *testing.T) {
 	expectPrinted(t, "await (x ** y)", "await (x ** y);\n")
 
 	expectParseError(t, "await delete x",
-		`<stdin>: ERROR: Delete of a bare identifier cannot be used in strict mode
-<stdin>: NOTE: This file is implicitly in strict mode because of the "await" keyword here:
+		`<stdin>: ERROR: Delete of a bare identifier cannot be used in an ECMAScript module
+<stdin>: NOTE: This file is considered to be an ECMAScript module because of the top-level "await" keyword here:
 `)
 	expectPrinted(t, "async function f() { await delete x }", "async function f() {\n  await delete x;\n}\n")
 }
@@ -1303,8 +1305,8 @@ func TestLexicalDecl(t *testing.T) {
 	expectParseError(t, "while (1) function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "do function f() {} while (0)", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 
-	fnLabelAwait := "<stdin>: ERROR: Function declarations inside labels cannot be used in strict mode\n" +
-		"<stdin>: NOTE: This file is implicitly in strict mode because of the \"await\" keyword here:\n"
+	fnLabelAwait := "<stdin>: ERROR: Function declarations inside labels cannot be used in an ECMAScript module\n" +
+		"<stdin>: NOTE: This file is considered to be an ECMAScript module because of the top-level \"await\" keyword here:\n"
 
 	expectParseError(t, "for (;;) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "for (x in y) label: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
@@ -2397,12 +2399,12 @@ func TestConstantFolding(t *testing.T) {
 func TestConstantFoldingScopes(t *testing.T) {
 	// Parsing will crash if somehow the scope traversal is misaligned between
 	// the parsing and binding passes. This checks for those cases.
-	expectPrintedMangle(t, "x; 1 ? 0 : ()=>{}; (()=>{})()", "x, (() => {\n})();\n")
-	expectPrintedMangle(t, "x; 0 ? ()=>{} : 1; (()=>{})()", "x, (() => {\n})();\n")
+	expectPrintedMangle(t, "x; 1 ? 0 : ()=>{}; (()=>{})()", "x;\n")
+	expectPrintedMangle(t, "x; 0 ? ()=>{} : 1; (()=>{})()", "x;\n")
 	expectPrinted(t, "x; 0 && (()=>{}); (()=>{})()", "x;\n0;\n(() => {\n})();\n")
 	expectPrinted(t, "x; 1 || (()=>{}); (()=>{})()", "x;\n1;\n(() => {\n})();\n")
-	expectPrintedMangle(t, "if (1) 0; else ()=>{}; (()=>{})()", "(() => {\n})();\n")
-	expectPrintedMangle(t, "if (0) ()=>{}; else 1; (()=>{})()", "(() => {\n})();\n")
+	expectPrintedMangle(t, "if (1) 0; else ()=>{}; (()=>{})()", "")
+	expectPrintedMangle(t, "if (0) ()=>{}; else 1; (()=>{})()", "")
 }
 
 func TestImport(t *testing.T) {
@@ -3478,6 +3480,27 @@ func TestMangleArrow(t *testing.T) {
 	expectPrintedMangle(t, "var a = () => {return}", "var a = () => {\n};\n")
 	expectPrintedMangle(t, "var a = () => {return 123}", "var a = () => 123;\n")
 	expectPrintedMangle(t, "var a = () => {throw 123}", "var a = () => {\n  throw 123;\n};\n")
+}
+
+func TestMangleIIFE(t *testing.T) {
+	expectPrintedMangle(t, "var a = (() => {})()", "var a = (() => {\n})();\n")
+	expectPrintedMangle(t, "(() => {})()", "")
+	expectPrintedMangle(t, "(() => a())()", "a();\n")
+	expectPrintedMangle(t, "(() => { a() })()", "a();\n")
+	expectPrintedMangle(t, "(() => { return a() })()", "a();\n")
+	expectPrintedMangle(t, "(() => { let b = a; b() })()", "a();\n")
+	expectPrintedMangle(t, "(() => { let b = a; return b() })()", "a();\n")
+	expectPrintedMangle(t, "(async () => {})()", "")
+	expectPrintedMangle(t, "(async () => { a() })()", "(async () => a())();\n")
+	expectPrintedMangle(t, "(async () => { let b = a; b() })()", "(async () => a())();\n")
+
+	expectPrintedMangle(t, "var a = (function() {})()", "var a = function() {\n}();\n")
+	expectPrintedMangle(t, "(function() {})()", "")
+	expectPrintedMangle(t, "(function*() {})()", "")
+	expectPrintedMangle(t, "(async function() {})()", "")
+	expectPrintedMangle(t, "(function() { a() })()", "(function() {\n  a();\n})();\n")
+	expectPrintedMangle(t, "(function*() { a() })()", "(function* () {\n  a();\n})();\n")
+	expectPrintedMangle(t, "(async function() { a() })()", "(async function() {\n  a();\n})();\n")
 }
 
 func TestMangleTemplate(t *testing.T) {
@@ -4928,6 +4951,15 @@ func TestMangleCatch(t *testing.T) {
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { var x = 2 }", "try {\n  throw 1;\n} catch (x) {\n  var x = 2;\n}\n")
 	expectPrintedMangle(t, "try { throw 1 } catch (x) { eval('x') }", "try {\n  throw 1;\n} catch (x) {\n  eval(\"x\");\n}\n")
 	expectPrintedMangle(t, "if (y) try { throw 1 } catch (x) {} else eval('x')", "if (y)\n  try {\n    throw 1;\n  } catch {\n  }\nelse\n  eval(\"x\");\n")
+}
+
+func TestAutoPureForObjectCreate(t *testing.T) {
+	expectPrinted(t, "Object.create(null)", "/* @__PURE__ */ Object.create(null);\n")
+	expectPrinted(t, "Object.create({})", "/* @__PURE__ */ Object.create({});\n")
+
+	expectPrinted(t, "Object.create()", "Object.create();\n")
+	expectPrinted(t, "Object.create(x)", "Object.create(x);\n")
+	expectPrinted(t, "Object.create(undefined)", "Object.create(void 0);\n")
 }
 
 func TestAutoPureForSet(t *testing.T) {

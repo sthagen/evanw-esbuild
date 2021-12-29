@@ -105,14 +105,6 @@ var foo = bar();
 TestTSEnumCrossModuleInliningAccess
 ---------- /out/entry.js ----------
 // enums.ts
-var a = /* @__PURE__ */ ((a2) => {
-  a2[a2["x"] = 123] = "x";
-  return a2;
-})(a || {});
-var b = /* @__PURE__ */ ((b2) => {
-  b2[b2["x"] = 123] = "x";
-  return b2;
-})(b || {});
 var c = /* @__PURE__ */ ((c2) => {
   c2[c2["x"] = 123] = "x";
   return c2;
@@ -158,25 +150,47 @@ console.log([
 ================================================================================
 TestTSEnumCrossModuleInliningReExport
 ---------- /out/entry.js ----------
-// enums.ts
-var a = /* @__PURE__ */ ((a2) => {
-  a2["x"] = "a";
-  return a2;
-})(a || {});
-var b = /* @__PURE__ */ ((b2) => {
-  b2["x"] = "b";
-  return b2;
-})(b || {});
-var c = /* @__PURE__ */ ((c2) => {
-  c2["x"] = "c";
-  return c2;
-})(c || {});
-
 // entry.js
 console.log([
   "a" /* x */,
   "b" /* x */,
   "c" /* x */
+]);
+
+================================================================================
+TestTSEnumCrossModuleTreeShaking
+---------- /out/entry.js ----------
+// enums.ts
+var a_keep = /* @__PURE__ */ ((a_keep2) => {
+  a_keep2[a_keep2["x"] = false] = "x";
+  return a_keep2;
+})(a_keep || {});
+var b_keep = ((b_keep2) => {
+  b_keep2[b_keep2["x"] = foo] = "x";
+  return b_keep2;
+})(b_keep || {});
+var c_keep = /* @__PURE__ */ ((c_keep2) => {
+  c_keep2[c_keep2["x"] = 3] = "x";
+  return c_keep2;
+})(c_keep || {});
+var d_keep = /* @__PURE__ */ ((d_keep2) => {
+  d_keep2[d_keep2["x"] = 4] = "x";
+  return d_keep2;
+})(d_keep || {});
+var e_keep = {};
+
+// entry.ts
+console.log([
+  1 /* x */,
+  2 /* x */,
+  "" /* x */
+]);
+console.log([
+  a_keep.x,
+  b_keep.x,
+  c_keep,
+  d_keep.y,
+  e_keep.x
 ]);
 
 ================================================================================
@@ -585,10 +599,50 @@ export var Foo=(e=>(e[e.X=0]="X",e[e.Y=1]="Y",e[e.Z=e]="Z",e))(Foo||{});
 ================================================================================
 TestTSMinifyNamespace
 ---------- /a.js ----------
-var Foo;(e=>{let a;(p=>{foo(e,p)})(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+var Foo;(e=>{let a;(p=>foo(e,p))(a=e.Bar||={})})(Foo||={});
 
 ---------- /b.js ----------
-export var Foo;(e=>{let a;(p=>{foo(e,p)})(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+export var Foo;(e=>{let a;(p=>foo(e,p))(a=e.Bar||={})})(Foo||={});
+
+================================================================================
+TestTSMinifyNamespaceNoArrow
+---------- /a.js ----------
+var Foo;(function(e){let a;(function(p){foo(e,p)})(a=e.Bar||={})})(Foo||={});
+
+---------- /b.js ----------
+export var Foo;(function(e){let a;(function(p){foo(e,p)})(a=e.Bar||={})})(Foo||={});
+
+================================================================================
+TestTSMinifyNamespaceNoLogicalAssignment
+---------- /a.js ----------
+var Foo;(e=>{let a;(p=>foo(e,p))(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+
+---------- /b.js ----------
+export var Foo;(e=>{let a;(p=>foo(e,p))(a=e.Bar||(e.Bar={}))})(Foo||(Foo={}));
+
+================================================================================
+TestTSMinifyNestedEnum
+---------- /a.js ----------
+function foo(){let u;return(n=>(n[n.A=0]="A",n[n.B=1]="B",n[n.C=n]="C"))(u||={}),u}
+
+---------- /b.js ----------
+export function foo(){let e;return(n=>(n[n.X=0]="X",n[n.Y=1]="Y",n[n.Z=n]="Z"))(e||={}),e}
+
+================================================================================
+TestTSMinifyNestedEnumNoArrow
+---------- /a.js ----------
+function foo(){let u;return function(n){n[n.A=0]="A",n[n.B=1]="B",n[n.C=n]="C"}(u||={}),u}
+
+---------- /b.js ----------
+export function foo(){let e;return function(n){n[n.X=0]="X",n[n.Y=1]="Y",n[n.Z=n]="Z"}(e||={}),e}
+
+================================================================================
+TestTSMinifyNestedEnumNoLogicalAssignment
+---------- /a.js ----------
+function foo(){let u;return(n=>(n[n.A=0]="A",n[n.B=1]="B",n[n.C=n]="C"))(u||(u={})),u}
+
+---------- /b.js ----------
+export function foo(){let e;return(n=>(n[n.X=0]="X",n[n.Y=1]="Y",n[n.Z=n]="Z"))(e||(e={})),e}
 
 ================================================================================
 TestTSSiblingEnum

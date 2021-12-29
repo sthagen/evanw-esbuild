@@ -449,6 +449,7 @@ func validateDefines(
 	pureFns []string,
 	platform Platform,
 	minify bool,
+	drop Drop,
 ) (*config.ProcessedDefines, []config.InjectedDefine) {
 	rawDefines := make(map[string]config.DefineData)
 	var valueToInject map[string]config.InjectedDefine
@@ -470,11 +471,26 @@ func validateDefines(
 		// Allow substituting for an identifier
 		if js_lexer.IsIdentifier(value) {
 			if _, ok := js_lexer.Keywords[value]; !ok {
-				name := value // The closure must close over a variable inside the loop
-				rawDefines[key] = config.DefineData{
-					DefineFunc: func(args config.DefineArgs) js_ast.E {
-						return &js_ast.EIdentifier{Ref: args.FindSymbol(args.Loc, name)}
-					},
+				switch value {
+				case "undefined":
+					rawDefines[key] = config.DefineData{
+						DefineFunc: func(config.DefineArgs) js_ast.E { return js_ast.EUndefinedShared },
+					}
+				case "NaN":
+					rawDefines[key] = config.DefineData{
+						DefineFunc: func(config.DefineArgs) js_ast.E { return &js_ast.ENumber{Value: math.NaN()} },
+					}
+				case "Infinity":
+					rawDefines[key] = config.DefineData{
+						DefineFunc: func(config.DefineArgs) js_ast.E { return &js_ast.ENumber{Value: math.Inf(1)} },
+					}
+				default:
+					name := value // The closure must close over a variable inside the loop
+					rawDefines[key] = config.DefineData{
+						DefineFunc: func(args config.DefineArgs) js_ast.E {
+							return &js_ast.EIdentifier{Ref: args.FindSymbol(args.Loc, name)}
+						},
+					}
 				}
 				continue
 			}
@@ -552,6 +568,13 @@ func validateDefines(
 				}
 			}
 		}
+	}
+
+	// If we're dropping all console API calls, replace each one with undefined
+	if (drop & DropConsole) != 0 {
+		define := rawDefines["console"]
+		define.MethodCallsMustBeReplacedWithUndefined = true
+		rawDefines["console"] = define
 	}
 
 	for _, key := range pureFns {
@@ -827,7 +850,7 @@ func rebuildImpl(
 	bannerJS, bannerCSS := validateBannerOrFooter(log, "banner", buildOpts.Banner)
 	footerJS, footerCSS := validateBannerOrFooter(log, "footer", buildOpts.Footer)
 	minify := buildOpts.MinifyWhitespace && buildOpts.MinifyIdentifiers && buildOpts.MinifySyntax
-	defines, injectedDefines := validateDefines(log, buildOpts.Define, buildOpts.Pure, buildOpts.Platform, minify)
+	defines, injectedDefines := validateDefines(log, buildOpts.Define, buildOpts.Pure, buildOpts.Platform, minify, buildOpts.Drop)
 	options := config.Options{
 		TargetFromAPI:          targetFromAPI,
 		UnsupportedJSFeatures:  jsFeatures,
@@ -848,6 +871,7 @@ func rebuildImpl(
 		MangleSyntax:          buildOpts.MinifySyntax,
 		RemoveWhitespace:      buildOpts.MinifyWhitespace,
 		MinifyIdentifiers:     buildOpts.MinifyIdentifiers,
+		DropDebugger:          (buildOpts.Drop & DropDebugger) != 0,
 		AllowOverwrite:        buildOpts.AllowOverwrite,
 		ASCIIOnly:             validateASCIIOnly(buildOpts.Charset),
 		IgnoreDCEAnnotations:  buildOpts.IgnoreAnnotations,
@@ -1320,7 +1344,7 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 
 	// Convert and validate the transformOpts
 	targetFromAPI, jsFeatures, cssFeatures, targetEnv := validateFeatures(log, transformOpts.Target, transformOpts.Engines)
-	defines, injectedDefines := validateDefines(log, transformOpts.Define, transformOpts.Pure, PlatformNeutral, false /* minify */)
+	defines, injectedDefines := validateDefines(log, transformOpts.Define, transformOpts.Pure, PlatformNeutral, false /* minify */, transformOpts.Drop)
 	options := config.Options{
 		TargetFromAPI:           targetFromAPI,
 		UnsupportedJSFeatures:   jsFeatures,
@@ -1339,6 +1363,7 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 		MangleSyntax:            transformOpts.MinifySyntax,
 		RemoveWhitespace:        transformOpts.MinifyWhitespace,
 		MinifyIdentifiers:       transformOpts.MinifyIdentifiers,
+		DropDebugger:            (transformOpts.Drop & DropDebugger) != 0,
 		ASCIIOnly:               validateASCIIOnly(transformOpts.Charset),
 		IgnoreDCEAnnotations:    transformOpts.IgnoreAnnotations,
 		TreeShaking:             validateTreeShaking(transformOpts.TreeShaking, false /* bundle */, transformOpts.Format),
