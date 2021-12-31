@@ -266,6 +266,333 @@ var import_foo = __toESM(require_foo());
 console.log(import_foo.default);
 
 ================================================================================
+TestInlineEmptyFunctionCalls
+---------- /out/empty.js ----------
+// empty.js
+console.log((foo(), bar(), void 0));
+console.log((foo(), void 0));
+console.log((foo(), void 0));
+console.log(void 0);
+console.log(void 0);
+foo(), bar();
+foo();
+foo();
+
+---------- /out/empty-comma.js ----------
+// empty-comma.js
+console.log(foo());
+console.log((foo(), void 0));
+console.log((foo(), void 0));
+for (; void 0; )
+  ;
+foo();
+foo();
+foo();
+
+---------- /out/empty-last.js ----------
+// empty-last.js
+console.log(void 0);
+
+---------- /out/empty-cross-module.js ----------
+// empty-cross-module.js
+console.log(void 0);
+
+---------- /out/empty-first.js ----------
+// empty-first.js
+function keep() {
+  return x;
+}
+console.log(keep());
+keep(foo());
+keep(1);
+
+---------- /out/empty-generator.js ----------
+// empty-generator.js
+function* keep() {
+}
+console.log(keep());
+keep(foo());
+keep(1);
+
+---------- /out/empty-async.js ----------
+// empty-async.js
+async function keep() {
+}
+console.log(keep());
+keep(foo());
+keep(1);
+
+---------- /out/reassign.js ----------
+// reassign.js
+function keep() {
+}
+keep = reassigned;
+console.log(keep());
+keep(foo());
+keep(1);
+
+---------- /out/reassign-inc.js ----------
+// reassign-inc.js
+function keep() {
+}
+keep++;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-div.js ----------
+// reassign-div.js
+function keep() {
+}
+keep /= reassigned;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-array.js ----------
+// reassign-array.js
+function keep() {
+}
+[keep] = reassigned;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-object.js ----------
+// reassign-object.js
+function keep() {
+}
+({ keep } = reassigned);
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+================================================================================
+TestInlineFunctionCallBehaviorChanges
+---------- /out/entry.js ----------
+function empty() {
+}
+function id(x) {
+  return x;
+}
+export let shouldBeWrapped = [
+  (0, foo.bar)(),
+  (0, foo[bar])(),
+  (0, foo?.bar)(),
+  (0, foo?.[bar])(),
+  (0, foo.bar)(),
+  (0, foo[bar])(),
+  (0, foo?.bar)(),
+  (0, foo?.[bar])(),
+  (0, eval)(),
+  (0, eval)?.(),
+  (0, eval)(),
+  (0, eval)?.(),
+  (0, foo.bar)``,
+  (0, foo[bar])``,
+  (0, foo?.bar)``,
+  (0, foo?.[bar])``,
+  (0, foo.bar)``,
+  (0, foo[bar])``,
+  (0, foo?.bar)``,
+  (0, foo?.[bar])``,
+  delete (0, foo),
+  delete (0, foo.bar),
+  delete (0, foo[bar]),
+  delete (0, foo?.bar),
+  delete (0, foo?.[bar]),
+  delete (0, foo),
+  delete (0, foo.bar),
+  delete (0, foo[bar]),
+  delete (0, foo?.bar),
+  delete (0, foo?.[bar]),
+  delete (0, void 0)
+], shouldNotBeWrapped = [
+  foo(),
+  foo(),
+  foo``,
+  foo``
+], shouldNotBeDoubleWrapped = [
+  delete (foo(), bar()),
+  delete (foo(), bar())
+];
+
+================================================================================
+TestInlineFunctionCallForInitDecl
+---------- /out/entry.js ----------
+// entry.js
+for (y = void 0; !1; )
+  ;
+var y;
+for (z = 123; !1; )
+  ;
+var z;
+
+================================================================================
+TestInlineIdentityFunctionCalls
+---------- /out/identity.js ----------
+// identity.js
+console.log(1);
+foo();
+
+---------- /out/identity-last.js ----------
+// identity-last.js
+console.log(1);
+foo();
+
+---------- /out/identity-first.js ----------
+// identity-first.js
+function keep(x) {
+  return [x];
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/identity-generator.js ----------
+// identity-generator.js
+function* keep(x) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/identity-async.js ----------
+// identity-async.js
+async function keep(x) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/identity-cross-module.js ----------
+// identity-cross-module.js
+console.log(1);
+foo();
+
+---------- /out/identity-no-args.js ----------
+// identity-no-args.js
+function keep(x) {
+  return x;
+}
+console.log(keep());
+keep();
+
+---------- /out/identity-two-args.js ----------
+// identity-two-args.js
+function keep(x) {
+  return x;
+}
+console.log(keep(1, 2));
+keep(1, 2);
+
+---------- /out/reassign.js ----------
+// reassign.js
+function keep(x) {
+  return x;
+}
+keep = reassigned;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-inc.js ----------
+// reassign-inc.js
+function keep(x) {
+  return x;
+}
+keep++;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-div.js ----------
+// reassign-div.js
+function keep(x) {
+  return x;
+}
+keep /= reassigned;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-array.js ----------
+// reassign-array.js
+function keep(x) {
+  return x;
+}
+[keep] = reassigned;
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/reassign-object.js ----------
+// reassign-object.js
+function keep(x) {
+  return x;
+}
+({ keep } = reassigned);
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/not-identity-two-args.js ----------
+// not-identity-two-args.js
+function keep(x, y) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/not-identity-default.js ----------
+// not-identity-default.js
+function keep(x = foo()) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/not-identity-array.js ----------
+// not-identity-array.js
+function keep([x]) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/not-identity-object.js ----------
+// not-identity-object.js
+function keep({ x }) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/not-identity-rest.js ----------
+// not-identity-rest.js
+function keep(...x) {
+  return x;
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+---------- /out/not-identity-return.js ----------
+// not-identity-return.js
+function keep(x) {
+  return [x];
+}
+console.log(keep(1));
+keep(foo());
+keep(1);
+
+================================================================================
 TestJSONLoaderRemoveUnused
 ---------- /out.js ----------
 // entry.js
