@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.14.11
+
+* Fix a bug with enum inlining ([#1903](https://github.com/evanw/esbuild/issues/1903))
+
+    The new TypeScript enum inlining behavior had a bug where it worked correctly if you used `export enum Foo` but not if you used `enum Foo` and then later `export { Foo }`. This release fixes the bug so enum inlining now works correctly in this case.
+
+* Warn about `module.exports.foo = ...` in ESM ([#1907](https://github.com/evanw/esbuild/issues/1907))
+
+    The `module` variable is treated as a global variable reference instead of as a CommonJS module reference in ESM code, which can cause problems for people that try to use both CommonJS and ESM exports in the same file. There has been a warning about this since version 0.14.9. However, the warning only covered cases like `exports.foo = bar` and `module.exports = bar` but not `module.exports.foo = bar`. This last case is now handled;
+
+    ```
+    ▲ [WARNING] The CommonJS "module" variable is treated as a global variable in an ECMAScript module and may not work as expected
+
+        example.ts:2:0:
+          2 │ module.exports.b = 1
+            ╵ ~~~~~~
+
+      This file is considered to be an ECMAScript module because of the "export" keyword here:
+
+        example.ts:1:0:
+          1 │ export let a = 1
+            ╵ ~~~~~~
+    ```
+
+* Enable esbuild's CLI with Deno ([#1913](https://github.com/evanw/esbuild/issues/1913))
+
+    This release allows you to use Deno as an esbuild installer, without also needing to use esbuild's JavaScript API. You can now use esbuild's CLI with Deno:
+
+    ```
+    deno run --allow-all "https://deno.land/x/esbuild@v0.14.11/mod.js" --version
+    ```
+
 ## 0.14.10
 
 * Enable tree shaking of classes with lowered static fields ([#175](https://github.com/evanw/esbuild/issues/175))
