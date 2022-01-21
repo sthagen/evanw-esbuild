@@ -30,6 +30,7 @@ type parser struct {
 }
 
 type Options struct {
+	OriginalTargetEnv      string
 	UnsupportedCSSFeatures compat.CSSFeature
 	MangleSyntax           bool
 	RemoveWhitespace       bool
@@ -173,10 +174,12 @@ type ruleContext struct {
 }
 
 func (p *parser) parseListOfRules(context ruleContext) []css_ast.Rule {
-	didWarnAboutCharset := false
-	didWarnAboutImport := false
+	atRuleContext := atRuleContext{}
+	if context.isTopLevel {
+		atRuleContext.charsetValidity = atRuleValid
+		atRuleContext.importValidity = atRuleValid
+	}
 	rules := []css_ast.Rule{}
-	locs := []logger.Loc{}
 
 loop:
 	for {
@@ -189,9 +192,6 @@ loop:
 			}
 			if comment.TokenIndexAfter == uint32(p.index) {
 				rules = append(rules, css_ast.Rule{Loc: comment.Loc, Data: &css_ast.RComment{Text: comment.Text}})
-				if context.isTopLevel {
-					locs = append(locs, comment.Loc)
-				}
 			}
 			p.legalCommentIndex++
 		}
@@ -210,47 +210,30 @@ loop:
 			continue
 
 		case css_lexer.TAtKeyword:
-			first := p.current().Range
-			rule := p.parseAtRule(atRuleContext{})
+			rule := p.parseAtRule(atRuleContext)
 
-			// Validate structure
+			// Disallow "@charset" and "@import" after other rules
 			if context.isTopLevel {
 				switch rule.Data.(type) {
 				case *css_ast.RAtCharset:
-					if !didWarnAboutCharset {
-						for i, before := range rules {
-							if _, ok := before.Data.(*css_ast.RComment); !ok {
-								p.log.AddWithNotes(logger.Warning, &p.tracker, first, "\"@charset\" must be the first rule in the file",
-									[]logger.MsgData{p.tracker.MsgData(logger.Range{Loc: locs[i]},
-										"This rule cannot come before a \"@charset\" rule")})
-								didWarnAboutCharset = true
-								break
-							}
-						}
-					}
+					// This doesn't invalidate anything because it always comes first
 
 				case *css_ast.RAtImport:
-					if !didWarnAboutImport {
-					importLoop:
-						for i, before := range rules {
-							switch before.Data.(type) {
-							case *css_ast.RComment, *css_ast.RAtCharset, *css_ast.RAtImport:
-							default:
-								p.log.AddWithNotes(logger.Warning, &p.tracker, first, "All \"@import\" rules must come first",
-									[]logger.MsgData{p.tracker.MsgData(logger.Range{Loc: locs[i]},
-										"This rule cannot come before an \"@import\" rule")})
-								didWarnAboutImport = true
-								break importLoop
-							}
-						}
+					if atRuleContext.charsetValidity == atRuleValid {
+						atRuleContext.afterLoc = rule.Loc
+						atRuleContext.charsetValidity = atRuleInvalidAfter
+					}
+
+				default:
+					if atRuleContext.importValidity == atRuleValid {
+						atRuleContext.afterLoc = rule.Loc
+						atRuleContext.charsetValidity = atRuleInvalidAfter
+						atRuleContext.importValidity = atRuleInvalidAfter
 					}
 				}
 			}
 
 			rules = append(rules, rule)
-			if context.isTopLevel {
-				locs = append(locs, first.Loc)
-			}
 			continue
 
 		case css_lexer.TCDO, css_lexer.TCDC:
@@ -260,11 +243,14 @@ loop:
 			}
 		}
 
-		if context.isTopLevel {
-			locs = append(locs, p.current().Range.Loc)
+		if atRuleContext.importValidity == atRuleValid {
+			atRuleContext.afterLoc = p.current().Range.Loc
+			atRuleContext.charsetValidity = atRuleInvalidAfter
+			atRuleContext.importValidity = atRuleInvalidAfter
 		}
+
 		if context.parseSelectors {
-			rules = append(rules, p.parseSelectorRule())
+			rules = append(rules, p.parseSelectorRuleFrom(p.index, parseSelectorOpts{}))
 		} else {
 			rules = append(rules, p.parseQualifiedRuleFrom(p.index, false /* isAlreadyInvalid */))
 		}
@@ -292,11 +278,12 @@ func (p *parser) parseListOfDeclarations() (list []css_ast.Rule) {
 		case css_lexer.TAtKeyword:
 			list = append(list, p.parseAtRule(atRuleContext{
 				isDeclarationList: true,
+				allowNesting:      true,
 			}))
 
 		case css_lexer.TDelimAmpersand:
 			// Reference: https://drafts.csswg.org/css-nesting-1/
-			list = append(list, p.parseSelectorRule())
+			list = append(list, p.parseSelectorRuleFrom(p.index, parseSelectorOpts{allowNesting: true}))
 
 		default:
 			list = append(list, p.parseDeclaration())
@@ -487,7 +474,7 @@ var nonDeprecatedElementsSupportedByIE7 = map[string]bool{
 func isSafeSelectors(complexSelectors []css_ast.ComplexSelector) bool {
 	for _, complex := range complexSelectors {
 		for _, compound := range complex.Selectors {
-			if compound.HasNestPrefix {
+			if compound.NestingSelector != css_ast.NestingSelectorNone {
 				// Bail because this is an extension: https://drafts.csswg.org/css-nesting-1/
 				return false
 			}
@@ -628,10 +615,25 @@ var specialAtRules = map[string]atRuleKind{
 	"media":    atRuleInheritContext,
 	"scope":    atRuleInheritContext,
 	"supports": atRuleInheritContext,
+
+	// Reference: https://drafts.csswg.org/css-nesting-1/
+	"nest": atRuleDeclarations,
 }
 
+type atRuleValidity uint8
+
+const (
+	atRuleInvalid atRuleValidity = iota
+	atRuleValid
+	atRuleInvalidAfter
+)
+
 type atRuleContext struct {
+	afterLoc          logger.Loc
+	charsetValidity   atRuleValidity
+	importValidity    atRuleValidity
 	isDeclarationList bool
+	allowNesting      bool
 }
 
 func (p *parser) parseAtRule(context atRuleContext) css_ast.Rule {
@@ -645,58 +647,81 @@ func (p *parser) parseAtRule(context atRuleContext) css_ast.Rule {
 	preludeStart := p.index
 	switch atToken {
 	case "charset":
-		kind = atRuleEmpty
-		p.expect(css_lexer.TWhitespace)
-		if p.peek(css_lexer.TString) {
-			encoding := p.decoded()
-			if !strings.EqualFold(encoding, "UTF-8") {
-				p.log.Add(logger.Warning, &p.tracker, p.current().Range,
-					fmt.Sprintf("\"UTF-8\" will be used instead of unsupported charset %q", encoding))
+		switch context.charsetValidity {
+		case atRuleInvalid:
+			p.log.Add(logger.Warning, &p.tracker, atRange, "\"@charset\" must be the first rule in the file")
+
+		case atRuleInvalidAfter:
+			p.log.AddWithNotes(logger.Warning, &p.tracker, atRange, "\"@charset\" must be the first rule in the file",
+				[]logger.MsgData{p.tracker.MsgData(logger.Range{Loc: context.afterLoc},
+					"This rule cannot come before a \"@charset\" rule")})
+
+		case atRuleValid:
+			kind = atRuleEmpty
+			p.expect(css_lexer.TWhitespace)
+			if p.peek(css_lexer.TString) {
+				encoding := p.decoded()
+				if !strings.EqualFold(encoding, "UTF-8") {
+					p.log.Add(logger.Warning, &p.tracker, p.current().Range,
+						fmt.Sprintf("\"UTF-8\" will be used instead of unsupported charset %q", encoding))
+				}
+				p.advance()
+				p.expect(css_lexer.TSemicolon)
+				return css_ast.Rule{Loc: atRange.Loc, Data: &css_ast.RAtCharset{Encoding: encoding}}
 			}
-			p.advance()
-			p.expect(css_lexer.TSemicolon)
-			return css_ast.Rule{Loc: atRange.Loc, Data: &css_ast.RAtCharset{Encoding: encoding}}
+			p.expect(css_lexer.TString)
 		}
-		p.expect(css_lexer.TString)
 
 	case "import":
-		kind = atRuleEmpty
-		p.eat(css_lexer.TWhitespace)
-		if path, r, ok := p.expectURLOrString(); ok {
-			importConditionsStart := p.index
-			for {
-				if kind := p.current().Kind; kind == css_lexer.TSemicolon || kind == css_lexer.TOpenBrace || kind == css_lexer.TEndOfFile {
-					break
-				}
-				p.parseComponentValue()
-			}
-			if p.current().Kind == css_lexer.TOpenBrace {
-				break // Avoid parsing an invalid "@import" rule
-			}
-			importConditions := p.convertTokens(p.tokens[importConditionsStart:p.index])
-			kind := ast.ImportAt
+		switch context.importValidity {
+		case atRuleInvalid:
+			p.log.Add(logger.Warning, &p.tracker, atRange, "\"@import\" is only valid at the top level")
 
-			// Insert or remove whitespace before the first token
-			if len(importConditions) > 0 {
-				kind = ast.ImportAtConditional
-				if p.options.RemoveWhitespace {
-					importConditions[0].Whitespace &= ^css_ast.WhitespaceBefore
-				} else {
-					importConditions[0].Whitespace |= css_ast.WhitespaceBefore
-				}
-			}
+		case atRuleInvalidAfter:
+			p.log.AddWithNotes(logger.Warning, &p.tracker, atRange, "All \"@import\" rules must come first",
+				[]logger.MsgData{p.tracker.MsgData(logger.Range{Loc: context.afterLoc},
+					"This rule cannot come before an \"@import\" rule")})
 
-			p.expect(css_lexer.TSemicolon)
-			importRecordIndex := uint32(len(p.importRecords))
-			p.importRecords = append(p.importRecords, ast.ImportRecord{
-				Kind:  kind,
-				Path:  logger.Path{Text: path},
-				Range: r,
-			})
-			return css_ast.Rule{Loc: atRange.Loc, Data: &css_ast.RAtImport{
-				ImportRecordIndex: importRecordIndex,
-				ImportConditions:  importConditions,
-			}}
+		case atRuleValid:
+			kind = atRuleEmpty
+			p.eat(css_lexer.TWhitespace)
+			if path, r, ok := p.expectURLOrString(); ok {
+				importConditionsStart := p.index
+				for {
+					if kind := p.current().Kind; kind == css_lexer.TSemicolon || kind == css_lexer.TOpenBrace ||
+						kind == css_lexer.TCloseBrace || kind == css_lexer.TEndOfFile {
+						break
+					}
+					p.parseComponentValue()
+				}
+				if p.current().Kind == css_lexer.TOpenBrace {
+					break // Avoid parsing an invalid "@import" rule
+				}
+				importConditions := p.convertTokens(p.tokens[importConditionsStart:p.index])
+				kind := ast.ImportAt
+
+				// Insert or remove whitespace before the first token
+				if len(importConditions) > 0 {
+					kind = ast.ImportAtConditional
+					if p.options.RemoveWhitespace {
+						importConditions[0].Whitespace &= ^css_ast.WhitespaceBefore
+					} else {
+						importConditions[0].Whitespace |= css_ast.WhitespaceBefore
+					}
+				}
+
+				p.expect(css_lexer.TSemicolon)
+				importRecordIndex := uint32(len(p.importRecords))
+				p.importRecords = append(p.importRecords, ast.ImportRecord{
+					Kind:  kind,
+					Path:  logger.Path{Text: path},
+					Range: r,
+				})
+				return css_ast.Rule{Loc: atRange.Loc, Data: &css_ast.RAtImport{
+					ImportRecordIndex: importRecordIndex,
+					ImportConditions:  importConditions,
+				}}
+			}
 		}
 
 	case "keyframes", "-webkit-keyframes", "-moz-keyframes", "-ms-keyframes", "-o-keyframes":
@@ -793,6 +818,14 @@ func (p *parser) parseAtRule(context atRuleContext) css_ast.Rule {
 				Name:    name,
 				Blocks:  blocks,
 			}}
+		}
+
+	case "nest":
+		// Reference: https://drafts.csswg.org/css-nesting-1/
+		p.eat(css_lexer.TWhitespace)
+		if kind := p.current().Kind; kind != css_lexer.TSemicolon && kind != css_lexer.TOpenBrace &&
+			kind != css_lexer.TCloseBrace && kind != css_lexer.TEndOfFile {
+			return p.parseSelectorRuleFrom(preludeStart-1, parseSelectorOpts{atNestRange: atRange, allowNesting: context.allowNesting})
 		}
 
 	default:
@@ -1197,15 +1230,31 @@ func mangleNumber(t string) (string, bool) {
 	return t, t != original
 }
 
-func (p *parser) parseSelectorRule() css_ast.Rule {
-	preludeStart := p.index
-
+func (p *parser) parseSelectorRuleFrom(preludeStart int, opts parseSelectorOpts) css_ast.Rule {
 	// Try parsing the prelude as a selector list
-	if list, ok := p.parseSelectorList(); ok {
-		selector := css_ast.RSelector{Selectors: list}
+	if list, ok := p.parseSelectorList(opts); ok {
+		selector := css_ast.RSelector{
+			Selectors: list,
+			HasAtNest: opts.atNestRange.Len != 0,
+		}
 		if p.expect(css_lexer.TOpenBrace) {
 			selector.Rules = p.parseListOfDeclarations()
 			p.expect(css_lexer.TCloseBrace)
+
+			// Minify "@nest" when possible
+			if p.options.MangleSyntax && selector.HasAtNest {
+				allHaveNestPrefix := true
+				for _, complex := range selector.Selectors {
+					if len(complex.Selectors) == 0 || complex.Selectors[0].NestingSelector != css_ast.NestingSelectorPrefix {
+						allHaveNestPrefix = false
+						break
+					}
+				}
+				if allHaveNestPrefix {
+					selector.HasAtNest = false
+				}
+			}
+
 			return css_ast.Rule{Loc: p.tokens[preludeStart].Range.Loc, Data: &selector}
 		}
 	}
@@ -1330,8 +1379,20 @@ stop:
 		}
 	}
 
+	key := css_ast.KnownDeclarations[keyText]
+
+	// Attempt to point out trivial typos
+	if key == css_ast.DUnknown {
+		if corrected, ok := css_ast.MaybeCorrectDeclarationTypo(keyText); ok {
+			data := p.tracker.MsgData(keyToken.Range, fmt.Sprintf("%q is not a known CSS property", keyText))
+			data.Location.Suggestion = corrected
+			p.log.AddMsg(logger.Msg{Kind: logger.Warning, Data: data,
+				Notes: []logger.MsgData{{Text: fmt.Sprintf("Did you mean %q instead?", corrected)}}})
+		}
+	}
+
 	return css_ast.Rule{Loc: keyLoc, Data: &css_ast.RDeclaration{
-		Key:       css_ast.KnownDeclarations[keyText],
+		Key:       key,
 		KeyText:   keyText,
 		KeyRange:  keyToken.Range,
 		Value:     result,

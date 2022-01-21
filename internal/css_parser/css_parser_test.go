@@ -63,6 +63,13 @@ func expectPrintedLower(t *testing.T, contents string, expected string) {
 	})
 }
 
+func expectPrintedMinify(t *testing.T, contents string, expected string) {
+	t.Helper()
+	expectPrintedCommon(t, contents+" [minify]", contents, expected, config.Options{
+		RemoveWhitespace: true,
+	})
+}
+
 func expectPrintedMangle(t *testing.T, contents string, expected string) {
 	t.Helper()
 	expectPrintedCommon(t, contents+" [mangle]", contents, expected, config.Options{
@@ -688,6 +695,43 @@ func TestNestedSelector(t *testing.T) {
 	expectPrinted(t, "a { &*|b {} }", "a {\n  &*|b {\n  }\n}\n")
 	expectPrinted(t, "a { &a|b {} }", "a {\n  &a|b {\n  }\n}\n")
 	expectPrinted(t, "a { &[b] {} }", "a {\n  &[b] {\n  }\n}\n")
+
+	expectParseError(t, "a { & b, c {} }",
+		"<stdin>: WARNING: Every selector in a nested style rule must start with \"&\"\n"+
+			"<stdin>: NOTE: This is a nested style rule because of the \"&\" here:\n")
+	expectParseError(t, "a { & b, & c {} }", "")
+
+	expectParseError(t, "a { b & {} }", "<stdin>: WARNING: Expected \":\"\n")
+	expectParseError(t, "a { @nest b & {} }", "")
+	expectParseError(t, "a { @nest & b, c {} }",
+		"<stdin>: WARNING: Every selector in a nested style rule must contain \"&\"\n"+
+			"<stdin>: NOTE: This is a nested style rule because of the \"@nest\" here:\n")
+	expectParseError(t, "a { @nest b &, c {} }",
+		"<stdin>: WARNING: Every selector in a nested style rule must contain \"&\"\n"+
+			"<stdin>: NOTE: This is a nested style rule because of the \"@nest\" here:\n")
+	expectPrinted(t, "a { @nest b & { color: red } }", "a {\n  @nest b & {\n    color: red;\n  }\n}\n")
+	expectPrinted(t, "a { @nest b& { color: red } }", "a {\n  @nest b& {\n    color: red;\n  }\n}\n")
+	expectPrinted(t, "a { @nest b&[c] { color: red } }", "a {\n  @nest b[c]& {\n    color: red;\n  }\n}\n")
+	expectPrinted(t, "a { @nest &[c] { color: red } }", "a {\n  @nest &[c] {\n    color: red;\n  }\n}\n")
+	expectPrinted(t, "a { @nest [c]& { color: red } }", "a {\n  @nest [c]& {\n    color: red;\n  }\n}\n")
+	expectPrintedMinify(t, "a { @nest b & { color: red } }", "a{@nest b &{color:red}}")
+	expectPrintedMinify(t, "a { @nest b& { color: red } }", "a{@nest b&{color:red}}")
+
+	// Don't drop "@nest" for invalid rules
+	expectParseError(t, "a { @nest @invalid { color: red } }", "<stdin>: WARNING: Unexpected \"@invalid\"\n")
+	expectPrinted(t, "a { @nest @invalid { color: red } }", "a {\n  @nest @invalid {\n    color: red;\n  }\n}\n")
+
+	// Check removal of "@nest" when minifying
+	expectPrinted(t, "a { @nest & b, & c { color: red } }", "a {\n  @nest & b,\n  & c {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "a { @nest & b, & c { color: red } }", "a {\n  & b,\n  & c {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "a { @nest b &, & c { color: red } }", "a {\n  @nest b &,\n  & c {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "a { @nest & b, c & { color: red } }", "a {\n  @nest & b,\n  c & {\n    color: red;\n  }\n}\n")
+
+	outside := "<stdin>: WARNING: CSS nesting syntax cannot be used outside of a style rule\n"
+	expectParseError(t, "& a {}", outside)
+	expectParseError(t, "@nest a & {}", outside)
+	expectParseError(t, "@media screen { & a {} }", outside)
+	expectParseError(t, "@media screen { @nest a & {} }", outside)
 }
 
 func TestBadQualifiedRules(t *testing.T) {
@@ -838,6 +882,9 @@ func TestAtImport(t *testing.T) {
 
 	expectParseError(t, "@import \"foo.css\" {}", "<stdin>: WARNING: Expected \";\"\n")
 	expectPrinted(t, "@import \"foo\"\na { color: red }\nb { color: blue }", "@import \"foo\" a { color: red }\nb {\n  color: blue;\n}\n")
+
+	expectParseError(t, "a { @import \"foo.css\" }", "<stdin>: WARNING: \"@import\" is only valid at the top level\n<stdin>: WARNING: Expected \";\"\n")
+	expectPrinted(t, "a { @import \"foo.css\" }", "a {\n  @import \"foo.css\";\n}\n")
 }
 
 func TestLegalComment(t *testing.T) {
@@ -1628,4 +1675,15 @@ func TestWarningUnexpectedCloseBrace(t *testing.T) {
   color: green;
 }
 `)
+}
+
+func TestPropertyTypoWarning(t *testing.T) {
+	expectParseError(t, "a { z-idnex: 0 }", "<stdin>: WARNING: \"z-idnex\" is not a known CSS property\nNOTE: Did you mean \"z-index\" instead?\n")
+	expectParseError(t, "a { x-index: 0 }", "<stdin>: WARNING: \"x-index\" is not a known CSS property\nNOTE: Did you mean \"z-index\" instead?\n")
+
+	// CSS variables should not be corrected
+	expectParseError(t, "a { --index: 0 }", "")
+
+	// Short names should not be corrected ("alt" is actually valid in WebKit, and should not become "all")
+	expectParseError(t, "a { alt: \"\" }", "")
 }
