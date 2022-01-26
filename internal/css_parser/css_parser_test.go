@@ -738,9 +738,10 @@ func TestBadQualifiedRules(t *testing.T) {
 	expectParseError(t, "$bad: rule;", "<stdin>: WARNING: Unexpected \"$\"\n")
 	expectParseError(t, "$bad { color: red }", "<stdin>: WARNING: Unexpected \"$\"\n")
 	expectParseError(t, "a { div.major { color: blue } color: red }", "<stdin>: WARNING: Expected \":\" but found \".\"\n")
-	expectParseError(t, "a { div:hover { color: blue } color: red }", "<stdin>: WARNING: Expected \";\"\n")
+	expectParseError(t, "a { div:hover { color: blue } color: red }", "")
 	expectParseError(t, "a { div:hover { color: blue }; color: red }", "")
 	expectParseError(t, "a { div:hover { color: blue } ; color: red }", "")
+	expectParseError(t, "! { x: {} }", "<stdin>: WARNING: Unexpected \"!\"\n")
 }
 
 func TestAtRule(t *testing.T) {
@@ -939,10 +940,27 @@ func TestAtKeyframes(t *testing.T) {
 	expectParseError(t, "@keyframes name { {} 0% {} }", "<stdin>: WARNING: Expected percentage but found \"{\"\n")
 	expectParseError(t, "@keyframes name { 100 {} }", "<stdin>: WARNING: Expected percentage but found \"100\"\n")
 	expectParseError(t, "@keyframes name { into {} }", "<stdin>: WARNING: Expected percentage but found \"into\"\n")
-	expectParseError(t, "@keyframes name { 1,2 {} }", "<stdin>: WARNING: Expected percentage but found \"1\"\n<stdin>: WARNING: Expected percentage but found \"2\"\n")
-	expectParseError(t, "@keyframes name { 1, 2 {} }", "<stdin>: WARNING: Expected percentage but found \"1\"\n<stdin>: WARNING: Expected percentage but found \"2\"\n")
-	expectParseError(t, "@keyframes name { 1 ,2 {} }", "<stdin>: WARNING: Expected percentage but found \"1\"\n<stdin>: WARNING: Expected percentage but found \"2\"\n")
+	expectParseError(t, "@keyframes name { 1,2 {} }", "<stdin>: WARNING: Expected percentage but found \"1\"\n")
+	expectParseError(t, "@keyframes name { 1, 2 {} }", "<stdin>: WARNING: Expected percentage but found \"1\"\n")
+	expectParseError(t, "@keyframes name { 1 ,2 {} }", "<stdin>: WARNING: Expected percentage but found \"1\"\n")
+	expectParseError(t, "@keyframes name { 1%, {} }", "<stdin>: WARNING: Expected percentage but found \"{\"\n")
+	expectParseError(t, "@keyframes name { 1%, x {} }", "<stdin>: WARNING: Expected percentage but found \"x\"\n")
+	expectParseError(t, "@keyframes name { 1%, ! {} }", "<stdin>: WARNING: Expected percentage but found \"!\"\n")
+	expectParseError(t, "@keyframes name { .x {} }", "<stdin>: WARNING: Expected percentage but found \".\"\n")
+	expectParseError(t, "@keyframes name { {} }", "<stdin>: WARNING: Expected percentage but found \"{\"\n")
+	expectParseError(t, "@keyframes name { 1% }", "<stdin>: WARNING: Expected \"{\" but found \"}\"\n")
+	expectParseError(t, "@keyframes name { 1%", "<stdin>: WARNING: Expected \"{\" but found end of file\n")
 	expectParseError(t, "@keyframes name { 1%,,2% {} }", "<stdin>: WARNING: Expected percentage but found \",\"\n")
+	expectParseError(t, "@keyframes name {", "<stdin>: WARNING: Expected \"}\" but found end of file\n")
+
+	expectPrinted(t, "@keyframes x { 1%, {} } @keyframes z { 1% {} }", "@keyframes x { 1%, {} }\n@keyframes z {\n  1% {\n  }\n}\n")
+	expectPrinted(t, "@keyframes x { .y {} } @keyframes z { 1% {} }", "@keyframes x { .y {} }\n@keyframes z {\n  1% {\n  }\n}\n")
+	expectPrinted(t, "@keyframes x { x {} } @keyframes z { 1% {} }", "@keyframes x {\n  x {\n  }\n}\n@keyframes z {\n  1% {\n  }\n}\n")
+	expectPrinted(t, "@keyframes x { {} } @keyframes z { 1% {} }", "@keyframes x { {} }\n@keyframes z {\n  1% {\n  }\n}\n")
+	expectPrinted(t, "@keyframes x { 1% {}", "@keyframes x { 1% {} }\n")
+	expectPrinted(t, "@keyframes x { 1% {", "@keyframes x { 1% {} }\n")
+	expectPrinted(t, "@keyframes x { 1%", "@keyframes x { 1% }\n")
+	expectPrinted(t, "@keyframes x {", "@keyframes x {}\n")
 }
 
 func TestAtRuleValidation(t *testing.T) {
