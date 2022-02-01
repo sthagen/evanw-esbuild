@@ -427,6 +427,376 @@ var x_txt = require_x();
 console.log(x_txt, y_default);
 
 ================================================================================
+TestMangleProps
+---------- /out/entry1.js ----------
+export function shouldMangle() {
+  let foo = {
+    a: 0,
+    b() {
+    }
+  };
+  let { a: bar_ } = foo;
+  ({ a: bar_ } = foo);
+  class foo_ {
+    a = 0;
+    b() {
+    }
+    static a = 0;
+    static b() {
+    }
+  }
+  return { a: bar_, c: foo_ };
+}
+export function shouldNotMangle() {
+  let foo = {
+    "bar_": 0,
+    "baz_"() {
+    }
+  };
+  let { "bar_": bar_ } = foo;
+  ({ "bar_": bar_ } = foo);
+  class foo_ {
+    "bar_" = 0;
+    "baz_"() {
+    }
+    static "bar_" = 0;
+    static "baz_"() {
+    }
+  }
+  return { "bar_": bar_, "foo_": foo_ };
+}
+
+---------- /out/entry2.js ----------
+export default {
+  a: 0,
+  "baz_": 1
+};
+
+================================================================================
+TestManglePropsAvoidCollisions
+---------- /out.js ----------
+export default {
+  c: 0,
+  d: 1,
+  a: 2,
+  b: 3,
+  __proto__: {}
+};
+
+================================================================================
+TestManglePropsImportExport
+---------- /out/esm.js ----------
+export let foo_ = 123;
+import { bar_ } from "xyz";
+
+---------- /out/cjs.js ----------
+exports.a = 123;
+let bar_ = require("xyz").b;
+
+================================================================================
+TestManglePropsImportExportBundled
+---------- /out/entry-esm.js ----------
+// cjs.js
+var require_cjs = __commonJS({
+  "cjs.js"(exports) {
+    exports.a = "foo";
+  }
+});
+
+// esm.js
+var esm_exports = {};
+__export(esm_exports, {
+  esm_foo_: () => esm_foo_
+});
+var esm_foo_ = "foo";
+
+// entry-esm.js
+var import_cjs = __toESM(require_cjs());
+var cjs = __toESM(require_cjs());
+var bar_ = [
+  esm_foo_,
+  import_cjs.cjs_foo_,
+  esm_exports.b,
+  cjs.a
+];
+export {
+  bar_
+};
+
+---------- /out/entry-cjs.js ----------
+// esm.js
+var esm_exports = {};
+__export(esm_exports, {
+  esm_foo_: () => esm_foo_
+});
+var esm_foo_;
+var init_esm = __esm({
+  "esm.js"() {
+    esm_foo_ = "foo";
+  }
+});
+
+// cjs.js
+var require_cjs = __commonJS({
+  "cjs.js"(exports) {
+    exports.a = "foo";
+  }
+});
+
+// entry-cjs.js
+var require_entry_cjs = __commonJS({
+  "entry-cjs.js"(exports) {
+    var { b: esm_foo_2 } = (init_esm(), __toCommonJS(esm_exports));
+    var { a: cjs_foo_ } = require_cjs();
+    exports.c = [
+      esm_foo_2,
+      cjs_foo_
+    ];
+  }
+});
+export default require_entry_cjs();
+
+================================================================================
+TestManglePropsJSXPreserve
+---------- /out.jsx ----------
+let Foo = {
+  a(props) {
+    return <>{props.b}</>;
+  },
+  c: "hello, world"
+};
+export default <Foo.a b={Foo.c} />;
+
+================================================================================
+TestManglePropsJSXTransform
+---------- /out.js ----------
+let Foo = {
+  b(props) {
+    return /* @__PURE__ */ Foo.a(Foo.d, null, props.c);
+  },
+  e: "hello, world",
+  a(...args) {
+    console.log("createElement", ...args);
+  },
+  d(...args) {
+    console.log("Fragment", ...args);
+  }
+};
+export default /* @__PURE__ */ Foo.a(Foo.b, {
+  c: Foo.e
+});
+
+================================================================================
+TestManglePropsJSXTransformNamespace
+---------- /out.js ----------
+export default [
+  /* @__PURE__ */ React.createElement(KEEP_THIS_, null),
+  /* @__PURE__ */ React.createElement("KEEP:THIS_", null),
+  /* @__PURE__ */ React.createElement("foo", {
+    "KEEP:THIS_": true
+  })
+];
+
+================================================================================
+TestManglePropsLoweredClassFields
+---------- /out.js ----------
+class Foo {
+  constructor() {
+    __publicField(this, "a", 123);
+  }
+}
+__publicField(Foo, "b", 234);
+Foo.b = new Foo().a;
+
+================================================================================
+TestManglePropsLoweredOptionalChain
+---------- /out.js ----------
+export default function(x) {
+  var _a;
+  x.a;
+  (_a = x.a) == null ? void 0 : _a.call(x);
+  x == null ? void 0 : x.a;
+  x == null ? void 0 : x.a();
+  x == null ? void 0 : x.a.b;
+  x == null ? void 0 : x.a.b();
+  x == null ? void 0 : x["foo_"].b;
+  x == null ? void 0 : x.a["bar_"];
+}
+
+================================================================================
+TestManglePropsMinify
+---------- /out/entry1.js ----------
+export function shouldMangle_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX() {
+  let X = {
+    X: 0,
+    Y() {
+    }
+  }, { X: Y } = X;
+  ({ X: Y } = X);
+  class t {
+    X = 0;
+    Y() {
+    }
+    static X = 0;
+    static Y() {
+    }
+  }
+  return { X: Y, t };
+}
+export function shouldNotMangle_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY() {
+  let X = {
+    bar_: 0,
+    baz_() {
+    }
+  }, { bar_: Y } = X;
+  ({ bar_: Y } = X);
+  class t {
+    bar_ = 0;
+    baz_() {
+    }
+    static bar_ = 0;
+    static baz_() {
+    }
+  }
+  return { bar_: Y, foo_: t };
+}
+
+---------- /out/entry2.js ----------
+export default {
+  a: 0,
+  baz_: 1
+};
+
+================================================================================
+TestManglePropsNoShorthand
+---------- /out.js ----------
+export let yyyyy = ({ y }) => ({ y: y });
+
+================================================================================
+TestManglePropsOptionalChain
+---------- /out.js ----------
+export default function(x) {
+  x.a;
+  x.a?.();
+  x?.a;
+  x?.a();
+  x?.a.b;
+  x?.a.b();
+  x?.["foo_"].b;
+  x?.a["bar_"];
+}
+
+================================================================================
+TestManglePropsShorthand
+---------- /out.js ----------
+export let yyyyy = ({ y }) => ({ y });
+
+================================================================================
+TestManglePropsSuperCall
+---------- /out.js ----------
+class Foo {
+}
+class Bar extends Foo {
+  constructor() {
+    super();
+  }
+}
+
+================================================================================
+TestManglePropsTypeScriptFeatures
+---------- /out/parameter-properties.js ----------
+class Foo {
+  constructor(KEEP_FIELD, MANGLE_FIELD_) {
+    this.KEEP_FIELD = KEEP_FIELD;
+    this.a = MANGLE_FIELD_;
+  }
+}
+let foo = new Foo();
+console.log(foo.KEEP_FIELD, foo.a);
+
+---------- /out/namespace-exports.js ----------
+var ns;
+((ns2) => {
+  ns2.b = 1;
+  ns2.c = 2;
+  ns2.d = 3;
+  ({ i: { a: ns2.a } } = 4);
+  function MANGLE_FUNCTION_() {
+  }
+  ns2.g = MANGLE_FUNCTION_;
+  class MANGLE_CLASS_ {
+  }
+  ns2.h = MANGLE_CLASS_;
+  let MANGLE_NAMESPACE_;
+  ((MANGLE_NAMESPACE_2) => {
+    ;
+  })(MANGLE_NAMESPACE_ = ns2.e || (ns2.e = {}));
+  let MANGLE_ENUM_;
+  ((MANGLE_ENUM_2) => {
+  })(MANGLE_ENUM_ = ns2.f || (ns2.f = {}));
+  console.log({
+    VAR: ns2.b,
+    LET: ns2.c,
+    CONST: ns2.d,
+    DESTRUCTURING: ns2.a,
+    FUNCTION: MANGLE_FUNCTION_,
+    CLASS: MANGLE_CLASS_,
+    NAMESPACE: MANGLE_NAMESPACE_,
+    ENUM: MANGLE_ENUM_
+  });
+})(ns || (ns = {}));
+console.log({
+  VAR: ns.b,
+  LET: ns.c,
+  CONST: ns.d,
+  DESTRUCTURING: ns.a,
+  FUNCTION: ns.g,
+  CLASS: ns.h,
+  NAMESPACE: ns.e,
+  ENUM: ns.f
+});
+((ns2) => {
+  console.log({
+    VAR: ns2.b,
+    LET: ns2.c,
+    CONST: ns2.d,
+    DESTRUCTURING: ns2.a,
+    FUNCTION: ns2.g,
+    CLASS: ns2.h,
+    NAMESPACE: ns2.e,
+    ENUM: ns2.f
+  });
+})(ns || (ns = {}));
+
+---------- /out/enum-values.js ----------
+var TopLevelNumber = /* @__PURE__ */ ((TopLevelNumber2) => {
+  TopLevelNumber2[TopLevelNumber2["foo_"] = 0] = "foo_";
+  return TopLevelNumber2;
+})(TopLevelNumber || {});
+var TopLevelString = /* @__PURE__ */ ((TopLevelString2) => {
+  TopLevelString2["bar_"] = "";
+  return TopLevelString2;
+})(TopLevelString || {});
+console.log({
+  foo: TopLevelNumber.a,
+  bar: TopLevelString.b
+});
+function fn() {
+  let NestedNumber;
+  ((NestedNumber2) => {
+    NestedNumber2[NestedNumber2["foo_"] = 0] = "foo_";
+  })(NestedNumber || (NestedNumber = {}));
+  let NestedString;
+  ((NestedString2) => {
+    NestedString2["bar_"] = "";
+  })(NestedString || (NestedString = {}));
+  console.log({
+    foo: TopLevelNumber.a,
+    bar: TopLevelString.b
+  });
+}
+
+================================================================================
 TestMinifyIdentifiersImportPathFrequencyAnalysis
 ---------- /out/import.js ----------
 var o=123;console.log(o,"no identifier in this file should be named W, X, Y, or Z");
@@ -515,6 +885,14 @@ var require_test = __commonJS({
 
 // entry.js
 console.log(require_test());
+
+================================================================================
+TestReserveProps
+---------- /out.js ----------
+export default {
+  a: 0,
+  _bar_: 1
+};
 
 ================================================================================
 TestToESMWrapperOmission

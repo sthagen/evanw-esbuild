@@ -5302,3 +5302,552 @@ cjs-in-esm.js: NOTE: This file is considered to be an ECMAScript module because 
 `,
 	})
 }
+
+func TestMangleProps(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry1.js": `
+				export function shouldMangle() {
+					let foo = {
+						bar_: 0,
+						baz_() {},
+					};
+					let { bar_ } = foo;
+					({ bar_ } = foo);
+					class foo_ {
+						bar_ = 0
+						baz_() {}
+						static bar_ = 0
+						static baz_() {}
+					}
+					return { bar_, foo_ }
+				}
+
+				export function shouldNotMangle() {
+					let foo = {
+						'bar_': 0,
+						'baz_'() {},
+					};
+					let { 'bar_': bar_ } = foo;
+					({ 'bar_': bar_ } = foo);
+					class foo_ {
+						'bar_' = 0
+						'baz_'() {}
+						static 'bar_' = 0
+						static 'baz_'() {}
+					}
+					return { 'bar_': bar_, 'foo_': foo_ }
+				}
+			`,
+
+			"/entry2.js": `
+				export default {
+					bar_: 0,
+					'baz_': 1,
+				}
+			`,
+		},
+		entryPaths: []string{
+			"/entry1.js",
+			"/entry2.js",
+		},
+		options: config.Options{
+			Mode:         config.ModePassThrough,
+			AbsOutputDir: "/out",
+			MangleProps:  regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsMinify(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			// These repeating characters test for frequency analysis
+
+			"/entry1.js": `
+				export function shouldMangle_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX() {
+					let foo = {
+						bar_: 0,
+						baz_() {},
+					};
+					let { bar_ } = foo;
+					({ bar_ } = foo);
+					class foo_ {
+						bar_ = 0
+						baz_() {}
+						static bar_ = 0
+						static baz_() {}
+					}
+					return { bar_, foo_ }
+				}
+
+				export function shouldNotMangle_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY() {
+					let foo = {
+						'bar_': 0,
+						'baz_'() {},
+					};
+					let { 'bar_': bar_ } = foo;
+					({ 'bar_': bar_ } = foo);
+					class foo_ {
+						'bar_' = 0
+						'baz_'() {}
+						static 'bar_' = 0
+						static 'baz_'() {}
+					}
+					return { 'bar_': bar_, 'foo_': foo_ }
+				}
+			`,
+
+			"/entry2.js": `
+				export default {
+					bar_: 0,
+					'baz_': 1,
+				}
+			`,
+		},
+		entryPaths: []string{
+			"/entry1.js",
+			"/entry2.js",
+		},
+		options: config.Options{
+			Mode:              config.ModePassThrough,
+			AbsOutputDir:      "/out",
+			MangleProps:       regexp.MustCompile("_$"),
+			MinifyIdentifiers: true,
+			MangleSyntax:      true,
+		},
+	})
+}
+
+func TestManglePropsOptionalChain(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				export default function(x) {
+					x.foo_;
+					x.foo_?.();
+					x?.foo_;
+					x?.foo_();
+					x?.foo_.bar_;
+					x?.foo_.bar_();
+					x?.['foo_'].bar_;
+					x?.foo_['bar_'];
+				}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			MangleProps:   regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsLoweredOptionalChain(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				export default function(x) {
+					x.foo_;
+					x.foo_?.();
+					x?.foo_;
+					x?.foo_();
+					x?.foo_.bar_;
+					x?.foo_.bar_();
+					x?.['foo_'].bar_;
+					x?.foo_['bar_'];
+				}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:                  config.ModePassThrough,
+			AbsOutputFile:         "/out.js",
+			MangleProps:           regexp.MustCompile("_$"),
+			UnsupportedJSFeatures: compat.OptionalChain,
+		},
+	})
+}
+
+func TestReserveProps(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				export default {
+					foo_: 0,
+					_bar_: 1,
+				}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			MangleProps:   regexp.MustCompile("_$"),
+			ReserveProps:  regexp.MustCompile("^_.*_$"),
+		},
+	})
+}
+
+func TestManglePropsImportExport(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			// These don't count as property names, and aren't mangled
+			"/esm.js": `
+				export let foo_ = 123
+				import { bar_ } from 'xyz'
+			`,
+
+			// These do count as property names, and are mangled
+			"/cjs.js": `
+				exports.foo_ = 123
+				let bar_ = require('xyz').bar_
+			`,
+		},
+		entryPaths: []string{
+			"/esm.js",
+			"/cjs.js",
+		},
+		options: config.Options{
+			Mode:         config.ModePassThrough,
+			AbsOutputDir: "/out",
+			MangleProps:  regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsImportExportBundled(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			// Note: import and export syntax does not count as a property name. That
+			// means the following code is broken. This test just serves to document
+			// this behavior and to detect if something about this behavior changes.
+			"/entry-esm.js": `
+				import { esm_foo_ } from './esm'
+				import { cjs_foo_ } from './cjs'
+				import * as esm from './esm'
+				import * as cjs from './cjs'
+				export let bar_ = [
+					esm_foo_,
+					cjs_foo_,
+					esm.esm_foo_,
+					cjs.cjs_foo_,
+				]
+			`,
+			"/entry-cjs.js": `
+				let { esm_foo_ } = require('./esm')
+				let { cjs_foo_ } = require('./cjs')
+				exports.bar_ = [
+					esm_foo_,
+					cjs_foo_,
+				]
+			`,
+			"/esm.js": `
+				export let esm_foo_ = 'foo'
+			`,
+			"/cjs.js": `
+				exports.cjs_foo_ = 'foo'
+			`,
+		},
+		entryPaths: []string{
+			"/entry-esm.js",
+			"/entry-cjs.js",
+		},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+			MangleProps:  regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsJSXTransform(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.jsx": `
+				let Foo = {
+					Bar_(props) {
+						return <>{props.text_}</>
+					},
+					hello_: 'hello, world',
+					createElement_(...args) {
+						console.log('createElement', ...args)
+					},
+					Fragment_(...args) {
+						console.log('Fragment', ...args)
+					},
+				}
+				export default <Foo.Bar_ text_={Foo.hello_}></Foo.Bar_>
+			`,
+		},
+		entryPaths: []string{"/entry.jsx"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			MangleProps:   regexp.MustCompile("_$"),
+			JSX: config.JSXOptions{
+				Factory:  config.JSXExpr{Parts: []string{"Foo", "createElement_"}},
+				Fragment: config.JSXExpr{Parts: []string{"Foo", "Fragment_"}},
+			},
+		},
+	})
+}
+
+func TestManglePropsJSXPreserve(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.jsx": `
+				let Foo = {
+					Bar_(props) {
+						return <>{props.text_}</>
+					},
+					hello_: 'hello, world',
+				}
+				export default <Foo.Bar_ text_={Foo.hello_}></Foo.Bar_>
+			`,
+		},
+		entryPaths: []string{"/entry.jsx"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.jsx",
+			MangleProps:   regexp.MustCompile("_$"),
+			JSX: config.JSXOptions{
+				Preserve: true,
+			},
+		},
+	})
+}
+
+func TestManglePropsJSXTransformNamespace(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.jsx": `
+				export default [
+					<KEEP_THIS_ />,
+					<KEEP:THIS_ />,
+					<foo KEEP:THIS_ />,
+				]
+			`,
+		},
+		entryPaths: []string{"/entry.jsx"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			MangleProps:   regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsAvoidCollisions(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				export default {
+					foo_: 0, // Must not be named "a"
+					bar_: 1, // Must not be named "b"
+					a: 2,
+					b: 3,
+					__proto__: {}, // Always avoid mangling this
+				}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			MangleProps:   regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsTypeScriptFeatures(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/parameter-properties.ts": `
+				class Foo {
+					constructor(
+						public KEEP_FIELD: number,
+						public MANGLE_FIELD_: number,
+					) {
+					}
+				}
+
+				let foo = new Foo
+				console.log(foo.KEEP_FIELD, foo.MANGLE_FIELD_)
+			`,
+
+			"/namespace-exports.ts": `
+				namespace ns {
+					export var MANGLE_VAR_ = 1
+					export let MANGLE_LET_ = 2
+					export const MANGLE_CONST_ = 3
+					export let { NESTED_: { DESTRUCTURING_ } } = 4
+					export function MANGLE_FUNCTION_() {}
+					export class MANGLE_CLASS_ {}
+					export namespace MANGLE_NAMESPACE_ { ; }
+					export enum MANGLE_ENUM_ {}
+
+					console.log({
+						VAR: MANGLE_VAR_,
+						LET: MANGLE_LET_,
+						CONST: MANGLE_CONST_,
+						DESTRUCTURING: DESTRUCTURING_,
+						FUNCTION: MANGLE_FUNCTION_,
+						CLASS: MANGLE_CLASS_,
+						NAMESPACE: MANGLE_NAMESPACE_,
+						ENUM: MANGLE_ENUM_,
+					})
+				}
+
+				console.log({
+					VAR: ns.MANGLE_VAR_,
+					LET: ns.MANGLE_LET_,
+					CONST: ns.MANGLE_CONST_,
+					DESTRUCTURING: ns.DESTRUCTURING_,
+					FUNCTION: ns.MANGLE_FUNCTION_,
+					CLASS: ns.MANGLE_CLASS_,
+					NAMESPACE: ns.MANGLE_NAMESPACE_,
+					ENUM: ns.MANGLE_ENUM_,
+				})
+
+				namespace ns {
+					console.log({
+						VAR: MANGLE_VAR_,
+						LET: MANGLE_LET_,
+						CONST: MANGLE_CONST_,
+						DESTRUCTURING: DESTRUCTURING_,
+						FUNCTION: MANGLE_FUNCTION_,
+						CLASS: MANGLE_CLASS_,
+						NAMESPACE: MANGLE_NAMESPACE_,
+						ENUM: MANGLE_ENUM_,
+					})
+				}
+			`,
+
+			// Mangle props deliberately doesn't work with TypeScript enums. The
+			// rationale is that the TypeScript compiler outputs quoted strings
+			// for enum values, so our JavaScript implementation of mangle props
+			// wouldn't pick them up. Therefore for consistency our TypeScript
+			// implementation of mangle props shouldn't either.
+			//
+			// This should be ok because esbuild supports inlining of enums instead,
+			// which is superior to using mangle props with enums because it results
+			// in even smaller and faster code. So people should just use enum inlining
+			// instead of mangle props with TypeScript enums.
+			//
+			// This test just serves to document that this behavior deliberately
+			// doesn't work.
+			"/enum-values.ts": `
+				enum TopLevelNumber { foo_ = 0 }
+				enum TopLevelString { bar_ = '' }
+				console.log({
+					foo: TopLevelNumber.foo_,
+					bar: TopLevelString.bar_,
+				})
+
+				function fn() {
+					enum NestedNumber { foo_ = 0 }
+					enum NestedString { bar_ = '' }
+					console.log({
+						foo: TopLevelNumber.foo_,
+						bar: TopLevelString.bar_,
+					})
+				}
+			`,
+		},
+		entryPaths: []string{
+			"/parameter-properties.ts",
+			"/namespace-exports.ts",
+			"/enum-values.ts",
+		},
+		options: config.Options{
+			Mode:         config.ModePassThrough,
+			AbsOutputDir: "/out",
+			MangleProps:  regexp.MustCompile("_$"),
+		},
+	})
+}
+
+func TestManglePropsShorthand(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				// This should print as "({ y }) => ({ y })" not "({ y: y }) => ({ y: y })"
+				export let yyyyy = ({ xxxxx }) => ({ xxxxx })
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:              config.ModePassThrough,
+			AbsOutputFile:     "/out.js",
+			MangleProps:       regexp.MustCompile("x"),
+			MinifyIdentifiers: true,
+		},
+	})
+}
+
+func TestManglePropsNoShorthand(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				// This should print as "({ y }) => ({ y: y })" not "({ y: y }) => ({ y: y })"
+				export let yyyyy = ({ xxxxx }) => ({ xxxxx })
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:                  config.ModePassThrough,
+			AbsOutputFile:         "/out.js",
+			MangleProps:           regexp.MustCompile("x"),
+			MinifyIdentifiers:     true,
+			UnsupportedJSFeatures: compat.ObjectExtensions,
+		},
+	})
+}
+
+func TestManglePropsLoweredClassFields(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				class Foo {
+					foo_ = 123
+					static bar_ = 234
+				}
+				Foo.bar_ = new Foo().foo_
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:                  config.ModePassThrough,
+			AbsOutputFile:         "/out.js",
+			MangleProps:           regexp.MustCompile("_$"),
+			UnsupportedJSFeatures: compat.ClassField | compat.ClassStaticField,
+		},
+	})
+}
+
+// This tests for a case where "constructor" was being mangled, which made the
+// method become a non-constructor, and then "super()" caused a parse error.
+// The fix was to prevent the property "constructor" from being mangled.
+// See: https://github.com/evanw/esbuild/issues/1976
+func TestManglePropsSuperCall(t *testing.T) {
+	loader_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				class Foo {}
+				class Bar extends Foo {
+					constructor() {
+						super();
+					}
+				}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			MangleProps:   regexp.MustCompile("."),
+		},
+	})
+}

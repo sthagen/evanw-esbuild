@@ -1,5 +1,151 @@
 # Changelog
 
+## Unreleased
+
+* Avoid a syntax error due to `--mangle-props=.` and `super()` ([#1976](https://github.com/evanw/esbuild/issues/1976))
+
+    This release fixes an issue where passing `--mangle-props=.` (i.e. telling esbuild to mangle every single property) caused a syntax error with code like this:
+
+    ```js
+    class Foo {}
+    class Bar extends Foo {
+      constructor() {
+        super();
+      }
+    }
+    ```
+
+    The problem was that `constructor` was being renamed to another method, which then made it no longer a constructor, which meant that `super()` was now a syntax error. I have added a workaround that avoids renaming any property named `constructor` so that esbuild doesn't generate a syntax error here.
+
+    Despite this fix, I highly recommend not using `--mangle-props=.` because your code will almost certainly be broken. You will have to manually add every single property that you don't want mangled to `--reserve-props=` which is an excessive maintenance burden (e.g. reserve `parse` to use `JSON.parse`). Instead I recommend using a common pattern for all properties you intend to be mangled that is unlikely to appear in the APIs you use such as "ends in an underscore." This is an opt-in approach instead of an opt-out approach. It also makes it obvious when reading the code which properties will be mangled and which ones won't be.
+
+## 0.14.16
+
+* Support property name mangling with some TypeScript syntax features
+
+    The newly-released `--mangle-props=` feature previously only affected JavaScript syntax features. This release adds support for using mangle props with certain TypeScript syntax features:
+
+    * **TypeScript parameter properties**
+
+        Parameter properties are a TypeScript-only shorthand way of initializing a class field directly from the constructor argument list. Previously parameter properties were not treated as properties to be mangled. They should now be handled correctly:
+
+        ```ts
+        // Original code
+        class Foo {
+          constructor(public foo_) {}
+        }
+        new Foo().foo_;
+
+        // Old output (with --minify --mangle-props=_)
+        class Foo{constructor(c){this.foo_=c}}new Foo().o;
+
+        // New output (with --minify --mangle-props=_)
+        class Foo{constructor(o){this.c=o}}new Foo().c;
+        ```
+
+    * **TypeScript namespaces**
+
+        Namespaces are a TypeScript-only way to add properties to an object. Previously exported namespace members were not treated as properties to be mangled. They should now be handled correctly:
+
+        ```ts
+        // Original code
+        namespace ns {
+          export let foo_ = 1;
+          export function bar_(x) {}
+        }
+        ns.bar_(ns.foo_);
+
+        // Old output (with --minify --mangle-props=_)
+        var ns;(e=>{e.foo_=1;function t(a){}e.bar_=t})(ns||={}),ns.e(ns.o);
+
+        // New output (with --minify --mangle-props=_)
+        var ns;(e=>{e.e=1;function o(p){}e.t=o})(ns||={}),ns.t(ns.e);
+        ```
+
+* Fix property name mangling for lowered class fields
+
+    This release fixes a compiler crash with `--mangle-props=` and class fields that need to be transformed to older versions of JavaScript. The problem was that doing this is an unusual case where the mangled property name must be represented as a string instead of as a property name, which previously wasn't implemented. This case should now work correctly:
+
+    ```js
+    // Original code
+    class Foo {
+      static foo_;
+    }
+    Foo.foo_ = 0;
+
+    // New output (with --mangle-props=_ --target=es6)
+    class Foo {
+    }
+    __publicField(Foo, "a");
+    Foo.a = 0;
+    ```
+
+## 0.14.15
+
+* Add property name mangling with `--mangle-props=` ([#218](https://github.com/evanw/esbuild/issues/218))
+
+    ⚠️ **Using this feature can break your code in subtle ways.** Do not use this feature unless you know what you are doing, and you know exactly how it will affect both your code and all of your dependencies. ⚠️
+
+    This release introduces property name mangling, which is similar to an existing feature from the popular [UglifyJS](github.com/mishoo/uglifyjs) and [Terser](github.com/terser/terser) JavaScript minifiers. This setting lets you pass a regular expression to esbuild to tell esbuild to automatically rename all properties that match this regular expression. It's useful when you want to minify certain property names in your code either to make the generated code smaller or to somewhat obfuscate your code's intent.
+
+    Here's an example that uses the regular expression `_$` to mangle all properties ending in an underscore, such as `foo_`:
+
+    ```
+    $ echo 'console.log({ foo_: 0 }.foo_)' | esbuild --mangle-props=_$
+    console.log({ a: 0 }.a);
+    ```
+
+    Only mangling properties that end in an underscore is a reasonable heuristic because normal JS code doesn't typically contain identifiers like that. Browser APIs also don't use this naming convention so this also avoids conflicts with browser APIs. If you want to avoid mangling names such as [`__defineGetter__`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/__defineGetter__) you could consider using a more complex regular expression such as `[^_]_$` (i.e. must end in a non-underscore followed by an underscore).
+
+    This is a separate setting instead of being part of the minify setting because it's an unsafe transformation that does not work on arbitrary JavaScript code. It only works if the provided regular expression matches all of the properties that you want mangled and does not match any of the properties that you don't want mangled. It also only works if you do not under any circumstances reference a property name to be mangled as a string. For example, it means you can't use `Object.defineProperty(obj, 'prop', ...)` or `obj['prop']` with a mangled property. Specifically the following syntax constructs are the only ones eligible for property mangling:
+
+    | Syntax                          | Example                 |
+    |---------------------------------|-------------------------|
+    | Dot property access             | `x.foo_`                |
+    | Dot optional chain              | `x?.foo_`               |
+    | Object properties               | `x = { foo_: y }`       |
+    | Object methods                  | `x = { foo_() {} }`     |
+    | Class fields                    | `class x { foo_ = y }`  |
+    | Class methods                   | `class x { foo_() {} }` |
+    | Object destructuring binding    | `let { foo_: x } = y`   |
+    | Object destructuring assignment | `({ foo_: x } = y)`     |
+    | JSX element names               | `<X.foo_></X.foo_>`     |
+    | JSX attribute names             | `<X foo_={y} />`        |
+
+    You can avoid property mangling for an individual property by quoting it as a string. However, you must consistently use quotes or no quotes for a given property everywhere for this to work. For example, `print({ foo_: 0 }.foo_)` will be mangled into `print({ a: 0 }.a)` while `print({ 'foo_': 0 }['foo_'])` will not be mangled.
+
+    When using this feature, keep in mind that property names are only consistently mangled within a single esbuild API call but not across esbuild API calls. Each esbuild API call does an independent property mangling operation so output files generated by two different API calls may mangle the same property to two different names, which could cause the resulting code to behave incorrectly.
+
+    If you would like to exclude certain properties from mangling, you can reserve them with the `--reserve-props=` setting. For example, this uses the regular expression `^__.*__$` to reserve all properties that start and end with two underscores, such as `__foo__`:
+
+    ```
+    $ echo 'console.log({ __foo__: 0 }.__foo__)' | esbuild --mangle-props=_$
+    console.log({ a: 0 }.a);
+
+    $ echo 'console.log({ __foo__: 0 }.__foo__)' | esbuild --mangle-props=_$ "--reserve-props=^__.*__$"
+    console.log({ __foo__: 0 }.__foo__);
+    ```
+
+* Mark esbuild as supporting node v12+ ([#1970](https://github.com/evanw/esbuild/issues/1970))
+
+    Someone requested that esbuild populate the `engines.node` field in `package.json`. This release adds the following to each `package.json` file that esbuild publishes:
+
+    ```json
+    "engines": {
+      "node": ">=12"
+    },
+    ```
+
+    This was chosen because it's the oldest version of node that's currently still receiving support from the node team, and so is the oldest version of node that esbuild supports: https://nodejs.org/en/about/releases/.
+
+* Remove error recovery for invalid `//` comments in CSS ([#1965](https://github.com/evanw/esbuild/issues/1965))
+
+    Previously esbuild treated `//` as a comment in CSS and generated a warning, even though comments in CSS use `/* ... */` instead. This allowed you to run esbuild on CSS intended for certain CSS preprocessors that support single-line comments.
+
+    However, some people are changing from another build tool to esbuild and have a code base that relies on `//` being preserved even though it's nonsense CSS and causes the entire surrounding rule to be discarded by the browser. Presumably this nonsense CSS ended up there at some point due to an incorrectly-configured build pipeline and the site now relies on that entire rule being discarded. If esbuild interprets `//` as a comment, it could cause the rule to no longer be discarded or even cause something else to happen.
+
+    With this release, esbuild no longer treats `//` as a comment in CSS. It still warns about it but now passes it through unmodified. This means it's no longer possible to run esbuild on CSS code containing single-line comments but it means that esbuild's behavior regarding these nonsensical CSS rules more accurately represents what happens in a browser.
+
 ## 0.14.14
 
 * Fix bug with filename hashes and the `file` loader ([#1957](https://github.com/evanw/esbuild/issues/1957))

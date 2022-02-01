@@ -484,7 +484,7 @@ func (p *printer) printIndent() {
 	}
 }
 
-func (p *printer) printSymbol(ref js_ast.Ref) {
+func (p *printer) printSymbol(ref js_ast.Ref) string {
 	name := p.renamer.NameForSymbol(ref)
 
 	// Minify "return #foo in bar" to "return#foo in bar"
@@ -493,6 +493,7 @@ func (p *printer) printSymbol(ref js_ast.Ref) {
 	}
 
 	p.printIdentifier(name)
+	return name
 }
 
 func (p *printer) printClauseAlias(alias string) {
@@ -724,6 +725,19 @@ func (p *printer) printBinding(binding js_ast.Binding) {
 
 						// Use a shorthand property if the names are the same
 						if id, ok := property.Value.Data.(*js_ast.BIdentifier); ok && js_lexer.UTF16EqualsString(str.Value, p.renamer.NameForSymbol(id.Ref)) {
+							if property.DefaultValueOrNil.Data != nil {
+								p.printSpace()
+								p.print("=")
+								p.printSpace()
+								p.printExpr(property.DefaultValueOrNil, js_ast.LComma, 0)
+							}
+							continue
+						}
+					} else if mangled, ok := property.Key.Data.(*js_ast.EMangledProp); ok {
+						name := p.printSymbol(mangled.Ref)
+
+						// Use a shorthand property if the names are the same
+						if id, ok := property.Value.Data.(*js_ast.BIdentifier); ok && name == p.renamer.NameForSymbol(id.Ref) {
 							if property.DefaultValueOrNil.Data != nil {
 								p.printSpace()
 								p.print("=")
@@ -965,7 +979,42 @@ func (p *printer) printProperty(item js_ast.Property) {
 
 	switch key := item.Key.Data.(type) {
 	case *js_ast.EPrivateIdentifier:
+		p.addSourceMapping(item.Key.Loc)
 		p.printSymbol(key.Ref)
+
+	case *js_ast.EMangledProp:
+		p.addSourceMapping(item.Key.Loc)
+		name := p.printSymbol(key.Ref)
+
+		// Use a shorthand property if the names are the same
+		if !p.options.UnsupportedFeatures.Has(compat.ObjectExtensions) && item.ValueOrNil.Data != nil {
+			switch e := item.ValueOrNil.Data.(type) {
+			case *js_ast.EIdentifier:
+				if name == p.renamer.NameForSymbol(e.Ref) {
+					if item.InitializerOrNil.Data != nil {
+						p.printSpace()
+						p.print("=")
+						p.printSpace()
+						p.printExpr(item.InitializerOrNil, js_ast.LComma, 0)
+					}
+					return
+				}
+
+			case *js_ast.EImportIdentifier:
+				// Make sure we're not using a property access instead of an identifier
+				ref := js_ast.FollowSymbols(p.symbols, e.Ref)
+				symbol := p.symbols.Get(ref)
+				if symbol.NamespaceAlias == nil && name == p.renamer.NameForSymbol(e.Ref) {
+					if item.InitializerOrNil.Data != nil {
+						p.printSpace()
+						p.print("=")
+						p.printSpace()
+						p.printExpr(item.InitializerOrNil, js_ast.LComma, 0)
+					}
+					return
+				}
+			}
+		}
 
 	case *js_ast.EString:
 		p.addSourceMapping(item.Key.Loc)
@@ -1452,6 +1501,9 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 		p.printSpaceBeforeIdentifier()
 		p.print("import.meta")
 
+	case *js_ast.EMangledProp:
+		p.printQuotedUTF8(p.renamer.NameForSymbol(e.Ref), true)
+
 	case *js_ast.EJSXElement:
 		// Start the opening tag
 		p.print("<")
@@ -1470,7 +1522,11 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 
 			p.printSpaceBeforeIdentifier()
 			p.addSourceMapping(property.Key.Loc)
-			p.print(js_lexer.UTF16ToString(property.Key.Data.(*js_ast.EString).Value))
+			if mangled, ok := property.Key.Data.(*js_ast.EMangledProp); ok {
+				p.printSymbol(mangled.Ref)
+			} else {
+				p.print(js_lexer.UTF16ToString(property.Key.Data.(*js_ast.EString).Value))
+			}
 
 			// Special-case string values
 			if str, ok := property.ValueOrNil.Data.(*js_ast.EString); ok {
@@ -1831,16 +1887,26 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 		if e.OptionalChain == js_ast.OptionalChainStart {
 			p.print("?.")
 		}
-		if private, ok := e.Index.Data.(*js_ast.EPrivateIdentifier); ok {
+
+		switch index := e.Index.Data.(type) {
+		case *js_ast.EPrivateIdentifier:
 			if e.OptionalChain != js_ast.OptionalChainStart {
 				p.print(".")
 			}
-			p.printSymbol(private.Ref)
-		} else {
+			p.printSymbol(index.Ref)
+
+		case *js_ast.EMangledProp:
+			if e.OptionalChain != js_ast.OptionalChainStart {
+				p.print(".")
+			}
+			p.printSymbol(index.Ref)
+
+		default:
 			p.print("[")
 			p.printExpr(e.Index, js_ast.LLowest, 0)
 			p.print("]")
 		}
+
 		if wrap {
 			p.print(")")
 		}

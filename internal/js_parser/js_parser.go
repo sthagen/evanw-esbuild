@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -50,6 +51,8 @@ type parser struct {
 	symbolForDefineHelper      func(int) js_ast.Ref
 	injectedDefineSymbols      []js_ast.Ref
 	injectedSymbolSources      map[js_ast.Ref]injectedSymbolSource
+	mangledProps               map[string]js_ast.Ref
+	reservedProps              map[string]bool
 	symbolUses                 map[js_ast.Ref]js_ast.SymbolUse
 	importSymbolPropertyUses   map[js_ast.Ref]map[string]js_ast.SymbolUse
 	symbolCallUses             map[js_ast.Ref]js_ast.SymbolCallUse
@@ -354,6 +357,8 @@ type Options struct {
 	injectedFiles []config.InjectedFile
 	jsx           config.JSXOptions
 	tsTarget      *config.TSTarget
+	mangleProps   *regexp.Regexp
+	reserveProps  *regexp.Regexp
 
 	// This pointer will always be different for each build but the contents
 	// shouldn't ever behave different semantically. We ignore this field for the
@@ -395,6 +400,9 @@ func OptionsFromConfig(options *config.Options) Options {
 		jsx:           options.JSX,
 		defines:       options.Defines,
 		tsTarget:      options.TSTarget,
+		mangleProps:   options.MangleProps,
+		reserveProps:  options.ReserveProps,
+
 		optionsThatSupportStructuralEquality: optionsThatSupportStructuralEquality{
 			unsupportedJSFeatures:   options.UnsupportedJSFeatures,
 			originalTargetEnv:       options.OriginalTargetEnv,
@@ -430,6 +438,11 @@ func (a *Options) Equal(b *Options) bool {
 		return false
 	}
 
+	// Compare "MangleProps" and "ReserveProps"
+	if !isSameRegexp(a.mangleProps, b.mangleProps) || !isSameRegexp(a.reserveProps, b.reserveProps) {
+		return false
+	}
+
 	// Compare "InjectedFiles"
 	if len(a.injectedFiles) != len(b.injectedFiles) {
 		return false
@@ -459,6 +472,14 @@ func (a *Options) Equal(b *Options) bool {
 	}
 
 	return true
+}
+
+func isSameRegexp(a *regexp.Regexp, b *regexp.Regexp) bool {
+	if a == nil {
+		return b == nil
+	} else {
+		return b != nil && a.String() == b.String()
+	}
 }
 
 func jsxExprsEqual(a config.JSXExpr, b config.JSXExpr) bool {
@@ -2105,7 +2126,11 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 			}
 		}
 
-		key = js_ast.Expr{Loc: nameRange.Loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}}
+		if p.isMangledProp(name) {
+			key = js_ast.Expr{Loc: nameRange.Loc, Data: &js_ast.EMangledProp{Ref: p.storeNameInRef(name)}}
+		} else {
+			key = js_ast.Expr{Loc: nameRange.Loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}}
+		}
 
 		// Parse a shorthand property
 		if !opts.isClass && kind == js_ast.PropertyNormal && p.lexer.Token != js_lexer.TColon &&
@@ -2413,7 +2438,11 @@ func (p *parser) parsePropertyBinding() js_ast.PropertyBinding {
 			p.lexer.Expect(js_lexer.TIdentifier)
 		}
 		p.lexer.Next()
-		key = js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}}
+		if p.isMangledProp(name) {
+			key = js_ast.Expr{Loc: loc, Data: &js_ast.EMangledProp{Ref: p.storeNameInRef(name)}}
+		} else {
+			key = js_ast.Expr{Loc: loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}}
+		}
 
 		if p.lexer.Token != js_lexer.TColon && p.lexer.Token != js_lexer.TOpenParen {
 			ref := p.storeNameInRef(name)
@@ -2448,6 +2477,85 @@ func (p *parser) parsePropertyBinding() js_ast.PropertyBinding {
 		Key:               key,
 		Value:             value,
 		DefaultValueOrNil: defaultValueOrNil,
+	}
+}
+
+// These properties have special semantics in JavaScript. They must not be
+// mangled or we could potentially fail to parse valid JavaScript syntax or
+// generate invalid JavaScript syntax as output.
+//
+// This list is only intended to contain properties specific to the JavaScript
+// language itself to avoid syntax errors in the generated output. It's not
+// intended to contain properties for JavaScript APIs. Those must be provided
+// by the user.
+var permanentReservedProps = map[string]bool{
+	"__proto__":   true,
+	"constructor": true,
+	"prototype":   true,
+}
+
+func (p *parser) isMangledProp(name string) bool {
+	if p.options.mangleProps == nil {
+		return false
+	}
+	if p.options.mangleProps.MatchString(name) && !permanentReservedProps[name] && (p.options.reserveProps == nil || !p.options.reserveProps.MatchString(name)) {
+		return true
+	}
+	reservedProps := p.reservedProps
+	if reservedProps == nil {
+		reservedProps = make(map[string]bool)
+		p.reservedProps = reservedProps
+	}
+	reservedProps[name] = true
+	return false
+}
+
+func (p *parser) symbolForMangledProp(name string) js_ast.Ref {
+	mangledProps := p.mangledProps
+	if mangledProps == nil {
+		mangledProps = make(map[string]js_ast.Ref)
+		p.mangledProps = mangledProps
+	}
+	ref, ok := mangledProps[name]
+	if !ok {
+		ref = p.newSymbol(js_ast.SymbolMangledProp, name)
+		mangledProps[name] = ref
+	}
+	if !p.isControlFlowDead {
+		p.symbols[ref.InnerIndex].UseCountEstimate++
+	}
+	return ref
+}
+
+func (p *parser) dotOrMangledPropParse(target js_ast.Expr, name string, nameLoc logger.Loc, optionalChain js_ast.OptionalChain) js_ast.E {
+	if p.isMangledProp(name) {
+		return &js_ast.EIndex{
+			Target:        target,
+			Index:         js_ast.Expr{Loc: nameLoc, Data: &js_ast.EMangledProp{Ref: p.storeNameInRef(name)}},
+			OptionalChain: optionalChain,
+		}
+	}
+
+	return &js_ast.EDot{
+		Target:        target,
+		Name:          name,
+		NameLoc:       nameLoc,
+		OptionalChain: optionalChain,
+	}
+}
+
+func (p *parser) dotOrMangledPropVisit(target js_ast.Expr, name string, nameLoc logger.Loc) js_ast.E {
+	if p.isMangledProp(name) {
+		return &js_ast.EIndex{
+			Target: target,
+			Index:  js_ast.Expr{Loc: nameLoc, Data: &js_ast.EMangledProp{Ref: p.symbolForMangledProp(name)}},
+		}
+	}
+
+	return &js_ast.EDot{
+		Target:  target,
+		Name:    name,
+		NameLoc: nameLoc,
 	}
 }
 
@@ -3734,12 +3842,7 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 				name := p.lexer.Identifier
 				nameLoc := p.lexer.Loc()
 				p.lexer.Next()
-				left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.EDot{
-					Target:        left,
-					Name:          name,
-					NameLoc:       nameLoc,
-					OptionalChain: oldOptionalChain,
-				}}
+				left = js_ast.Expr{Loc: left.Loc, Data: p.dotOrMangledPropParse(left, name, nameLoc, oldOptionalChain)}
 			}
 
 			optionalChain = oldOptionalChain
@@ -3824,12 +3927,7 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 					name := p.lexer.Identifier
 					nameLoc := p.lexer.Loc()
 					p.lexer.Next()
-					left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.EDot{
-						Target:        left,
-						Name:          name,
-						NameLoc:       nameLoc,
-						OptionalChain: optionalStart,
-					}}
+					left = js_ast.Expr{Loc: left.Loc, Data: p.dotOrMangledPropParse(left, name, nameLoc, optionalStart)}
 				}
 			}
 
@@ -4494,11 +4592,7 @@ func (p *parser) parseJSXTag() (logger.Range, string, js_ast.Expr) {
 		}
 
 		tagName += "." + member
-		tag = js_ast.Expr{Loc: loc, Data: &js_ast.EDot{
-			Target:  tag,
-			Name:    member,
-			NameLoc: memberRange.Loc,
-		}}
+		tag = js_ast.Expr{Loc: loc, Data: p.dotOrMangledPropParse(tag, member, memberRange.Loc, js_ast.OptionalChainNone)}
 		tagRange.Len = memberRange.Loc.Start + memberRange.Len - tagRange.Loc.Start
 	}
 
@@ -4528,7 +4622,12 @@ func (p *parser) parseJSXElement(loc logger.Loc) js_ast.Expr {
 			case js_lexer.TIdentifier:
 				// Parse the key
 				keyRange, keyName := p.parseJSXNamespacedName()
-				key := js_ast.Expr{Loc: keyRange.Loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(keyName)}}
+				var key js_ast.Expr
+				if p.isMangledProp(keyName) && !strings.ContainsRune(keyName, ':') {
+					key = js_ast.Expr{Loc: keyRange.Loc, Data: &js_ast.EMangledProp{Ref: p.storeNameInRef(keyName)}}
+				} else {
+					key = js_ast.Expr{Loc: keyRange.Loc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(keyName)}}
+				}
 
 				// Parse the value
 				var value js_ast.Expr
@@ -8405,7 +8504,11 @@ func (p *parser) visitBinding(binding js_ast.Binding, opts bindingOpts) {
 	case *js_ast.BObject:
 		for i, property := range b.Properties {
 			if !property.IsSpread {
-				property.Key = p.visitExpr(property.Key)
+				if mangled, ok := property.Key.Data.(*js_ast.EMangledProp); ok {
+					mangled.Ref = p.symbolForMangledProp(p.loadNameFromRef(mangled.Ref))
+				} else {
+					property.Key = p.visitExpr(property.Key)
+				}
 			}
 			p.visitBinding(property.Value, opts)
 			if property.DefaultValueOrNil.Data != nil {
@@ -9141,11 +9244,11 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		if s.IsExport && p.enclosingNamespaceArgRef != nil {
 			wrapIdentifier := func(loc logger.Loc, ref js_ast.Ref) js_ast.Expr {
 				p.recordUsage(*p.enclosingNamespaceArgRef)
-				return js_ast.Expr{Loc: loc, Data: &js_ast.EDot{
-					Target:  js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: *p.enclosingNamespaceArgRef}},
-					Name:    p.symbols[ref.InnerIndex].OriginalName,
-					NameLoc: loc,
-				}}
+				return js_ast.Expr{Loc: loc, Data: p.dotOrMangledPropVisit(
+					js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: *p.enclosingNamespaceArgRef}},
+					p.symbols[ref.InnerIndex].OriginalName,
+					loc,
+				)}
 			}
 			for _, decl := range s.Decls {
 				if decl.ValueOrNil.Data != nil {
@@ -9519,11 +9622,11 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		if s.IsExport && p.enclosingNamespaceArgRef != nil {
 			s.IsExport = false
 			stmts = append(stmts, stmt, js_ast.AssignStmt(
-				js_ast.Expr{Loc: stmt.Loc, Data: &js_ast.EDot{
-					Target:  js_ast.Expr{Loc: stmt.Loc, Data: &js_ast.EIdentifier{Ref: *p.enclosingNamespaceArgRef}},
-					Name:    p.symbols[s.Fn.Name.Ref.InnerIndex].OriginalName,
-					NameLoc: s.Fn.Name.Loc,
-				}},
+				js_ast.Expr{Loc: stmt.Loc, Data: p.dotOrMangledPropVisit(
+					js_ast.Expr{Loc: stmt.Loc, Data: &js_ast.EIdentifier{Ref: *p.enclosingNamespaceArgRef}},
+					p.symbols[s.Fn.Name.Ref.InnerIndex].OriginalName,
+					s.Fn.Name.Loc,
+				)},
 				js_ast.Expr{Loc: s.Fn.Name.Loc, Data: &js_ast.EIdentifier{Ref: s.Fn.Name.Ref}},
 			))
 		} else {
@@ -9552,11 +9655,11 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		// Handle exporting this class from a namespace
 		if wasExportInsideNamespace {
 			stmts = append(stmts, js_ast.AssignStmt(
-				js_ast.Expr{Loc: stmt.Loc, Data: &js_ast.EDot{
-					Target:  js_ast.Expr{Loc: stmt.Loc, Data: &js_ast.EIdentifier{Ref: *p.enclosingNamespaceArgRef}},
-					Name:    p.symbols[s.Class.Name.Ref.InnerIndex].OriginalName,
-					NameLoc: s.Class.Name.Loc,
-				}},
+				js_ast.Expr{Loc: stmt.Loc, Data: p.dotOrMangledPropVisit(
+					js_ast.Expr{Loc: stmt.Loc, Data: &js_ast.EIdentifier{Ref: *p.enclosingNamespaceArgRef}},
+					p.symbols[s.Class.Name.Ref.InnerIndex].OriginalName,
+					s.Class.Name.Loc,
+				)},
 				js_ast.Expr{Loc: s.Class.Name.Loc, Data: &js_ast.EIdentifier{Ref: s.Class.Name.Ref}},
 			))
 		}
@@ -10134,12 +10237,16 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 		}
 
 		property.TSDecorators = p.visitTSDecorators(property.TSDecorators)
-		private, isPrivate := property.Key.Data.(*js_ast.EPrivateIdentifier)
 
-		// Special-case EPrivateIdentifier to allow it here
-		if isPrivate {
-			p.recordDeclaredSymbol(private.Ref)
-		} else {
+		// Special-case certain expressions to allow them here
+		switch k := property.Key.Data.(type) {
+		case *js_ast.EPrivateIdentifier:
+			p.recordDeclaredSymbol(k.Ref)
+
+		case *js_ast.EMangledProp:
+			k.Ref = p.symbolForMangledProp(p.loadNameFromRef(k.Ref))
+
+		default:
 			key := p.visitExpr(property.Key)
 			property.Key = key
 
@@ -10182,7 +10289,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 		// We need to explicitly assign the name to the property initializer if it
 		// will be transformed such that it is no longer an inline initializer.
 		nameToKeep := ""
-		if isPrivate && p.privateSymbolNeedsToBeLowered(private) {
+		if private, isPrivate := property.Key.Data.(*js_ast.EPrivateIdentifier); isPrivate && p.privateSymbolNeedsToBeLowered(private) {
 			nameToKeep = p.symbols[private.Ref.InnerIndex].OriginalName
 		} else if !property.IsMethod && !property.IsComputed &&
 			((!property.IsStatic && p.options.unsupportedJSFeatures.Has(compat.ClassField)) ||
@@ -10406,13 +10513,18 @@ func (p *parser) jsxStringsToMemberExpression(loc logger.Loc, parts []string) js
 	})
 
 	// Build up a chain of property access expressions for subsequent parts
-	for i := 1; i < len(parts); i++ {
-		if expr, ok := p.maybeRewritePropertyAccess(loc, js_ast.AssignTargetNone, false, value, parts[i], loc, false, false); ok {
+	for _, part := range parts[1:] {
+		if expr, ok := p.maybeRewritePropertyAccess(loc, js_ast.AssignTargetNone, false, value, part, loc, false, false); ok {
 			value = expr
+		} else if p.isMangledProp(part) {
+			value = js_ast.Expr{Loc: loc, Data: &js_ast.EIndex{
+				Target: value,
+				Index:  js_ast.Expr{Loc: loc, Data: &js_ast.EMangledProp{Ref: p.symbolForMangledProp(part)}},
+			}}
 		} else {
 			value = js_ast.Expr{Loc: loc, Data: &js_ast.EDot{
 				Target:  value,
-				Name:    parts[i],
+				Name:    part,
 				NameLoc: loc,
 
 				// Enable tree shaking
@@ -10728,11 +10840,7 @@ func (p *parser) maybeRewritePropertyAccess(
 							Index:  js_ast.Expr{Loc: nameLoc, Data: &js_ast.EString{Value: js_lexer.StringToUTF16(name)}},
 						}
 					} else {
-						p.tsNamespaceTarget = &js_ast.EDot{
-							Target:  target,
-							Name:    name,
-							NameLoc: nameLoc,
-						}
+						p.tsNamespaceTarget = p.dotOrMangledPropVisit(target, name, nameLoc)
 					}
 					p.tsNamespaceMemberData = member.Data
 					return js_ast.Expr{Loc: loc, Data: p.tsNamespaceTarget}, true
@@ -11375,10 +11483,6 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				methodCallMustBeReplacedWithUndefined: methodCallMustBeReplacedWithUndefined,
 			}
 
-	case *js_ast.EPrivateIdentifier:
-		// We should never get here
-		panic("Internal error")
-
 	case *js_ast.EJSXElement:
 		if e.TagOrNil.Data != nil {
 			e.TagOrNil = p.visitExpr(e.TagOrNil)
@@ -11388,7 +11492,11 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		// Visit properties
 		for i, property := range e.Properties {
 			if property.Kind != js_ast.PropertySpread {
-				property.Key = p.visitExpr(property.Key)
+				if mangled, ok := property.Key.Data.(*js_ast.EMangledProp); ok {
+					mangled.Ref = p.symbolForMangledProp(p.loadNameFromRef(mangled.Ref))
+				} else {
+					property.Key = p.visitExpr(property.Key)
+				}
 			}
 			if property.ValueOrNil.Data != nil {
 				property.ValueOrNil = p.visitExpr(property.ValueOrNil)
@@ -12091,11 +12199,12 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		})
 		e.Target = target
 
-		// Special-case EPrivateIdentifier to allow it here
-		if private, ok := e.Index.Data.(*js_ast.EPrivateIdentifier); ok {
-			name := p.loadNameFromRef(private.Ref)
+		// Special-case certain expressions to allow them here
+		switch index := e.Index.Data.(type) {
+		case *js_ast.EPrivateIdentifier:
+			name := p.loadNameFromRef(index.Ref)
 			result := p.findSymbol(e.Index.Loc, name)
-			private.Ref = result.ref
+			index.Ref = result.ref
 
 			// Unlike regular identifiers, there are no unbound private identifiers
 			kind := p.symbols[result.ref.InnerIndex].Kind
@@ -12127,12 +12236,16 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			// Lower private member access only if we're sure the target isn't needed
 			// for the value of "this" for a call expression. All other cases will be
 			// taken care of by the enclosing call expression.
-			if p.privateSymbolNeedsToBeLowered(private) && e.OptionalChain == js_ast.OptionalChainNone &&
+			if p.privateSymbolNeedsToBeLowered(index) && e.OptionalChain == js_ast.OptionalChainNone &&
 				in.assignTarget == js_ast.AssignTargetNone && !isCallTarget && !isTemplateTag {
 				// "foo.#bar" => "__privateGet(foo, #bar)"
-				return p.lowerPrivateGet(e.Target, e.Index.Loc, private), exprOut{}
+				return p.lowerPrivateGet(e.Target, e.Index.Loc, index), exprOut{}
 			}
-		} else {
+
+		case *js_ast.EMangledProp:
+			index.Ref = p.symbolForMangledProp(p.loadNameFromRef(index.Ref))
+
+		default:
 			e.Index = p.visitExpr(e.Index)
 		}
 
@@ -12543,8 +12656,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			property := &e.Properties[i]
 
 			if property.Kind != js_ast.PropertySpread {
-				key := p.visitExpr(property.Key)
-				e.Properties[i].Key = key
+				key := property.Key
+				if mangled, ok := key.Data.(*js_ast.EMangledProp); ok {
+					mangled.Ref = p.symbolForMangledProp(p.loadNameFromRef(mangled.Ref))
+				} else {
+					key = p.visitExpr(property.Key)
+					property.Key = key
+				}
 
 				// Forbid duplicate "__proto__" properties according to the specification
 				if !property.IsComputed && !property.WasShorthand && !property.IsMethod && in.assignTarget == js_ast.AssignTargetNone {
@@ -13278,7 +13396,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		_, expr = p.lowerClass(js_ast.Stmt{}, expr, shadowRef)
 
 	default:
-		panic("Internal error")
+		// Note: EPrivateIdentifier and EMangledProperty should have already been handled
+		panic(fmt.Sprintf("Unexpected expression of type %T", expr.Data))
 	}
 
 	return expr, exprOut{}
@@ -13529,12 +13648,11 @@ func (p *parser) handleIdentifier(loc logger.Loc, e *js_ast.EIdentifier, opts id
 
 	// Substitute an EImportIdentifier now if this has a namespace alias
 	if opts.assignTarget == js_ast.AssignTargetNone && !opts.isDeleteTarget {
-		if nsAlias := p.symbols[ref.InnerIndex].NamespaceAlias; nsAlias != nil {
-			data := &js_ast.EImportIdentifier{
-				Ref:                     ref,
-				PreferQuotedKey:         opts.preferQuotedKey,
-				WasOriginallyIdentifier: opts.wasOriginallyIdentifier,
-			}
+		symbol := &p.symbols[ref.InnerIndex]
+		if nsAlias := symbol.NamespaceAlias; nsAlias != nil {
+			data := p.dotOrMangledPropVisit(
+				js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: nsAlias.NamespaceRef}},
+				symbol.OriginalName, loc)
 
 			// Handle references to namespaces or namespace members
 			if tsMemberData, ok := p.refToTSNamespaceMemberData[nsAlias.NamespaceRef]; ok {
@@ -13590,11 +13708,7 @@ func (p *parser) handleIdentifier(loc logger.Loc, e *js_ast.EIdentifier, opts id
 
 			// Otherwise, create a property access on the namespace
 			p.recordUsage(nsRef)
-			propertyAccess := &js_ast.EDot{
-				Target:  js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: nsRef}},
-				Name:    name,
-				NameLoc: loc,
-			}
+			propertyAccess := p.dotOrMangledPropVisit(js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: nsRef}}, name, loc)
 			if p.tsNamespaceTarget == e {
 				p.tsNamespaceTarget = propertyAccess
 			}
@@ -15023,6 +15137,12 @@ func (p *parser) computeCharacterFrequency() *js_ast.CharFreq {
 	}
 	visit(p.moduleScope)
 
+	// Subtract out all properties that will be mangled
+	for _, ref := range p.mangledProps {
+		symbol := &p.symbols[ref.InnerIndex]
+		charFreq.Scan(symbol.OriginalName, -int32(symbol.UseCountEstimate))
+	}
+
 	return charFreq
 }
 
@@ -15238,6 +15358,8 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 		ExportStarImportRecords:         p.exportStarImportRecords,
 		ImportRecords:                   p.importRecords,
 		ApproximateLineCount:            int32(p.lexer.ApproximateNewlineCount) + 1,
+		MangledProps:                    p.mangledProps,
+		ReservedProps:                   p.reservedProps,
 
 		// CommonJS features
 		UsesExportsRef: usesExportsRef,

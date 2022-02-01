@@ -299,11 +299,82 @@ func link(
 	chunks := c.computeChunks()
 	c.computeCrossChunkDependencies(chunks)
 
+	// Merge mangled properties before chunks are generated since the names must
+	// be consistent across all chunks, or the generated code will break
+	if c.options.MangleProps != nil {
+		c.mangleProps()
+	}
+
 	// Make sure calls to "js_ast.FollowSymbols()" in parallel goroutines after this
 	// won't hit concurrent map mutation hazards
 	js_ast.FollowAllSymbols(c.graph.Symbols)
 
 	return c.generateChunksInParallel(chunks)
+}
+
+func (c *linkerContext) mangleProps() {
+	c.timer.Begin("Mangle props")
+	defer c.timer.End("Mangle props")
+
+	// Merge all mangled property symbols together
+	freq := js_ast.CharFreq{}
+	mangledProps := make(map[string]js_ast.Ref)
+	reservedProps := make(map[string]bool)
+	for keyword := range js_lexer.Keywords {
+		reservedProps[keyword] = true
+	}
+	for _, sourceIndex := range c.graph.ReachableFiles {
+		// Don't mangle anything in the runtime code
+		if sourceIndex == runtime.SourceIndex {
+			continue
+		}
+
+		if repr, ok := c.graph.Files[sourceIndex].InputFile.Repr.(*graph.JSRepr); ok {
+			for prop := range repr.AST.ReservedProps {
+				reservedProps[prop] = true
+			}
+
+			for name, ref := range repr.AST.MangledProps {
+				if existing, ok := mangledProps[name]; ok {
+					js_ast.MergeSymbols(c.graph.Symbols, ref, existing)
+				} else {
+					mangledProps[name] = ref
+				}
+			}
+
+			if repr.AST.CharFreq != nil {
+				freq.Include(repr.AST.CharFreq)
+			}
+		}
+	}
+
+	// Sort by use count (note: does not currently account for live vs. dead code)
+	sorted := make(renamer.StableSymbolCountArray, 0, len(mangledProps))
+	stableSourceIndices := c.graph.StableSourceIndices
+	for _, ref := range mangledProps {
+		sorted = append(sorted, renamer.StableSymbolCount{
+			StableSourceIndex: stableSourceIndices[ref.SourceIndex],
+			Ref:               ref,
+			Count:             c.graph.Symbols.Get(ref).UseCountEstimate,
+		})
+	}
+	sort.Sort(sorted)
+
+	// Assign names in order of use count
+	minifier := freq.Compile()
+	nextName := 0
+	for _, symbol := range sorted {
+		name := minifier.NumberToMinifiedName(nextName)
+		nextName++
+
+		// Avoid reserved properties
+		for reservedProps[name] {
+			name = minifier.NumberToMinifiedName(nextName)
+			nextName++
+		}
+
+		c.graph.Symbols.Get(symbol.Ref).OriginalName = name
+	}
 }
 
 // Currently the automatic chunk generation algorithm should by construction
@@ -4280,7 +4351,7 @@ func (c *linkerContext) renameSymbolsInChunk(chunk *chunkInfo, filesInOrder []ui
 		// Accumulate nested symbol usage counts
 		timer.Begin("Accumulate symbol counts")
 		timer.Begin("Parallel phase")
-		allTopLevelSymbols := make([]renamer.DeferredTopLevelSymbolArray, len(filesInOrder))
+		allTopLevelSymbols := make([]renamer.StableSymbolCountArray, len(filesInOrder))
 		stableSourceIndices := c.graph.StableSourceIndices
 		freq := js_ast.CharFreq{}
 		waitGroup := sync.WaitGroup{}
@@ -4293,7 +4364,7 @@ func (c *linkerContext) renameSymbolsInChunk(chunk *chunkInfo, filesInOrder []ui
 				freq.Include(repr.AST.CharFreq)
 			}
 
-			go func(topLevelSymbols *renamer.DeferredTopLevelSymbolArray, repr *graph.JSRepr) {
+			go func(topLevelSymbols *renamer.StableSymbolCountArray, repr *graph.JSRepr) {
 				if repr.AST.UsesExportsRef {
 					r.AccumulateSymbolCount(topLevelSymbols, repr.AST.ExportsRef, 1, stableSourceIndices)
 				}
@@ -4315,6 +4386,7 @@ func (c *linkerContext) renameSymbolsInChunk(chunk *chunkInfo, filesInOrder []ui
 						r.AccumulateSymbolCount(topLevelSymbols, declared.Ref, 1, stableSourceIndices)
 					}
 				}
+
 				sort.Sort(topLevelSymbols)
 				waitGroup.Done()
 			}(&allTopLevelSymbols[i], repr)
@@ -4328,7 +4400,7 @@ func (c *linkerContext) renameSymbolsInChunk(chunk *chunkInfo, filesInOrder []ui
 		for _, array := range allTopLevelSymbols {
 			capacity += len(array)
 		}
-		topLevelSymbols := make(renamer.DeferredTopLevelSymbolArray, 0, capacity)
+		topLevelSymbols := make(renamer.StableSymbolCountArray, 0, capacity)
 		for _, stable := range sortedImportsFromOtherChunks {
 			r.AccumulateSymbolCount(&topLevelSymbols, stable.Ref, 1, stableSourceIndices)
 		}

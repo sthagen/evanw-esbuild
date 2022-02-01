@@ -2444,11 +2444,11 @@ func (p *parser) lowerClass(stmt js_ast.Stmt, expr js_ast.Expr, shadowRef js_ast
 							if arg.IsTypeScriptCtorField {
 								if id, ok := arg.Binding.Data.(*js_ast.BIdentifier); ok {
 									parameterFields = append(parameterFields, js_ast.AssignStmt(
-										js_ast.Expr{Loc: arg.Binding.Loc, Data: &js_ast.EDot{
-											Target:  js_ast.Expr{Loc: arg.Binding.Loc, Data: js_ast.EThisShared},
-											Name:    p.symbols[id.Ref.InnerIndex].OriginalName,
-											NameLoc: arg.Binding.Loc,
-										}},
+										js_ast.Expr{Loc: arg.Binding.Loc, Data: p.dotOrMangledPropVisit(
+											js_ast.Expr{Loc: arg.Binding.Loc, Data: js_ast.EThisShared},
+											p.symbols[id.Ref.InnerIndex].OriginalName,
+											arg.Binding.Loc,
+										)},
 										js_ast.Expr{Loc: arg.Binding.Loc, Data: &js_ast.EIdentifier{Ref: id.Ref}},
 									))
 								}

@@ -409,6 +409,7 @@ func (*EClass) isExpr()                {}
 func (*EIdentifier) isExpr()           {}
 func (*EImportIdentifier) isExpr()     {}
 func (*EPrivateIdentifier) isExpr()    {}
+func (*EMangledProp) isExpr()          {}
 func (*EJSXElement) isExpr()           {}
 func (*EMissing) isExpr()              {}
 func (*ENumber) isExpr()               {}
@@ -617,6 +618,12 @@ type EImportIdentifier struct {
 // methods. It can be used where computed properties can be used, such as
 // EIndex and Property.
 type EPrivateIdentifier struct {
+	Ref Ref
+}
+
+// This represents an internal property name that can be mangled. The symbol
+// referenced by this expression should be a "SymbolMangledProp" symbol.
+type EMangledProp struct {
 	Ref Ref
 }
 
@@ -1417,6 +1424,9 @@ const (
 	// Injected symbols can be overridden by provided defines
 	SymbolInjected
 
+	// Properties can optionally be renamed to shorter names
+	SymbolMangledProp
+
 	// This annotates all other symbols that don't have special behavior.
 	SymbolOther
 )
@@ -1689,6 +1699,7 @@ const (
 	SlotDefault SlotNamespace = iota
 	SlotLabel
 	SlotPrivateName
+	SlotMangledProp
 	SlotMustNotBeRenamed
 )
 
@@ -1702,10 +1713,13 @@ func (s *Symbol) SlotNamespace() SlotNamespace {
 	if s.Kind == SymbolLabel {
 		return SlotLabel
 	}
+	if s.Kind == SymbolMangledProp {
+		return SlotMangledProp
+	}
 	return SlotDefault
 }
 
-type SlotCounts [3]uint32
+type SlotCounts [4]uint32
 
 func (a *SlotCounts) UnionMax(b SlotCounts) {
 	for i := range *a {
@@ -2042,6 +2056,14 @@ type AST struct {
 	// This contains all top-level exported TypeScript enum constants. It exists
 	// to enable cross-module inlining of constant enums.
 	TSEnums map[Ref]map[string]TSEnumValue
+
+	// Properties in here are represented as symbols instead of strings, which
+	// allows them to be renamed to smaller names.
+	MangledProps map[string]Ref
+
+	// Properties in here are existing non-mangled properties in the source code
+	// and must not be used when generating mangled names to avoid a collision.
+	ReservedProps map[string]bool
 
 	// These are stored at the AST level instead of on individual AST nodes so
 	// they can be manipulated efficiently without a full AST traversal

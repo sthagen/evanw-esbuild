@@ -96,6 +96,22 @@ func parseOptionsImpl(
 				transformOpts.MinifyIdentifiers = true
 			}
 
+		case strings.HasPrefix(arg, "--mangle-props="):
+			value := arg[len("--mangle-props="):]
+			if buildOpts != nil {
+				buildOpts.MangleProps = value
+			} else {
+				transformOpts.MangleProps = value
+			}
+
+		case strings.HasPrefix(arg, "--reserve-props="):
+			value := arg[len("--reserve-props="):]
+			if buildOpts != nil {
+				buildOpts.ReserveProps = value
+			} else {
+				transformOpts.ReserveProps = value
+			}
+
 		case strings.HasPrefix(arg, "--drop:"):
 			value := arg[len("--drop:"):]
 			switch value {
@@ -641,11 +657,13 @@ func parseOptionsImpl(
 				"log-level":          true,
 				"log-limit":          true,
 				"main-fields":        true,
+				"mangle-props":       true,
 				"outbase":            true,
 				"outdir":             true,
 				"outfile":            true,
 				"platform":           true,
 				"public-path":        true,
+				"reserve-props":      true,
 				"resolve-extensions": true,
 				"source-root":        true,
 				"sourcefile":         true,
