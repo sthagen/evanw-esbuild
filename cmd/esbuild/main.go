@@ -52,7 +52,7 @@ var helpText = func(colors logger.Colors) string {
   --sourcemap           Emit a source map
   --splitting           Enable code splitting (currently only for esm)
   --target=...          Environment target (e.g. es2017, chrome58, firefox57,
-                        safari11, edge16, node10, default esnext)
+                        safari11, edge16, node10, ie9, opera45, default esnext)
   --watch               Watch mode: rebuild on file system changes
 
 ` + colors.Bold + `Advanced options:` + colors.Reset + `
@@ -90,6 +90,7 @@ var helpText = func(colors logger.Colors) string {
   --main-fields=...         Override the main file order in package.json
                             (default "browser,module,main" when platform is
                             browser and "main,module" when platform is node)
+  --mangle-cache=...        Save "mangle props" decisions to a JSON file
   --mangle-props=...        Rename all properties matching a regular expression
   --metafile=...            Write metadata about the build to a JSON file
   --minify-whitespace       Remove whitespace in output files

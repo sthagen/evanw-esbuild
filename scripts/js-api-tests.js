@@ -63,6 +63,19 @@ let buildTests = {
     }
   },
 
+  async mangleCacheBuild({ esbuild }) {
+    var result = await esbuild.build({
+      stdin: {
+        contents: `x = { x_: 0, y_: 1, z_: 2 }`,
+      },
+      mangleProps: /_/,
+      mangleCache: { x_: 'FIXED', z_: false },
+      write: false,
+    })
+    assert.strictEqual(result.outputFiles[0].text, 'x = { FIXED: 0, a: 1, z_: 2 };\n')
+    assert.deepStrictEqual(result.mangleCache, { x_: 'FIXED', y_: 'a', z_: false })
+  },
+
   async windowsBackslashPathTest({ esbuild, testDir }) {
     let entry = path.join(testDir, 'entry.js');
     let nested = path.join(testDir, 'nested.js');
@@ -3177,6 +3190,15 @@ let transformTests = {
     new Function(code)()
   },
 
+  async mangleCacheTransform({ esbuild }) {
+    var { code, mangleCache } = await esbuild.transform(`x = { x_: 0, y_: 1, z_: 2 }`, {
+      mangleProps: /_/,
+      mangleCache: { x_: 'FIXED', z_: false },
+    })
+    assert.strictEqual(code, 'x = { FIXED: 0, a: 1, z_: 2 };\n')
+    assert.deepStrictEqual(mangleCache, { x_: 'FIXED', y_: 'a', z_: false })
+  },
+
   async jsBannerTransform({ esbuild }) {
     var { code } = await esbuild.transform(`
       if (!bannerDefined) throw 'fail'
@@ -4225,6 +4247,15 @@ let transformTests = {
     const fromPromiseResolve = text => text.slice(text.indexOf('Promise.resolve'))
     const { code: code4 } = await esbuild.transform(`import(foo)`, { target: 'chrome48', minifyWhitespace: true })
     assert.strictEqual(fromPromiseResolve(code4), `Promise.resolve().then(function(){return __toESM(require(foo))});\n`)
+  },
+
+  async typeofEqualsUndefinedTarget({ esbuild }) {
+    assert.strictEqual((await esbuild.transform(`a = typeof b !== 'undefined'`, { minify: true })).code, `a=typeof b<"u";\n`)
+    assert.strictEqual((await esbuild.transform(`a = typeof b !== 'undefined'`, { minify: true, target: 'es2020' })).code, `a=typeof b<"u";\n`)
+    assert.strictEqual((await esbuild.transform(`a = typeof b !== 'undefined'`, { minify: true, target: 'chrome11' })).code, `a=typeof b<"u";\n`)
+
+    assert.strictEqual((await esbuild.transform(`a = typeof b !== 'undefined'`, { minify: true, target: 'es2019' })).code, `a=typeof b!="undefined";\n`)
+    assert.strictEqual((await esbuild.transform(`a = typeof b !== 'undefined'`, { minify: true, target: 'ie11' })).code, `a=typeof b!="undefined";\n`)
   },
 
   async caseInsensitiveTarget({ esbuild }) {

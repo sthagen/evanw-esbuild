@@ -81,7 +81,7 @@ func expectPrinted(t *testing.T, contents string, expected string) {
 func expectPrintedMangle(t *testing.T, contents string, expected string) {
 	t.Helper()
 	expectPrintedCommon(t, contents, expected, config.Options{
-		MangleSyntax: true,
+		MinifySyntax: true,
 	})
 }
 
@@ -100,7 +100,7 @@ func expectPrintedMangleTarget(t *testing.T, esVersion int, contents string, exp
 		UnsupportedJSFeatures: compat.UnsupportedJSFeatures(map[compat.Engine][]int{
 			compat.ES: {esVersion},
 		}),
-		MangleSyntax: true,
+		MinifySyntax: true,
 	})
 }
 
@@ -3552,6 +3552,18 @@ func TestMangleTypeofIdentifier(t *testing.T) {
 	expectPrintedMangle(t, "return typeof (false || x)", "return typeof (0, x);\n")
 	expectPrintedMangle(t, "return typeof (false || x.y)", "return typeof x.y;\n")
 	expectPrintedMangle(t, "return typeof (false || x); var x", "return typeof x;\nvar x;\n")
+}
+
+func TestMangleTypeofEqualsUndefined(t *testing.T) {
+	expectPrintedMangle(t, "return typeof x !== 'undefined'", "return typeof x < \"u\";\n")
+	expectPrintedMangle(t, "return typeof x != 'undefined'", "return typeof x < \"u\";\n")
+	expectPrintedMangle(t, "return 'undefined' !== typeof x", "return typeof x < \"u\";\n")
+	expectPrintedMangle(t, "return 'undefined' != typeof x", "return typeof x < \"u\";\n")
+
+	expectPrintedMangle(t, "return typeof x === 'undefined'", "return typeof x > \"u\";\n")
+	expectPrintedMangle(t, "return typeof x == 'undefined'", "return typeof x > \"u\";\n")
+	expectPrintedMangle(t, "return 'undefined' === typeof x", "return typeof x > \"u\";\n")
+	expectPrintedMangle(t, "return 'undefined' == typeof x", "return typeof x > \"u\";\n")
 }
 
 func TestMangleEquals(t *testing.T) {

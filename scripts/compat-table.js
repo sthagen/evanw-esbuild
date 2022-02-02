@@ -82,8 +82,10 @@ const engines = [
   'edge',
   'es',
   'firefox',
+  'ie',
   'ios',
   'node',
+  'opera',
   'safari',
 ]
 
@@ -153,6 +155,7 @@ mergeVersions('BigInt', { es2020: true })
 mergeVersions('ImportMeta', { es2020: true })
 mergeVersions('NullishCoalescing', { es2020: true })
 mergeVersions('OptionalChain', { es2020: true })
+mergeVersions('TypeofExoticObjectIsObject', { es2020: true }) // https://github.com/tc39/ecma262/pull/1441
 mergeVersions('LogicalAssignment', { es2021: true })
 mergeVersions('TopLevelAwait', {})
 mergeVersions('ArbitraryModuleNamespaceNames', {})
@@ -197,6 +200,18 @@ mergeVersions('DynamicImport', {
   firefox67: true,
   ios11: true,
   safari11_1: true,
+})
+
+// This is a problem specific to Internet explorer. See https://github.com/tc39/ecma262/issues/1440
+mergeVersions('TypeofExoticObjectIsObject', {
+  chrome0: true,
+  edge0: true,
+  es0: true,
+  firefox0: true,
+  ios0: true,
+  node0: true,
+  opera0: true,
+  safari0: true,
 })
 
 // This is a special case. Node added support for it to both v12.20+ and v13.2+
@@ -291,7 +306,7 @@ for (const feature in features) {
 }
 
 function upper(text) {
-  if (text === 'es' || text === 'ios') return text.toUpperCase()
+  if (text === 'es' || text === 'ios' || text === 'ie') return text.toUpperCase()
   return text[0].toUpperCase() + text.slice(1)
 }
 

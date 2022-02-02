@@ -1384,7 +1384,7 @@ func TestDeadCodeFollowingJump(t *testing.T) {
 		options: config.Options{
 			Mode:          config.ModeBundle,
 			AbsOutputFile: "/out.js",
-			MangleSyntax:  true,
+			MinifySyntax:  true,
 		},
 	})
 }
@@ -1427,7 +1427,7 @@ func TestRemoveTrailingReturn(t *testing.T) {
 		options: config.Options{
 			Mode:          config.ModeBundle,
 			AbsOutputFile: "/out.js",
-			MangleSyntax:  true,
+			MinifySyntax:  true,
 			OutputFormat:  config.FormatESModule,
 		},
 	})
@@ -1719,7 +1719,7 @@ func TestDCETypeOfEqualsStringMangle(t *testing.T) {
 		options: config.Options{
 			Mode:          config.ModeBundle,
 			OutputFormat:  config.FormatIIFE,
-			MangleSyntax:  true,
+			MinifySyntax:  true,
 			AbsOutputFile: "/out.js",
 		},
 	})
@@ -1829,6 +1829,74 @@ func TestDCETypeOfEqualsStringGuardCondition(t *testing.T) {
 	})
 }
 
+func TestDCETypeOfCompareStringGuardCondition(t *testing.T) {
+	dce_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				// Everything here should be removed as dead code due to tree shaking
+				var REMOVE_1 = typeof x <= 'u' ? x : null
+				var REMOVE_1 = typeof x < 'u' ? x : null
+				var REMOVE_1 = typeof x >= 'u' ? null : x
+				var REMOVE_1 = typeof x > 'u' ? null : x
+				var REMOVE_1 = typeof x <= 'u' && x
+				var REMOVE_1 = typeof x < 'u' && x
+				var REMOVE_1 = typeof x >= 'u' || x
+				var REMOVE_1 = typeof x > 'u' || x
+				var REMOVE_1 = 'u' >= typeof x ? x : null
+				var REMOVE_1 = 'u' > typeof x ? x : null
+				var REMOVE_1 = 'u' <= typeof x ? null : x
+				var REMOVE_1 = 'u' < typeof x ? null : x
+				var REMOVE_1 = 'u' >= typeof x && x
+				var REMOVE_1 = 'u' > typeof x && x
+				var REMOVE_1 = 'u' <= typeof x || x
+				var REMOVE_1 = 'u' < typeof x || x
+
+				// Everything here should be kept as live code because it has side effects
+				var keep_1 = typeof x <= 'u' ? y : null
+				var keep_1 = typeof x < 'u' ? y : null
+				var keep_1 = typeof x >= 'u' ? null : y
+				var keep_1 = typeof x > 'u' ? null : y
+				var keep_1 = typeof x <= 'u' && y
+				var keep_1 = typeof x < 'u' && y
+				var keep_1 = typeof x >= 'u' || y
+				var keep_1 = typeof x > 'u' || y
+				var keep_1 = 'u' >= typeof x ? y : null
+				var keep_1 = 'u' > typeof x ? y : null
+				var keep_1 = 'u' <= typeof x ? null : y
+				var keep_1 = 'u' < typeof x ? null : y
+				var keep_1 = 'u' >= typeof x && y
+				var keep_1 = 'u' > typeof x && y
+				var keep_1 = 'u' <= typeof x || y
+				var keep_1 = 'u' < typeof x || y
+
+				// Everything here should be kept as live code because it has side effects
+				var keep_2 = typeof x <= 'u' ? null : x
+				var keep_2 = typeof x < 'u' ? null : x
+				var keep_2 = typeof x >= 'u' ? x : null
+				var keep_2 = typeof x > 'u' ? x : null
+				var keep_2 = typeof x <= 'u' || x
+				var keep_2 = typeof x < 'u' || x
+				var keep_2 = typeof x >= 'u' && x
+				var keep_2 = typeof x > 'u' && x
+				var keep_2 = 'u' >= typeof x ? null : x
+				var keep_2 = 'u' > typeof x ? null : x
+				var keep_2 = 'u' <= typeof x ? x : null
+				var keep_2 = 'u' < typeof x ? x : null
+				var keep_2 = 'u' >= typeof x || x
+				var keep_2 = 'u' > typeof x || x
+				var keep_2 = 'u' <= typeof x && x
+				var keep_2 = 'u' < typeof x && x
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			OutputFormat:  config.FormatIIFE,
+			AbsOutputFile: "/out.js",
+		},
+	})
+}
+
 // These unused imports should be removed since they aren't used, and removing
 // them makes the code shorter.
 func TestRemoveUnusedImports(t *testing.T) {
@@ -1843,7 +1911,7 @@ func TestRemoveUnusedImports(t *testing.T) {
 		entryPaths: []string{"/entry.js"},
 		options: config.Options{
 			Mode:          config.ModePassThrough,
-			MangleSyntax:  true,
+			MinifySyntax:  true,
 			AbsOutputFile: "/out.js",
 		},
 	})
@@ -1864,7 +1932,7 @@ func TestRemoveUnusedImportsEval(t *testing.T) {
 		entryPaths: []string{"/entry.js"},
 		options: config.Options{
 			Mode:          config.ModePassThrough,
-			MangleSyntax:  true,
+			MinifySyntax:  true,
 			AbsOutputFile: "/out.js",
 		},
 	})
@@ -1888,7 +1956,7 @@ func TestRemoveUnusedImportsEvalTS(t *testing.T) {
 		entryPaths: []string{"/entry.js"},
 		options: config.Options{
 			Mode:          config.ModePassThrough,
-			MangleSyntax:  true,
+			MinifySyntax:  true,
 			AbsOutputFile: "/out.js",
 		},
 	})
@@ -2048,7 +2116,7 @@ func TestTreeShakingLoweredClassStaticFieldMinified(t *testing.T) {
 			Mode:                  config.ModeBundle,
 			AbsOutputDir:          "/out",
 			UnsupportedJSFeatures: compat.ClassField,
-			MangleSyntax:          true,
+			MinifySyntax:          true,
 		},
 	})
 }
@@ -2255,7 +2323,7 @@ func TestInlineIdentityFunctionCalls(t *testing.T) {
 		options: config.Options{
 			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",
-			MangleSyntax: true,
+			MinifySyntax: true,
 		},
 	})
 }
@@ -2390,7 +2458,7 @@ func TestInlineEmptyFunctionCalls(t *testing.T) {
 		options: config.Options{
 			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",
-			MangleSyntax: true,
+			MinifySyntax: true,
 		},
 	})
 }
@@ -2461,7 +2529,7 @@ func TestInlineFunctionCallBehaviorChanges(t *testing.T) {
 		options: config.Options{
 			Mode:         config.ModePassThrough,
 			AbsOutputDir: "/out",
-			MangleSyntax: true,
+			MinifySyntax: true,
 		},
 	})
 }
@@ -2481,7 +2549,7 @@ func TestInlineFunctionCallForInitDecl(t *testing.T) {
 		options: config.Options{
 			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",
-			MangleSyntax: true,
+			MinifySyntax: true,
 		},
 	})
 }

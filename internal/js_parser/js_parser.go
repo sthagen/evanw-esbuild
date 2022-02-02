@@ -384,7 +384,7 @@ type optionsThatSupportStructuralEquality struct {
 	targetFromAPI           config.TargetFromAPI
 	asciiOnly               bool
 	keepNames               bool
-	mangleSyntax            bool
+	minifySyntax            bool
 	minifyIdentifiers       bool
 	omitRuntimeForTests     bool
 	ignoreDCEAnnotations    bool
@@ -414,7 +414,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			targetFromAPI:           options.TargetFromAPI,
 			asciiOnly:               options.ASCIIOnly,
 			keepNames:               options.KeepNames,
-			mangleSyntax:            options.MangleSyntax,
+			minifySyntax:            options.MinifySyntax,
 			minifyIdentifiers:       options.MinifyIdentifiers,
 			omitRuntimeForTests:     options.OmitRuntimeForTests,
 			ignoreDCEAnnotations:    options.IgnoreDCEAnnotations,
@@ -1163,7 +1163,7 @@ func (p *parser) selectLocalKind(kind js_ast.LocalKind) js_ast.LocalKind {
 	// Optimization: use "let" instead of "const" because it's shorter. This is
 	// only done when bundling because assigning to "const" is only an error when
 	// bundling.
-	if p.options.mode == config.ModeBundle && kind == js_ast.LocalConst && p.options.mangleSyntax {
+	if p.options.mode == config.ModeBundle && kind == js_ast.LocalConst && p.options.minifySyntax {
 		return js_ast.LocalLet
 	}
 
@@ -1483,7 +1483,7 @@ func (p *parser) declareSymbol(kind js_ast.SymbolKind, loc logger.Loc, name stri
 			symbol.Link = ref
 
 			// If these are both functions, remove the overwritten declaration
-			if p.options.mangleSyntax && kind.IsFunction() && symbol.Kind.IsFunction() {
+			if p.options.minifySyntax && kind.IsFunction() && symbol.Kind.IsFunction() {
 				symbol.Flags |= js_ast.RemoveOverwrittenFunctionDeclaration
 			}
 
@@ -1954,7 +1954,7 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 
 	case js_lexer.TStringLiteral:
 		key = p.parseStringLiteral()
-		preferQuotedKey = !p.options.mangleSyntax
+		preferQuotedKey = !p.options.minifySyntax
 
 	case js_lexer.TBigIntegerLiteral:
 		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier}}
@@ -2418,7 +2418,7 @@ func (p *parser) parsePropertyBinding() js_ast.PropertyBinding {
 
 	case js_lexer.TStringLiteral:
 		key = p.parseStringLiteral()
-		preferQuotedKey = !p.options.mangleSyntax
+		preferQuotedKey = !p.options.minifySyntax
 
 	case js_lexer.TBigIntegerLiteral:
 		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier}}
@@ -3852,7 +3852,7 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 			optionalStart := js_ast.OptionalChainStart
 
 			// Remove unnecessary optional chains
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				if isNullOrUndefined, _, ok := toNullOrUndefinedWithSideEffects(left.Data); ok && !isNullOrUndefined {
 					optionalStart = js_ast.OptionalChainNone
 				}
@@ -5728,7 +5728,7 @@ func (p *parser) parsePath() (logger.Loc, string, *[]ast.AssertEntry) {
 			} else if p.lexer.Token == js_lexer.TStringLiteral {
 				key = p.lexer.StringLiteral()
 				keyText = js_lexer.UTF16ToString(key)
-				preferQuotedKey = !p.options.mangleSyntax
+				preferQuotedKey = !p.options.minifySyntax
 			} else {
 				p.lexer.Expect(js_lexer.TIdentifier)
 			}
@@ -7579,7 +7579,7 @@ func (p *parser) visitStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt {
 	p.isControlFlowDead = oldIsControlFlowDead
 
 	// Stop now if we're not mangling
-	if !p.options.mangleSyntax {
+	if !p.options.minifySyntax {
 		return visited
 	}
 
@@ -9230,7 +9230,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 				// Bad (a behavior change):
 				//   "a = 123; var a = undefined;" => "a = 123; var a;"
 				//
-				if p.options.mangleSyntax && s.Kind == js_ast.LocalLet {
+				if p.options.minifySyntax && s.Kind == js_ast.LocalLet {
 					if _, ok := d.Binding.Data.(*js_ast.BIdentifier); ok {
 						if _, ok := d.ValueOrNil.Data.(*js_ast.EUndefined); ok {
 							d.ValueOrNil = js_ast.Expr{}
@@ -9279,7 +9279,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 
 	case *js_ast.SExpr:
 		shouldTrimUndefined := false
-		if !p.options.mangleSyntax {
+		if !p.options.minifySyntax {
 			if _, ok := s.Value.Data.(*js_ast.ECall); ok {
 				shouldTrimUndefined = true
 			}
@@ -9298,7 +9298,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		}
 
 		// Trim expressions without side effects
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			s.Value = js_ast.SimplifyUnusedExpr(s.Value, p.isUnbound)
 			if s.Value.Data == nil {
 				return stmts
@@ -9325,7 +9325,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 			// Returning undefined is implicit except when inside an async generator
 			// function, where "return undefined" behaves like "return await undefined"
 			// but just "return" has no "await".
-			if p.options.mangleSyntax && (!p.fnOrArrowDataVisit.isAsync || !p.fnOrArrowDataVisit.isGenerator) {
+			if p.options.minifySyntax && (!p.fnOrArrowDataVisit.isAsync || !p.fnOrArrowDataVisit.isGenerator) {
 				if _, ok := s.ValueOrNil.Data.(*js_ast.EUndefined); ok {
 					s.ValueOrNil = js_ast.Expr{}
 				}
@@ -9346,7 +9346,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 
 		p.popScope()
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			if len(s.Stmts) == 1 && !statementCaresAboutScope(s.Stmts[0]) {
 				// Unwrap blocks containing a single statement
 				stmt = s.Stmts[0]
@@ -9367,7 +9367,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		s.Test = p.visitExpr(s.Test)
 		s.Body = p.visitLoopBody(s.Body)
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			s.Test = p.simplifyBooleanExpr(s.Test)
 
 			// A true value is implied
@@ -9386,14 +9386,14 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		s.Body = p.visitLoopBody(s.Body)
 		s.Test = p.visitExpr(s.Test)
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			s.Test = p.simplifyBooleanExpr(s.Test)
 		}
 
 	case *js_ast.SIf:
 		s.Test = p.visitExpr(s.Test)
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			s.Test = p.simplifyBooleanExpr(s.Test)
 		}
 
@@ -9423,14 +9423,14 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 			}
 
 			// Trim unnecessary "else" clauses
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				if _, ok := s.NoOrNil.Data.(*js_ast.SEmpty); ok {
 					s.NoOrNil = js_ast.Stmt{}
 				}
 			}
 		}
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			return p.mangleIf(stmts, stmt.Loc, s)
 		}
 
@@ -9443,7 +9443,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		if s.TestOrNil.Data != nil {
 			s.TestOrNil = p.visitExpr(s.TestOrNil)
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				s.TestOrNil = p.simplifyBooleanExpr(s.TestOrNil)
 
 				// A true value is implied
@@ -9474,7 +9474,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 
 		p.popScope()
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			mangleFor(s)
 		}
 
@@ -9591,7 +9591,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 			return stmts
 		}
 
-		if p.options.mangleSyntax && !s.Fn.IsGenerator && !s.Fn.IsAsync && !s.Fn.HasRestArg && s.Fn.Name != nil {
+		if p.options.minifySyntax && !s.Fn.IsGenerator && !s.Fn.IsAsync && !s.Fn.HasRestArg && s.Fn.Name != nil {
 			if len(s.Fn.Body.Stmts) == 0 {
 				// Mark if this function is an empty function
 				hasSideEffectFreeArguments := true
@@ -9755,7 +9755,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 				value.ValueOrNil = js_ast.Expr{Loc: value.Loc, Data: js_ast.EUndefinedShared}
 			}
 
-			if p.options.mangleSyntax && js_lexer.IsIdentifier(name) {
+			if p.options.minifySyntax && js_lexer.IsIdentifier(name) {
 				// "Enum.Name = value"
 				assignTarget = js_ast.Assign(
 					js_ast.Expr{Loc: value.Loc, Data: &js_ast.EDot{
@@ -10226,7 +10226,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 			p.fnOnlyDataVisit = oldFnOnlyDataVisit
 
 			// "class { static {} }" => "class {}"
-			if p.options.mangleSyntax && len(property.ClassStaticBlock.Stmts) == 0 {
+			if p.options.minifySyntax && len(property.ClassStaticBlock.Stmts) == 0 {
 				continue
 			}
 
@@ -10251,7 +10251,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 			property.Key = key
 
 			// "class {['x'] = y}" => "class {x = y}"
-			if p.options.mangleSyntax && property.IsComputed {
+			if p.options.minifySyntax && property.IsComputed {
 				if str, ok := key.Data.(*js_ast.EString); ok && js_lexer.IsIdentifierUTF16(str.Value) {
 					isInvalidConstructor := false
 					if js_lexer.UTF16EqualsString(str.Value, "constructor") {
@@ -10587,16 +10587,38 @@ func canChangeStrictToLoose(a js_ast.Expr, b js_ast.Expr) bool {
 	return x == y && x != js_ast.PrimitiveUnknown && x != js_ast.PrimitiveMixed
 }
 
-func maybeSimplifyEqualityComparison(e *js_ast.EBinary, isNotEqual bool) (js_ast.Expr, bool) {
+func (p *parser) maybeSimplifyEqualityComparison(loc logger.Loc, e *js_ast.EBinary) (js_ast.Expr, bool) {
 	// "!x === true" => "!x"
 	// "!x === false" => "!!x"
 	// "!x !== true" => "!!x"
 	// "!x !== false" => "!x"
 	if boolean, ok := e.Right.Data.(*js_ast.EBoolean); ok && js_ast.KnownPrimitiveType(e.Left) == js_ast.PrimitiveBoolean {
-		if boolean.Value == isNotEqual {
+		if boolean.Value == (e.Op == js_ast.BinOpLooseNe || e.Op == js_ast.BinOpStrictNe) {
 			return js_ast.Not(e.Left), true
 		} else {
 			return e.Left, true
+		}
+	}
+
+	// "typeof x != 'undefined'" => "typeof x < 'u'"
+	// "typeof x == 'undefined'" => "typeof x > 'u'"
+	if !p.options.unsupportedJSFeatures.Has(compat.TypeofExoticObjectIsObject) {
+		// Only do this optimization if we know that the "typeof" operator won't
+		// return something random. The only case of this happening was Internet
+		// Explorer returning "unknown" for some objects, which messes with this
+		// optimization. So we don't do this when targeting Internet Explorer.
+		if typeof, ok := e.Left.Data.(*js_ast.EUnary); ok && typeof.Op == js_ast.UnOpTypeof {
+			if str, ok := e.Right.Data.(*js_ast.EString); ok && js_lexer.UTF16EqualsString(str.Value, "undefined") {
+				op := js_ast.BinOpLt
+				if e.Op == js_ast.BinOpLooseEq || e.Op == js_ast.BinOpStrictEq {
+					op = js_ast.BinOpGt
+				}
+				return js_ast.Expr{Loc: loc, Data: &js_ast.EBinary{
+					Op:    op,
+					Left:  e.Left,
+					Right: js_ast.Expr{Loc: e.Right.Loc, Data: &js_ast.EString{Value: []uint16{'u'}}},
+				}}, true
+			}
 		}
 	}
 
@@ -10757,7 +10779,7 @@ func (p *parser) maybeRewritePropertyAccess(
 	}
 
 	// Attempt to simplify statically-determined object literal property accesses
-	if !isCallTarget && p.options.mangleSyntax && assignTarget == js_ast.AssignTargetNone {
+	if !isCallTarget && p.options.minifySyntax && assignTarget == js_ast.AssignTargetNone {
 		if object, ok := target.Data.(*js_ast.EObject); ok {
 			var replace js_ast.Expr
 			hasProtoNull := false
@@ -11594,7 +11616,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		// When mangling, inline string values into the template literal. Note that
 		// it may no longer be a template literal after this point (it may turn into
 		// a plain string literal instead).
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			expr = p.mangleTemplate(expr.Loc, e)
 		}
 
@@ -11704,7 +11726,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		case js_ast.BinOpComma:
 			// "(1, 2)" => "2"
 			// "(sideEffects(), 2)" => "(sideEffects(), 2)"
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				e.Left = js_ast.SimplifyUnusedExpr(e.Left, p.isUnbound)
 				if e.Left.Data == nil {
 					// "(1, fn)()" => "fn()"
@@ -11727,13 +11749,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 			p.warnAboutTypeofAndString(e.Left, e.Right)
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "x == void 0" => "x == null"
 				if _, ok := e.Right.Data.(*js_ast.EUndefined); ok {
 					e.Right.Data = js_ast.ENullShared
 				}
 
-				if result, ok := maybeSimplifyEqualityComparison(e, false /* isNotEqual */); ok {
+				if result, ok := p.maybeSimplifyEqualityComparison(expr.Loc, e); ok {
 					return result, exprOut{}
 				}
 			}
@@ -11748,13 +11770,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 			p.warnAboutTypeofAndString(e.Left, e.Right)
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "typeof x === 'undefined'" => "typeof x == 'undefined'"
 				if canChangeStrictToLoose(e.Left, e.Right) {
 					e.Op = js_ast.BinOpLooseEq
 				}
 
-				if result, ok := maybeSimplifyEqualityComparison(e, false /* isNotEqual */); ok {
+				if result, ok := p.maybeSimplifyEqualityComparison(expr.Loc, e); ok {
 					return result, exprOut{}
 				}
 			}
@@ -11769,13 +11791,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 			p.warnAboutTypeofAndString(e.Left, e.Right)
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "x != void 0" => "x != null"
 				if _, ok := e.Right.Data.(*js_ast.EUndefined); ok {
 					e.Right.Data = js_ast.ENullShared
 				}
 
-				if result, ok := maybeSimplifyEqualityComparison(e, true /* isNotEqual */); ok {
+				if result, ok := p.maybeSimplifyEqualityComparison(expr.Loc, e); ok {
 					return result, exprOut{}
 				}
 			}
@@ -11790,13 +11812,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 			p.warnAboutTypeofAndString(e.Left, e.Right)
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "typeof x !== 'undefined'" => "typeof x != 'undefined'"
 				if canChangeStrictToLoose(e.Left, e.Right) {
 					e.Op = js_ast.BinOpLooseNe
 				}
 
-				if result, ok := maybeSimplifyEqualityComparison(e, true /* isNotEqual */); ok {
+				if result, ok := p.maybeSimplifyEqualityComparison(expr.Loc, e); ok {
 					return result, exprOut{}
 				}
 			}
@@ -11817,7 +11839,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 			}
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "a ?? (b ?? c)" => "a ?? b ?? c"
 				if right, ok := e.Right.Data.(*js_ast.EBinary); ok && right.Op == js_ast.BinOpNullishCoalescing {
 					e.Left = js_ast.JoinWithLeftAssociativeOp(js_ast.BinOpNullishCoalescing, e.Left, right.Left)
@@ -11844,7 +11866,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 			}
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "a || (b || c)" => "a || b || c"
 				if right, ok := e.Right.Data.(*js_ast.EBinary); ok && right.Op == js_ast.BinOpLogicalOr {
 					e.Left = js_ast.JoinWithLeftAssociativeOp(js_ast.BinOpLogicalOr, e.Left, right.Left)
@@ -11874,7 +11896,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 			}
 
-			if p.options.mangleSyntax {
+			if p.options.minifySyntax {
 				// "a && (b && c)" => "a && b && c"
 				if right, ok := e.Right.Data.(*js_ast.EBinary); ok && right.Op == js_ast.BinOpLogicalAnd {
 					e.Left = js_ast.JoinWithLeftAssociativeOp(js_ast.BinOpLogicalAnd, e.Left, right.Left)
@@ -12157,7 +12179,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// "(a, b) + c" => "a, b + c"
-		if p.options.mangleSyntax && e.Op != js_ast.BinOpComma {
+		if p.options.minifySyntax && e.Op != js_ast.BinOpComma {
 			if comma, ok := e.Left.Data.(*js_ast.EBinary); ok && comma.Op == js_ast.BinOpComma {
 				return js_ast.JoinWithComma(comma.Left, js_ast.Expr{
 					Loc: comma.Right.Loc,
@@ -12176,7 +12198,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		isDeleteTarget := e == p.deleteTarget
 
 		// "a['b']" => "a.b"
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			if str, ok := e.Index.Data.(*js_ast.EString); ok && js_lexer.IsIdentifierUTF16(str.Value) {
 				dot := &js_ast.EDot{
 					Target:        e.Target,
@@ -12274,7 +12296,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			out.thisArgWrapFunc = nil
 		}
 		if str, ok := e.Index.Data.(*js_ast.EString); ok && e.OptionalChain == js_ast.OptionalChainNone {
-			preferQuotedKey := !p.options.mangleSyntax
+			preferQuotedKey := !p.options.minifySyntax
 			if value, ok := p.maybeRewritePropertyAccess(expr.Loc, in.assignTarget, isDeleteTarget,
 				e.Target, js_lexer.UTF16ToString(str.Value), e.Index.Loc, isCallTarget, preferQuotedKey); ok {
 				return value, out
@@ -12379,7 +12401,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			// Post-process the unary expression
 			switch e.Op {
 			case js_ast.UnOpNot:
-				if p.options.mangleSyntax {
+				if p.options.minifySyntax {
 					e.Value = p.simplifyBooleanExpr(e.Value)
 				}
 
@@ -12387,7 +12409,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: !boolean}}, exprOut{}
 				}
 
-				if p.options.mangleSyntax {
+				if p.options.minifySyntax {
 					if result, ok := js_ast.MaybeSimplifyNot(e.Value); ok {
 						return result, exprOut{}
 					}
@@ -12429,7 +12451,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// "-(a, b)" => "a, -b"
-		if p.options.mangleSyntax && e.Op != js_ast.UnOpDelete && e.Op != js_ast.UnOpTypeof {
+		if p.options.minifySyntax && e.Op != js_ast.UnOpDelete && e.Op != js_ast.UnOpTypeof {
 			if comma, ok := e.Value.Data.(*js_ast.EBinary); ok && comma.Op == js_ast.BinOpComma {
 				return js_ast.JoinWithComma(comma.Left, js_ast.Expr{
 					Loc: comma.Right.Loc,
@@ -12527,7 +12549,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		isCallTarget := e == p.callTarget
 		e.Test = p.visitExpr(e.Test)
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			e.Test = p.simplifyBooleanExpr(e.Test)
 		}
 
@@ -12545,7 +12567,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				e.No = p.visitExpr(e.No)
 				p.isControlFlowDead = old
 
-				if p.options.mangleSyntax {
+				if p.options.minifySyntax {
 					// "(a, true) ? b : c" => "a, b"
 					if sideEffects == couldHaveSideEffects {
 						return js_ast.JoinWithComma(js_ast.SimplifyUnusedExpr(e.Test, p.isUnbound), e.Yes), exprOut{}
@@ -12568,7 +12590,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				p.isControlFlowDead = old
 				e.No = p.visitExpr(e.No)
 
-				if p.options.mangleSyntax {
+				if p.options.minifySyntax {
 					// "(a, false) ? b : c" => "a, c"
 					if sideEffects == couldHaveSideEffects {
 						return js_ast.JoinWithComma(js_ast.SimplifyUnusedExpr(e.Test, p.isUnbound), e.No), exprOut{}
@@ -12586,7 +12608,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
-		if p.options.mangleSyntax {
+		if p.options.minifySyntax {
 			return p.mangleIfExpr(expr.Loc, e), exprOut{}
 		}
 
@@ -12639,7 +12661,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// "[1, ...[2, 3], 4]" => "[1, 2, 3, 4]"
-		if p.options.mangleSyntax && hasSpread && in.assignTarget == js_ast.AssignTargetNone {
+		if p.options.minifySyntax && hasSpread && in.assignTarget == js_ast.AssignTargetNone {
 			e.Items = inlineSpreadsOfArrayLiterals(e.Items)
 		}
 
@@ -12679,7 +12701,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 
 				// "{['x']: y}" => "{x: y}"
-				if p.options.mangleSyntax && property.IsComputed {
+				if p.options.minifySyntax && property.IsComputed {
 					if str, ok := key.Data.(*js_ast.EString); ok && js_lexer.IsIdentifierUTF16(str.Value) && !js_lexer.UTF16EqualsString(str.Value, "__proto__") {
 						property.IsComputed = false
 					}
@@ -12757,7 +12779,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 
 		if in.assignTarget == js_ast.AssignTargetNone {
 			// "{a, ...{b, c}, d}" => "{a, b, c, d}"
-			if p.options.mangleSyntax && hasSpread {
+			if p.options.minifySyntax && hasSpread {
 				var properties []js_ast.Property
 				for _, property := range e.Properties {
 					if property.Kind == js_ast.PropertySpread {
@@ -13115,7 +13137,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// "foo(1, ...[2, 3], 4)" => "foo(1, 2, 3, 4)"
-		if p.options.mangleSyntax && hasSpread && in.assignTarget == js_ast.AssignTargetNone {
+		if p.options.minifySyntax && hasSpread && in.assignTarget == js_ast.AssignTargetNone {
 			e.Args = inlineSpreadsOfArrayLiterals(e.Args)
 		}
 
@@ -13162,7 +13184,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		switch t := target.Data.(type) {
 		case *js_ast.EImportIdentifier:
 			// If this function is inlined, allow it to be tree-shaken
-			if p.options.mangleSyntax && !p.isControlFlowDead {
+			if p.options.minifySyntax && !p.isControlFlowDead {
 				p.convertSymbolUseToCall(t.Ref, len(e.Args) == 1)
 			}
 
@@ -13173,7 +13195,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 			// If this function is inlined, allow it to be tree-shaken
-			if p.options.mangleSyntax && !p.isControlFlowDead {
+			if p.options.minifySyntax && !p.isControlFlowDead {
 				p.convertSymbolUseToCall(t.Ref, len(e.Args) == 1)
 			}
 
@@ -13348,7 +13370,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			p.fnOnlyDataVisit.superHelpers = nil
 		}
 
-		if p.options.mangleSyntax && len(e.Body.Stmts) == 1 {
+		if p.options.minifySyntax && len(e.Body.Stmts) == 1 {
 			if s, ok := e.Body.Stmts[0].Data.(*js_ast.SReturn); ok {
 				if s.ValueOrNil.Data == nil {
 					// "() => { return }" => "() => {}"
@@ -13379,7 +13401,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		name := e.Fn.Name
 
 		// Remove unused function names when minifying
-		if p.options.mangleSyntax && !p.currentScope.ContainsDirectEval &&
+		if p.options.minifySyntax && !p.currentScope.ContainsDirectEval &&
 			name != nil && p.symbols[name.Ref.InnerIndex].UseCountEstimate == 0 {
 			e.Fn.Name = nil
 		}
@@ -13931,7 +13953,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 			// TypeScript always trims unused imports. This is important for
 			// correctness since some imports might be fake (only in the type
 			// system and used for type-only imports).
-			if (p.options.mangleSyntax || p.options.ts.Parse) && !keepUnusedImports {
+			if (p.options.minifySyntax || p.options.ts.Parse) && !keepUnusedImports {
 				foundImports := false
 				isUnusedInTypeScript := true
 
@@ -14557,6 +14579,14 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		// we must also consider "typeof x == 'object'" to be side-effect free.
 		case js_ast.BinOpLooseEq, js_ast.BinOpLooseNe:
 			return canChangeStrictToLoose(e.Left, e.Right) && p.exprCanBeRemovedIfUnused(e.Left) && p.exprCanBeRemovedIfUnused(e.Right)
+
+		// Special-case "<" and ">" with string, number, or bigint arguments
+		case js_ast.BinOpLt, js_ast.BinOpGt, js_ast.BinOpLe, js_ast.BinOpGe:
+			left := js_ast.KnownPrimitiveType(e.Left)
+			switch left {
+			case js_ast.PrimitiveString, js_ast.PrimitiveNumber, js_ast.PrimitiveBigInt:
+				return js_ast.KnownPrimitiveType(e.Right) == left && p.exprCanBeRemovedIfUnused(e.Left) && p.exprCanBeRemovedIfUnused(e.Right)
+			}
 		}
 
 	case *js_ast.ETemplate:
@@ -14593,6 +14623,25 @@ func (p *parser) isSideEffectFreeUnboundIdentifierRef(value js_ast.Expr, guardCo
 						// In "typeof x === 'object' ? x : null", the reference to "x" is side-effect free
 						if (js_lexer.UTF16EqualsString(text.Value, "undefined") == isYesBranch) ==
 							(binary.Op == js_ast.BinOpStrictNe || binary.Op == js_ast.BinOpLooseNe) {
+							if id2, ok := typeof.Value.Data.(*js_ast.EIdentifier); ok && id2.Ref == id.Ref {
+								return true
+							}
+						}
+					}
+				}
+
+			case js_ast.BinOpLt, js_ast.BinOpGt, js_ast.BinOpLe, js_ast.BinOpGe:
+				// Pattern match for "typeof x < <string>"
+				typeof, string := binary.Left, binary.Right
+				if _, ok := typeof.Data.(*js_ast.EString); ok {
+					typeof, string = string, typeof
+					isYesBranch = !isYesBranch
+				}
+				if typeof, ok := typeof.Data.(*js_ast.EUnary); ok && typeof.Op == js_ast.UnOpTypeof {
+					if text, ok := string.Data.(*js_ast.EString); ok && js_lexer.UTF16EqualsString(text.Value, "u") {
+						// In "typeof x < 'u' ? x : null", the reference to "x" is side-effect free
+						// In "typeof x > 'u' ? x : null", the reference to "x" is side-effect free
+						if isYesBranch == (binary.Op == js_ast.BinOpLt || binary.Op == js_ast.BinOpLe) {
 							if id2, ok := typeof.Value.Data.(*js_ast.EIdentifier); ok && id2.Ref == id.Ref {
 								return true
 							}

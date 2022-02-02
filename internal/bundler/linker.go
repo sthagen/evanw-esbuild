@@ -302,7 +302,11 @@ func link(
 	// Merge mangled properties before chunks are generated since the names must
 	// be consistent across all chunks, or the generated code will break
 	if c.options.MangleProps != nil {
-		c.mangleProps()
+		c.timer.Begin("Waiting for mangle cache")
+		c.options.ExclusiveMangleCacheUpdate(func(mangleCache map[string]interface{}) {
+			c.timer.End("Waiting for mangle cache")
+			c.mangleProps(mangleCache)
+		})
 	}
 
 	// Make sure calls to "js_ast.FollowSymbols()" in parallel goroutines after this
@@ -312,28 +316,42 @@ func link(
 	return c.generateChunksInParallel(chunks)
 }
 
-func (c *linkerContext) mangleProps() {
+func (c *linkerContext) mangleProps(mangleCache map[string]interface{}) {
 	c.timer.Begin("Mangle props")
 	defer c.timer.End("Mangle props")
 
-	// Merge all mangled property symbols together
-	freq := js_ast.CharFreq{}
-	mangledProps := make(map[string]js_ast.Ref)
+	// Reserve all JS keywords
 	reservedProps := make(map[string]bool)
 	for keyword := range js_lexer.Keywords {
 		reservedProps[keyword] = true
 	}
+
+	// Reserve all target properties in the cache
+	for original, remapped := range mangleCache {
+		if remapped == false {
+			reservedProps[original] = true
+		} else {
+			reservedProps[remapped.(string)] = true
+		}
+	}
+
+	// Merge all mangled property symbols together
+	freq := js_ast.CharFreq{}
+	mangledProps := make(map[string]js_ast.Ref)
 	for _, sourceIndex := range c.graph.ReachableFiles {
 		// Don't mangle anything in the runtime code
 		if sourceIndex == runtime.SourceIndex {
 			continue
 		}
 
+		// For each file
 		if repr, ok := c.graph.Files[sourceIndex].InputFile.Repr.(*graph.JSRepr); ok {
+			// Reserve all non-mangled properties
 			for prop := range repr.AST.ReservedProps {
 				reservedProps[prop] = true
 			}
 
+			// Merge each mangled property with other ones of the same name
 			for name, ref := range repr.AST.MangledProps {
 				if existing, ok := mangledProps[name]; ok {
 					js_ast.MergeSymbols(c.graph.Symbols, ref, existing)
@@ -342,6 +360,7 @@ func (c *linkerContext) mangleProps() {
 				}
 			}
 
+			// Include this file's frequency histogram, which affects the mangled names
 			if repr.AST.CharFreq != nil {
 				freq.Include(repr.AST.CharFreq)
 			}
@@ -363,7 +382,18 @@ func (c *linkerContext) mangleProps() {
 	// Assign names in order of use count
 	minifier := freq.Compile()
 	nextName := 0
-	for _, symbol := range sorted {
+	for _, symbolCount := range sorted {
+		symbol := c.graph.Symbols.Get(symbolCount.Ref)
+
+		// Don't change existing mappings
+		if existing, ok := mangleCache[symbol.OriginalName]; ok {
+			if existing != false {
+				symbol.OriginalName = existing.(string)
+			}
+			continue
+		}
+
+		// Generate a new name
 		name := minifier.NumberToMinifiedName(nextName)
 		nextName++
 
@@ -373,7 +403,11 @@ func (c *linkerContext) mangleProps() {
 			nextName++
 		}
 
-		c.graph.Symbols.Get(symbol.Ref).OriginalName = name
+		// Track the new mapping
+		if mangleCache != nil {
+			mangleCache[symbol.OriginalName] = name
+		}
+		symbol.OriginalName = name
 	}
 }
 
@@ -3810,7 +3844,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 	if len(stmtList.insideWrapperPrefix) > 0 {
 		stmts = append(stmtList.insideWrapperPrefix, stmts...)
 	}
-	if c.options.MangleSyntax {
+	if c.options.MinifySyntax {
 		stmts = mergeAdjacentLocalStmts(stmts)
 	}
 
@@ -3916,7 +3950,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 			}}
 
 			// "var foo, bar;"
-			if !c.options.MangleSyntax && len(decls) > 0 {
+			if !c.options.MinifySyntax && len(decls) > 0 {
 				stmtList.outsideWrapperPrefix = append(stmtList.outsideWrapperPrefix, js_ast.Stmt{Data: &js_ast.SLocal{
 					Decls: decls,
 				}})
@@ -3953,8 +3987,8 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 	printOptions := js_printer.Options{
 		Indent:                       indent,
 		OutputFormat:                 c.options.OutputFormat,
-		RemoveWhitespace:             c.options.RemoveWhitespace,
-		MangleSyntax:                 c.options.MangleSyntax,
+		MinifyWhitespace:             c.options.MinifyWhitespace,
+		MinifySyntax:                 c.options.MinifySyntax,
 		ASCIIOnly:                    c.options.ASCIIOnly,
 		ToCommonJSRef:                toCommonJSRef,
 		ToESMRef:                     toESMRef,
@@ -4095,7 +4129,7 @@ func (c *linkerContext) generateEntryPointTailJS(
 			// instead of "__export" but support for that would need to be added to
 			// "cjs-module-lexer" and then we would need to be ok with not supporting
 			// older versions of node that don't have that newly-added support.
-			if !c.options.RemoveWhitespace {
+			if !c.options.MinifyWhitespace {
 				stmts = append(stmts,
 					js_ast.Stmt{Data: &js_ast.SComment{Text: `// Annotate the CommonJS export names for ESM import in node:`}},
 				)
@@ -4290,8 +4324,8 @@ func (c *linkerContext) generateEntryPointTailJS(
 	printOptions := js_printer.Options{
 		Indent:                       indent,
 		OutputFormat:                 c.options.OutputFormat,
-		RemoveWhitespace:             c.options.RemoveWhitespace,
-		MangleSyntax:                 c.options.MangleSyntax,
+		MinifyWhitespace:             c.options.MinifyWhitespace,
+		MinifySyntax:                 c.options.MinifySyntax,
 		ASCIIOnly:                    c.options.ASCIIOnly,
 		ToCommonJSRef:                toCommonJSRef,
 		ToESMRef:                     toESMRef,
@@ -4608,8 +4642,8 @@ func (c *linkerContext) generateChunkJS(chunks []chunkInfo, chunkIndex int, chun
 		printOptions := js_printer.Options{
 			Indent:           indent,
 			OutputFormat:     c.options.OutputFormat,
-			RemoveWhitespace: c.options.RemoveWhitespace,
-			MangleSyntax:     c.options.MangleSyntax,
+			MinifyWhitespace: c.options.MinifyWhitespace,
+			MinifySyntax:     c.options.MinifySyntax,
 		}
 		crossChunkImportRecords := make([]ast.ImportRecord, len(chunk.crossChunkImports))
 		for i, chunkImport := range chunk.crossChunkImports {
@@ -4649,7 +4683,7 @@ func (c *linkerContext) generateChunkJS(chunks []chunkInfo, chunkIndex int, chun
 	indent := ""
 	space := " "
 	newline := "\n"
-	if c.options.RemoveWhitespace {
+	if c.options.MinifyWhitespace {
 		space = ""
 		newline = ""
 	}
@@ -4792,7 +4826,7 @@ func (c *linkerContext) generateChunkJS(chunks []chunkInfo, chunkIndex int, chun
 		}
 
 		// Add a comment with the file path before the file contents
-		if c.options.Mode == config.ModeBundle && !c.options.RemoveWhitespace &&
+		if c.options.Mode == config.ModeBundle && !c.options.MinifyWhitespace &&
 			prevFileNameComment != compileResult.sourceIndex && len(compileResult.JS) > 0 {
 			if newlineBeforeComment {
 				prevOffset.AdvanceString("\n")
@@ -4932,7 +4966,7 @@ func (c *linkerContext) generateGlobalNamePrefix() string {
 	space := " "
 	join := ";\n"
 
-	if c.options.RemoveWhitespace {
+	if c.options.MinifyWhitespace {
 		space = ""
 		join = ";"
 	}
@@ -5038,7 +5072,7 @@ func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chu
 			}
 
 			cssOptions := css_printer.Options{
-				RemoveWhitespace:  c.options.RemoveWhitespace,
+				MinifyWhitespace:  c.options.MinifyWhitespace,
 				ASCIIOnly:         c.options.ASCIIOnly,
 				LegalComments:     c.options.LegalComments,
 				AddSourceMappings: addSourceMappings,
@@ -5098,7 +5132,7 @@ func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chu
 
 		if len(tree.Rules) > 0 {
 			result := css_printer.Print(tree, css_printer.Options{
-				RemoveWhitespace: c.options.RemoveWhitespace,
+				MinifyWhitespace: c.options.MinifyWhitespace,
 				ASCIIOnly:        c.options.ASCIIOnly,
 			})
 			if len(result.CSS) > 0 {
@@ -5157,7 +5191,7 @@ func (c *linkerContext) generateChunkCSS(chunks []chunkInfo, chunkIndex int, chu
 			}
 		}
 
-		if c.options.Mode == config.ModeBundle && !c.options.RemoveWhitespace {
+		if c.options.Mode == config.ModeBundle && !c.options.MinifyWhitespace {
 			var newline string
 			if newlineBeforeComment {
 				newline = "\n"
