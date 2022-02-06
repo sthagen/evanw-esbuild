@@ -1449,6 +1449,7 @@ func (c *linkerContext) scanImportsAndExports() {
 			localDependencies := make(map[uint32]uint32)
 			parts := repr.AST.Parts
 			namedImports := repr.AST.NamedImports
+			graph := c.graph
 			for partIndex := range parts {
 				part := &parts[partIndex]
 
@@ -1460,8 +1461,8 @@ func (c *linkerContext) scanImportsAndExports() {
 
 					// Rare path: this import is a TypeScript enum
 					if importData, ok := repr.Meta.ImportsToBind[ref]; ok {
-						if symbol := c.graph.Symbols.Get(importData.Ref); symbol.Kind == js_ast.SymbolTSEnum {
-							if enum, ok := c.graph.TSEnums[importData.Ref]; ok {
+						if symbol := graph.Symbols.Get(importData.Ref); symbol.Kind == js_ast.SymbolTSEnum {
+							if enum, ok := graph.TSEnums[importData.Ref]; ok {
 								foundNonInlinedEnum := false
 								for name, propertyUse := range properties {
 									if _, ok := enum[name]; !ok {
@@ -1491,10 +1492,10 @@ func (c *linkerContext) scanImportsAndExports() {
 					use := part.SymbolUses[ref]
 
 					// Find the symbol that was called
-					symbol := c.graph.Symbols.Get(ref)
+					symbol := graph.Symbols.Get(ref)
 					if symbol.Kind == js_ast.SymbolImport {
 						if importData, ok := repr.Meta.ImportsToBind[ref]; ok {
-							symbol = c.graph.Symbols.Get(importData.Ref)
+							symbol = graph.Symbols.Get(importData.Ref)
 						}
 					}
 					flags := symbol.Flags
@@ -1518,6 +1519,17 @@ func (c *linkerContext) scanImportsAndExports() {
 
 				// Now that we know this, we can determine cross-part dependencies
 				for ref := range part.SymbolUses {
+
+					// Rare path: this import is an inlined const value
+					if graph.ConstValues != nil {
+						if importData, ok := repr.Meta.ImportsToBind[ref]; ok {
+							if _, isConstValue := graph.ConstValues[importData.Ref]; isConstValue {
+								delete(part.SymbolUses, importData.Ref)
+								continue
+							}
+						}
+					}
+
 					for _, otherPartIndex := range repr.TopLevelSymbolToParts(ref) {
 						if oldPartIndex, ok := localDependencies[otherPartIndex]; !ok || oldPartIndex != uint32(partIndex) {
 							localDependencies[otherPartIndex] = uint32(partIndex)
@@ -1892,7 +1904,7 @@ func (c *linkerContext) generateCodeForLazyExport(sourceIndex uint32) {
 			if str, ok := property.Key.Data.(*js_ast.EString); ok &&
 				(!file.IsEntryPoint() || js_lexer.IsIdentifierUTF16(str.Value) ||
 					!c.options.UnsupportedJSFeatures.Has(compat.ArbitraryModuleNamespaceNames)) {
-				name := js_lexer.UTF16ToString(str.Value)
+				name := helpers.UTF16ToString(str.Value)
 				exportRef := generateExport(name, name, property.ValueOrNil).ref
 				prevExports = append(prevExports, exportRef)
 				clone.Properties[i].ValueOrNil = js_ast.Expr{Loc: property.Key.Loc, Data: &js_ast.EIdentifier{Ref: exportRef}}
@@ -1954,7 +1966,7 @@ func (c *linkerContext) createExportsForFile(sourceIndex uint32) {
 			getter = js_ast.Expr{Data: &js_ast.EArrow{PreferExpr: true, Body: body}}
 		}
 		properties = append(properties, js_ast.Property{
-			Key:        js_ast.Expr{Data: &js_ast.EString{Value: js_lexer.StringToUTF16(alias)}},
+			Key:        js_ast.Expr{Data: &js_ast.EString{Value: helpers.StringToUTF16(alias)}},
 			ValueOrNil: getter,
 		})
 		nsExportSymbolUses[export.Ref] = js_ast.SymbolUse{CountEstimate: 1}
@@ -3793,7 +3805,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 	// by the chunk generation code, although only for the entry point)
 	if repr.AST.Directive != "" && repr.Meta.Wrap != graph.WrapNone && !file.IsEntryPoint() {
 		stmtList.insideWrapperPrefix = append(stmtList.insideWrapperPrefix, js_ast.Stmt{
-			Data: &js_ast.SDirective{Value: js_lexer.StringToUTF16(repr.AST.Directive)},
+			Data: &js_ast.SDirective{Value: helpers.StringToUTF16(repr.AST.Directive)},
 		})
 	}
 
@@ -3866,7 +3878,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 				// "__commonJS({ 'file.js'(exports, module) { ... } })"
 				cjsArgs = []js_ast.Expr{{Data: &js_ast.EObject{Properties: []js_ast.Property{{
 					IsMethod:   !c.options.UnsupportedJSFeatures.Has(compat.ObjectExtensions),
-					Key:        js_ast.Expr{Data: &js_ast.EString{Value: js_lexer.StringToUTF16(file.InputFile.Source.PrettyPath)}},
+					Key:        js_ast.Expr{Data: &js_ast.EString{Value: helpers.StringToUTF16(file.InputFile.Source.PrettyPath)}},
 					ValueOrNil: js_ast.Expr{Data: &js_ast.EFunction{Fn: js_ast.Fn{Args: args, Body: js_ast.FnBody{Stmts: stmts}}}},
 				}}}}}
 			} else if c.options.UnsupportedJSFeatures.Has(compat.Arrow) {
@@ -3934,7 +3946,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 				// "__esm({ 'file.js'() { ... } })"
 				esmArgs = []js_ast.Expr{{Data: &js_ast.EObject{Properties: []js_ast.Property{{
 					IsMethod:   !c.options.UnsupportedJSFeatures.Has(compat.ObjectExtensions),
-					Key:        js_ast.Expr{Data: &js_ast.EString{Value: js_lexer.StringToUTF16(file.InputFile.Source.PrettyPath)}},
+					Key:        js_ast.Expr{Data: &js_ast.EString{Value: helpers.StringToUTF16(file.InputFile.Source.PrettyPath)}},
 					ValueOrNil: js_ast.Expr{Data: &js_ast.EFunction{Fn: js_ast.Fn{Body: js_ast.FnBody{Stmts: stmts}, IsAsync: isAsync}}},
 				}}}}}
 			} else if c.options.UnsupportedJSFeatures.Has(compat.Arrow) {
@@ -3987,6 +3999,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 	printOptions := js_printer.Options{
 		Indent:                       indent,
 		OutputFormat:                 c.options.OutputFormat,
+		MinifyIdentifiers:            c.options.MinifyIdentifiers,
 		MinifyWhitespace:             c.options.MinifyWhitespace,
 		MinifySyntax:                 c.options.MinifySyntax,
 		ASCIIOnly:                    c.options.ASCIIOnly,
@@ -3994,6 +4007,7 @@ func (c *linkerContext) generateCodeForFileInChunkJS(
 		ToESMRef:                     toESMRef,
 		RuntimeRequireRef:            runtimeRequireRef,
 		TSEnums:                      c.graph.TSEnums,
+		ConstValues:                  c.graph.ConstValues,
 		LegalComments:                c.options.LegalComments,
 		UnsupportedFeatures:          c.options.UnsupportedJSFeatures,
 		AddSourceMappings:            addSourceMappings,
@@ -4155,7 +4169,7 @@ func (c *linkerContext) generateEntryPointTailJS(
 				}
 
 				moduleExports = append(moduleExports, js_ast.Property{
-					Key:        js_ast.Expr{Data: &js_ast.EString{Value: js_lexer.StringToUTF16(export)}},
+					Key:        js_ast.Expr{Data: &js_ast.EString{Value: helpers.StringToUTF16(export)}},
 					ValueOrNil: valueOrNil,
 				})
 			}
@@ -4324,6 +4338,7 @@ func (c *linkerContext) generateEntryPointTailJS(
 	printOptions := js_printer.Options{
 		Indent:                       indent,
 		OutputFormat:                 c.options.OutputFormat,
+		MinifyIdentifiers:            c.options.MinifyIdentifiers,
 		MinifyWhitespace:             c.options.MinifyWhitespace,
 		MinifySyntax:                 c.options.MinifySyntax,
 		ASCIIOnly:                    c.options.ASCIIOnly,
@@ -4640,10 +4655,11 @@ func (c *linkerContext) generateChunkJS(chunks []chunkInfo, chunkIndex int, chun
 			indent++
 		}
 		printOptions := js_printer.Options{
-			Indent:           indent,
-			OutputFormat:     c.options.OutputFormat,
-			MinifyWhitespace: c.options.MinifyWhitespace,
-			MinifySyntax:     c.options.MinifySyntax,
+			Indent:            indent,
+			OutputFormat:      c.options.OutputFormat,
+			MinifyIdentifiers: c.options.MinifyIdentifiers,
+			MinifyWhitespace:  c.options.MinifyWhitespace,
+			MinifySyntax:      c.options.MinifySyntax,
 		}
 		crossChunkImportRecords := make([]ast.ImportRecord, len(chunk.crossChunkImports))
 		for i, chunkImport := range chunk.crossChunkImports {

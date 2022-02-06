@@ -3,6 +3,7 @@ package js_ast
 import (
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/evanw/esbuild/internal/ast"
 	"github.com/evanw/esbuild/internal/compat"
@@ -718,7 +719,7 @@ type EImportCall struct {
 	Expr         Expr
 	OptionsOrNil Expr
 
-	// See the comment for this same field on "EImportCall" for more information
+	// See the comment for this same field on "EImportString" for more information
 	LeadingInteriorComments []Comment
 }
 
@@ -1786,6 +1787,11 @@ type Scope struct {
 	// This is to help forbid "arguments" inside class body scopes
 	ForbidArguments bool
 
+	// As a special case, we enable constant propagation for any chain of "const"
+	// declarations at the start of a statement list. This special case doesn't
+	// have any TDZ considerations because no other statements come before it.
+	IsAfterConstLocalPrefix bool
+
 	StrictMode StrictModeKind
 	Kind       ScopeKind
 }
@@ -2057,6 +2063,10 @@ type AST struct {
 	// to enable cross-module inlining of constant enums.
 	TSEnums map[Ref]map[string]TSEnumValue
 
+	// This contains the values of all detected inlinable constants. It exists
+	// to enable cross-module inlining of these constants.
+	ConstValues map[Ref]ConstValue
+
 	// Properties in here are represented as symbols instead of strings, which
 	// allows them to be renamed to smaller names.
 	MangledProps map[string]Ref
@@ -2103,6 +2113,78 @@ type AST struct {
 type TSEnumValue struct {
 	String []uint16 // Use this if it's not nil
 	Number float64  // Use this if "String" is nil
+}
+
+type ConstValueKind uint8
+
+const (
+	ConstValueNone ConstValueKind = iota
+	ConstValueNull
+	ConstValueUndefined
+	ConstValueTrue
+	ConstValueFalse
+	ConstValueNumber
+)
+
+type ConstValue struct {
+	Number float64 // Use this for "ConstValueNumber"
+	Kind   ConstValueKind
+}
+
+func ExprToConstValue(expr Expr) ConstValue {
+	switch v := expr.Data.(type) {
+	case *ENull:
+		return ConstValue{Kind: ConstValueNull}
+
+	case *EUndefined:
+		return ConstValue{Kind: ConstValueUndefined}
+
+	case *EBoolean:
+		if v.Value {
+			return ConstValue{Kind: ConstValueTrue}
+		} else {
+			return ConstValue{Kind: ConstValueFalse}
+		}
+
+	case *ENumber:
+		// Inline integers and other small numbers. Don't inline large
+		// real numbers because people may not want them to be inlined
+		// as it will increase the minified code size by too much.
+		if asInt := int64(v.Value); v.Value == float64(asInt) || len(strconv.FormatFloat(v.Value, 'g', -1, 64)) <= 8 {
+			return ConstValue{Kind: ConstValueNumber, Number: v.Value}
+		}
+
+	case *EString:
+		// I'm deliberately not inlining strings here. It seems more likely that
+		// people won't want them to be inlined since they can be arbitrarily long.
+
+	case *EBigInt:
+		// I'm deliberately not inlining bigints here for the same reason (they can
+		// be arbitrarily long).
+	}
+
+	return ConstValue{}
+}
+
+func ConstValueToExpr(loc logger.Loc, value ConstValue) Expr {
+	switch value.Kind {
+	case ConstValueNull:
+		return Expr{Loc: loc, Data: ENullShared}
+
+	case ConstValueUndefined:
+		return Expr{Loc: loc, Data: EUndefinedShared}
+
+	case ConstValueTrue:
+		return Expr{Loc: loc, Data: &EBoolean{Value: true}}
+
+	case ConstValueFalse:
+		return Expr{Loc: loc, Data: &EBoolean{Value: false}}
+
+	case ConstValueNumber:
+		return Expr{Loc: loc, Data: &ENumber{Value: value.Number}}
+	}
+
+	panic("Internal error: invalid constant value")
 }
 
 // This is a histogram of character frequencies for minification
@@ -2815,4 +2897,69 @@ func simplifyUnusedStringAdditionChain(expr Expr) (Expr, bool) {
 	}
 
 	return expr, false
+}
+
+func ToInt32(f float64) int32 {
+	// The easy way
+	i := int32(f)
+	if float64(i) == f {
+		return i
+	}
+
+	// The hard way
+	i = int32(uint32(math.Mod(math.Abs(f), 4294967296)))
+	if math.Signbit(f) {
+		return -i
+	}
+	return i
+}
+
+func ToUint32(f float64) uint32 {
+	return uint32(ToInt32(f))
+}
+
+func ToNumberWithoutSideEffects(data E) (float64, bool) {
+	switch e := data.(type) {
+	case *EInlinedEnum:
+		return ToNumberWithoutSideEffects(e.Value.Data)
+
+	case *ENull:
+		return 0, true
+
+	case *EUndefined:
+		return math.NaN(), true
+
+	case *EBoolean:
+		if e.Value {
+			return 1, true
+		} else {
+			return 0, true
+		}
+
+	case *ENumber:
+		return e.Value, true
+	}
+
+	return 0, false
+}
+
+func extractNumericValue(data E) (float64, bool) {
+	switch e := data.(type) {
+	case *EInlinedEnum:
+		return extractNumericValue(e.Value.Data)
+
+	case *ENumber:
+		return e.Value, true
+	}
+
+	return 0, false
+}
+
+func ExtractNumericValues(left Expr, right Expr) (float64, float64, bool) {
+	if a, ok := extractNumericValue(left.Data); ok {
+		if b, ok := extractNumericValue(right.Data); ok {
+			return a, b, true
+		}
+	}
+	return 0, 0, false
 }

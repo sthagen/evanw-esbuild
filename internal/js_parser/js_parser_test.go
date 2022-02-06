@@ -7,8 +7,8 @@ import (
 
 	"github.com/evanw/esbuild/internal/compat"
 	"github.com/evanw/esbuild/internal/config"
+	"github.com/evanw/esbuild/internal/helpers"
 	"github.com/evanw/esbuild/internal/js_ast"
-	"github.com/evanw/esbuild/internal/js_lexer"
 	"github.com/evanw/esbuild/internal/js_printer"
 	"github.com/evanw/esbuild/internal/logger"
 	"github.com/evanw/esbuild/internal/renamer"
@@ -2886,7 +2886,7 @@ func TestMangleIndex(t *testing.T) {
 
 func TestMangleBlock(t *testing.T) {
 	expectPrintedMangle(t, "while(1) { while (1) {} }", "for (; ; )\n  for (; ; )\n    ;\n")
-	expectPrintedMangle(t, "while(1) { const x = 0; }", "for (; ; ) {\n  const x = 0;\n}\n")
+	expectPrintedMangle(t, "while(1) { const x = y; }", "for (; ; ) {\n  const x = y;\n}\n")
 	expectPrintedMangle(t, "while(1) { let x; }", "for (; ; ) {\n  let x;\n}\n")
 	expectPrintedMangle(t, "while(1) { var x; }", "for (; ; )\n  var x;\n")
 	expectPrintedMangle(t, "while(1) { class X {} }", "for (; ; ) {\n  class X {\n  }\n}\n")
@@ -2911,6 +2911,21 @@ func TestMangleAddEmptyString(t *testing.T) {
 	expectPrintedMangle(t, "a = `${b}` + ''", "a = `${b}`;\n")
 	expectPrintedMangle(t, "a = '' + typeof b", "a = typeof b;\n")
 	expectPrintedMangle(t, "a = typeof b + ''", "a = typeof b;\n")
+}
+
+func TestMangleStringLength(t *testing.T) {
+	expectPrinted(t, "a = ''.length", "a = \"\".length;\n")
+	expectPrintedMangle(t, "''.length++", "\"\".length++;\n")
+	expectPrintedMangle(t, "''.length = a", "\"\".length = a;\n")
+
+	expectPrintedMangle(t, "a = ''.len", "a = \"\".len;\n")
+	expectPrintedMangle(t, "a = [].length", "a = [].length;\n")
+	expectPrintedMangle(t, "a = ''.length", "a = 0;\n")
+	expectPrintedMangle(t, "a = ``.length", "a = 0;\n")
+	expectPrintedMangle(t, "a = b``.length", "a = b``.length;\n")
+	expectPrintedMangle(t, "a = 'abc'.length", "a = 3;\n")
+	expectPrintedMangle(t, "a = 'ȧḃċ'.length", "a = 3;\n")
+	expectPrintedMangle(t, "a = '👯‍♂️'.length", "a = 5;\n")
 }
 
 func TestMangleNot(t *testing.T) {
@@ -3645,6 +3660,47 @@ func TestMangleBinaryInsideComma(t *testing.T) {
 	expectPrintedMangle(t, "a + (b, c)", "a + (b, c);\n")
 }
 
+func TestMangleUnaryConstantFolding(t *testing.T) {
+	expectPrintedMangle(t, "x = +5", "x = 5;\n")
+	expectPrintedMangle(t, "x = -5", "x = -5;\n")
+	expectPrintedMangle(t, "x = ~5", "x = -6;\n")
+	expectPrintedMangle(t, "x = !5", "x = false;\n")
+	expectPrintedMangle(t, "x = typeof 5", "x = \"number\";\n")
+}
+
+func TestMangleBinaryConstantFolding(t *testing.T) {
+	expectPrintedMangle(t, "x = 3 + 6", "x = 3 + 6;\n")
+	expectPrintedMangle(t, "x = 3 - 6", "x = 3 - 6;\n")
+	expectPrintedMangle(t, "x = 3 * 6", "x = 3 * 6;\n")
+	expectPrintedMangle(t, "x = 3 / 6", "x = 3 / 6;\n")
+	expectPrintedMangle(t, "x = 3 % 6", "x = 3 % 6;\n")
+	expectPrintedMangle(t, "x = 3 ** 6", "x = 3 ** 6;\n")
+
+	expectPrintedMangle(t, "x = 3 < 6", "x = 3 < 6;\n")
+	expectPrintedMangle(t, "x = 3 > 6", "x = 3 > 6;\n")
+	expectPrintedMangle(t, "x = 3 <= 6", "x = 3 <= 6;\n")
+	expectPrintedMangle(t, "x = 3 >= 6", "x = 3 >= 6;\n")
+	expectPrintedMangle(t, "x = 3 == 6", "x = false;\n")
+	expectPrintedMangle(t, "x = 3 != 6", "x = true;\n")
+	expectPrintedMangle(t, "x = 3 === 6", "x = false;\n")
+	expectPrintedMangle(t, "x = 3 !== 6", "x = true;\n")
+
+	expectPrintedMangle(t, "x = 3 in 6", "x = 3 in 6;\n")
+	expectPrintedMangle(t, "x = 3 instanceof 6", "x = 3 instanceof 6;\n")
+	expectPrintedMangle(t, "x = (3, 6)", "x = 6;\n")
+
+	expectPrintedMangle(t, "x = 10 << 1", "x = 10 << 1;\n")
+	expectPrintedMangle(t, "x = 10 >> 1", "x = 5;\n")
+	expectPrintedMangle(t, "x = 10 >>> 1", "x = 10 >>> 1;\n")
+	expectPrintedMangle(t, "x = 3 & 6", "x = 2;\n")
+	expectPrintedMangle(t, "x = 3 | 6", "x = 7;\n")
+	expectPrintedMangle(t, "x = 3 ^ 6", "x = 5;\n")
+
+	expectPrintedMangle(t, "x = 3 && 6", "x = 6;\n")
+	expectPrintedMangle(t, "x = 3 || 6", "x = 3;\n")
+	expectPrintedMangle(t, "x = 3 ?? 6", "x = 3;\n")
+}
+
 func TestMangleNestedLogical(t *testing.T) {
 	expectPrintedMangle(t, "(a && b) && c", "a && b && c;\n")
 	expectPrintedMangle(t, "a && (b && c)", "a && b && c;\n")
@@ -4207,13 +4263,13 @@ func TestUnicodeWhitespace(t *testing.T) {
 
 	// Test "js_lexer.Next()"
 	for _, s := range invalidWhitespaceInJS {
-		r, _ := js_lexer.DecodeWTF8Rune(s)
+		r, _ := helpers.DecodeWTF8Rune(s)
 		expectParseError(t, "var"+s+"x", fmt.Sprintf("<stdin>: ERROR: Expected identifier but found \"\\u%04x\"\n", r))
 	}
 
 	// Test "js_lexer.NextInsideJSXElement()"
 	for _, s := range invalidWhitespaceInJS {
-		r, _ := js_lexer.DecodeWTF8Rune(s)
+		r, _ := helpers.DecodeWTF8Rune(s)
 		expectParseErrorJSX(t, "<x"+s+"y/>", fmt.Sprintf("<stdin>: ERROR: Expected \">\" but found \"\\u%04x\"\n", r))
 	}
 

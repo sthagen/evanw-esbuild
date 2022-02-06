@@ -65,14 +65,14 @@ func QuoteForJSON(text string, asciiOnly bool) []byte {
 	bytes = append(bytes, '"')
 
 	for i < n {
-		c, width := js_lexer.DecodeWTF8Rune(text[i:])
+		c, width := helpers.DecodeWTF8Rune(text[i:])
 
 		// Fast path: a run of characters that don't need escaping
 		if canPrintWithoutEscape(c, asciiOnly) {
 			start := i
 			i += width
 			for i < n {
-				c, width = js_lexer.DecodeWTF8Rune(text[i:])
+				c, width = helpers.DecodeWTF8Rune(text[i:])
 				if !canPrintWithoutEscape(c, asciiOnly) {
 					break
 				}
@@ -413,7 +413,7 @@ func (p *printer) printJSXTag(tagOrNil js_ast.Expr) {
 	switch e := tagOrNil.Data.(type) {
 	case *js_ast.EString:
 		p.addSourceMapping(tagOrNil.Loc)
-		p.print(js_lexer.UTF16ToString(e.Value))
+		p.print(helpers.UTF16ToString(e.Value))
 
 	case *js_ast.EIdentifier:
 		name := p.renamer.NameForSymbol(e.Ref)
@@ -467,7 +467,7 @@ func (p *printer) printBytes(bytes []byte) {
 }
 
 func (p *printer) printQuotedUTF8(text string, allowBacktick bool) {
-	p.printQuotedUTF16(js_lexer.StringToUTF16(text), allowBacktick)
+	p.printQuotedUTF16(helpers.StringToUTF16(text), allowBacktick)
 }
 
 func (p *printer) addSourceMapping(loc logger.Loc) {
@@ -518,19 +518,19 @@ func (p *printer) printClauseAlias(alias string) {
 func CanEscapeIdentifier(name string, unsupportedJSFeatures compat.JSFeature, asciiOnly bool) bool {
 	return js_lexer.IsIdentifierES5AndESNext(name) && (!asciiOnly ||
 		!unsupportedJSFeatures.Has(compat.UnicodeEscapes) ||
-		!js_lexer.ContainsNonBMPCodePoint(name))
+		!helpers.ContainsNonBMPCodePoint(name))
 }
 
 func (p *printer) canPrintIdentifier(name string) bool {
 	return js_lexer.IsIdentifierES5AndESNext(name) && (!p.options.ASCIIOnly ||
 		!p.options.UnsupportedFeatures.Has(compat.UnicodeEscapes) ||
-		!js_lexer.ContainsNonBMPCodePoint(name))
+		!helpers.ContainsNonBMPCodePoint(name))
 }
 
 func (p *printer) canPrintIdentifierUTF16(name []uint16) bool {
 	return js_lexer.IsIdentifierES5AndESNextUTF16(name) && (!p.options.ASCIIOnly ||
 		!p.options.UnsupportedFeatures.Has(compat.UnicodeEscapes) ||
-		!js_lexer.ContainsNonBMPCodePointUTF16(name))
+		!helpers.ContainsNonBMPCodePointUTF16(name))
 }
 
 func (p *printer) printIdentifier(name string) {
@@ -722,7 +722,7 @@ func (p *printer) printBinding(binding js_ast.Binding) {
 						p.printIdentifierUTF16(str.Value)
 
 						// Use a shorthand property if the names are the same
-						if id, ok := property.Value.Data.(*js_ast.BIdentifier); ok && js_lexer.UTF16EqualsString(str.Value, p.renamer.NameForSymbol(id.Ref)) {
+						if id, ok := property.Value.Data.(*js_ast.BIdentifier); ok && helpers.UTF16EqualsString(str.Value, p.renamer.NameForSymbol(id.Ref)) {
 							if property.DefaultValueOrNil.Data != nil {
 								p.printSpace()
 								p.print("=")
@@ -1007,8 +1007,8 @@ func (p *printer) printProperty(item js_ast.Property) {
 				case *js_ast.EImportIdentifier:
 					// Make sure we're not using a property access instead of an identifier
 					ref := js_ast.FollowSymbols(p.symbols, e.Ref)
-					symbol := p.symbols.Get(ref)
-					if symbol.NamespaceAlias == nil && name == p.renamer.NameForSymbol(e.Ref) {
+					if symbol := p.symbols.Get(ref); symbol.NamespaceAlias == nil && name == p.renamer.NameForSymbol(ref) &&
+						p.options.ConstValues[ref].Kind == js_ast.ConstValueNone {
 						if item.InitializerOrNil.Data != nil {
 							p.printSpace()
 							p.print("=")
@@ -1033,7 +1033,7 @@ func (p *printer) printProperty(item js_ast.Property) {
 			if !p.options.UnsupportedFeatures.Has(compat.ObjectExtensions) && item.ValueOrNil.Data != nil {
 				switch e := item.ValueOrNil.Data.(type) {
 				case *js_ast.EIdentifier:
-					if js_lexer.UTF16EqualsString(key.Value, p.renamer.NameForSymbol(e.Ref)) {
+					if helpers.UTF16EqualsString(key.Value, p.renamer.NameForSymbol(e.Ref)) {
 						if item.InitializerOrNil.Data != nil {
 							p.printSpace()
 							p.print("=")
@@ -1046,8 +1046,8 @@ func (p *printer) printProperty(item js_ast.Property) {
 				case *js_ast.EImportIdentifier:
 					// Make sure we're not using a property access instead of an identifier
 					ref := js_ast.FollowSymbols(p.symbols, e.Ref)
-					symbol := p.symbols.Get(ref)
-					if symbol.NamespaceAlias == nil && js_lexer.UTF16EqualsString(key.Value, p.renamer.NameForSymbol(e.Ref)) {
+					if symbol := p.symbols.Get(ref); symbol.NamespaceAlias == nil && helpers.UTF16EqualsString(key.Value, p.renamer.NameForSymbol(ref)) &&
+						p.options.ConstValues[ref].Kind == js_ast.ConstValueNone {
 						if item.InitializerOrNil.Data != nil {
 							p.printSpace()
 							p.print("=")
@@ -1461,6 +1461,96 @@ func (p *printer) guardAgainstBehaviorChangeDueToSubstitution(expr js_ast.Expr, 
 	return expr
 }
 
+// Constant folding is already implemented once in the parser. A smaller form
+// of constant folding (just for numbers) is implemented here to clean up cross-
+// module numeric constants and bitwise operations. This is not an general-
+// purpose/optimal approach and never will be. For example, we can't affect
+// tree shaking at this stage because it has already happened.
+func (p *printer) lateConstantFoldUnaryOrBinaryExpr(expr js_ast.Expr) js_ast.Expr {
+	switch e := expr.Data.(type) {
+	case *js_ast.EImportIdentifier:
+		ref := js_ast.FollowSymbols(p.symbols, e.Ref)
+		if value := p.options.ConstValues[ref]; value.Kind != js_ast.ConstValueNone {
+			return js_ast.ConstValueToExpr(expr.Loc, value)
+		}
+
+	case *js_ast.EDot:
+		if id, ok := e.Target.Data.(*js_ast.EImportIdentifier); ok {
+			ref := js_ast.FollowSymbols(p.symbols, id.Ref)
+			if symbol := p.symbols.Get(ref); symbol.Kind == js_ast.SymbolTSEnum {
+				if enum, ok := p.options.TSEnums[ref]; ok {
+					if value, ok := enum[e.Name]; ok && value.String == nil {
+						value := js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: value.Number}}
+
+						if strings.Contains(e.Name, "*/") {
+							// Don't wrap with a comment
+							return value
+						}
+
+						// Wrap with a comment
+						return js_ast.Expr{Loc: value.Loc, Data: &js_ast.EInlinedEnum{
+							Value:   value,
+							Comment: e.Name,
+						}}
+					}
+				}
+			}
+		}
+
+	case *js_ast.EUnary:
+		value := p.lateConstantFoldUnaryOrBinaryExpr(e.Value)
+
+		// Only fold again if something chained
+		if value.Data != e.Value.Data {
+			// Only fold certain operations (just like the parser)
+			if v, ok := js_ast.ToNumberWithoutSideEffects(value.Data); ok {
+				switch e.Op {
+				case js_ast.UnOpPos:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: v}}
+
+				case js_ast.UnOpNeg:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: -v}}
+
+				case js_ast.UnOpCpl:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(^js_ast.ToInt32(v))}}
+				}
+			}
+
+			// Don't mutate the original AST
+			expr.Data = &js_ast.EUnary{Op: e.Op, Value: value}
+		}
+
+	case *js_ast.EBinary:
+		left := p.lateConstantFoldUnaryOrBinaryExpr(e.Left)
+		right := p.lateConstantFoldUnaryOrBinaryExpr(e.Right)
+
+		// Only fold again if something chained
+		if left.Data != e.Left.Data || right.Data != e.Right.Data {
+			// Only fold certain operations (just like the parser)
+			if l, r, ok := js_ast.ExtractNumericValues(left, right); ok {
+				switch e.Op {
+				case js_ast.BinOpShr:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(js_ast.ToInt32(l) >> js_ast.ToInt32(r))}}
+
+				case js_ast.BinOpBitwiseAnd:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(js_ast.ToInt32(l) & js_ast.ToInt32(r))}}
+
+				case js_ast.BinOpBitwiseOr:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(js_ast.ToInt32(l) | js_ast.ToInt32(r))}}
+
+				case js_ast.BinOpBitwiseXor:
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(js_ast.ToInt32(l) ^ js_ast.ToInt32(r))}}
+				}
+			}
+
+			// Don't mutate the original AST
+			expr.Data = &js_ast.EBinary{Op: e.Op, Left: left, Right: right}
+		}
+	}
+
+	return expr
+}
+
 type printExprFlags uint16
 
 const (
@@ -1473,9 +1563,27 @@ const (
 	isInsideForAwait
 	isDeleteTarget
 	isCallTargetOrTemplateTag
+	parentWasUnaryOrBinary
 )
 
 func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFlags) {
+	// If syntax compression is enabled, do a pre-pass over unary and binary
+	// operators to inline bitwise operations of cross-module inlined constants.
+	// This makes the output a little tighter if people construct bit masks in
+	// other files. This is not a general-purpose constant folding pass. In
+	// particular, it has no effect on tree shaking because that pass has already
+	// been run.
+	//
+	// This sets a flag to avoid doing this when the parent is a unary or binary
+	// operator so that we don't trigger O(n^2) behavior when traversing over a
+	// large expression tree.
+	if p.options.MinifySyntax && (flags&parentWasUnaryOrBinary) == 0 {
+		switch expr.Data.(type) {
+		case *js_ast.EUnary, *js_ast.EBinary:
+			expr = p.lateConstantFoldUnaryOrBinaryExpr(expr)
+		}
+	}
+
 	p.addSourceMapping(expr.Loc)
 
 	switch e := expr.Data.(type) {
@@ -1532,7 +1640,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 			if mangled, ok := property.Key.Data.(*js_ast.EMangledProp); ok {
 				p.printSymbol(mangled.Ref)
 			} else {
-				p.print(js_lexer.UTF16ToString(property.Key.Data.(*js_ast.EString).Value))
+				p.print(helpers.UTF16ToString(property.Key.Data.(*js_ast.EString).Value))
 			}
 
 			// Special-case string values
@@ -1541,7 +1649,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 					p.print("=")
 					p.addSourceMapping(property.ValueOrNil.Loc)
 					p.print(quote)
-					p.print(js_lexer.UTF16ToString(str.Value))
+					p.print(helpers.UTF16ToString(str.Value))
 					p.print(quote)
 					continue
 				}
@@ -1590,7 +1698,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 				p.printExpr(child, js_ast.LLowest, 0)
 			} else if str, ok := child.Data.(*js_ast.EString); ok && isSingleLine && p.canPrintTextAsJSXChild(str.Value) {
 				p.addSourceMapping(child.Loc)
-				p.print(js_lexer.UTF16ToString(str.Value))
+				p.print(helpers.UTF16ToString(str.Value))
 			} else {
 				p.print("{")
 				p.printExpr(child, js_ast.LComma, 0)
@@ -1811,7 +1919,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 							} else {
 								p.printNumber(value.Number, level)
 							}
-							if !p.options.MinifyWhitespace {
+							if !p.options.MinifyWhitespace && !p.options.MinifyIdentifiers {
 								p.print(" /* ")
 								p.print(e.Name)
 								p.print(" */")
@@ -1865,14 +1973,14 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 					ref := js_ast.FollowSymbols(p.symbols, id.Ref)
 					if symbol := p.symbols.Get(ref); symbol.Kind == js_ast.SymbolTSEnum {
 						if enum, ok := p.options.TSEnums[ref]; ok {
-							name := js_lexer.UTF16ToString(index.Value)
+							name := helpers.UTF16ToString(index.Value)
 							if value, ok := enum[name]; ok {
 								if value.String != nil {
 									p.printQuotedUTF16(value.String, true /* allowBacktick */)
 								} else {
 									p.printNumber(value.Number, level)
 								}
-								if !p.options.MinifyWhitespace {
+								if !p.options.MinifyWhitespace && !p.options.MinifyIdentifiers {
 									p.print(" /* ")
 									p.print(name)
 									p.print(" */")
@@ -2175,7 +2283,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 	case *js_ast.EInlinedEnum:
 		p.printExpr(e.Value, level, flags)
 
-		if !p.options.MinifyWhitespace {
+		if !p.options.MinifyWhitespace && !p.options.MinifyIdentifiers {
 			p.print(" /* ")
 			p.print(e.Comment)
 			p.print(" */")
@@ -2234,6 +2342,9 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 			if wrap {
 				p.print(")")
 			}
+		} else if value := p.options.ConstValues[ref]; value.Kind != js_ast.ConstValueNone {
+			// Handle inlined constants
+			p.printExpr(js_ast.ConstValueToExpr(expr.Loc, value), level, flags)
 		} else {
 			p.printSymbol(e.Ref)
 		}
@@ -2285,7 +2396,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 		}
 
 		if !e.Op.IsPrefix() {
-			p.printExpr(e.Value, js_ast.LPostfix-1, 0)
+			p.printExpr(e.Value, js_ast.LPostfix-1, parentWasUnaryOrBinary)
 		}
 
 		if entry.IsKeyword {
@@ -2300,7 +2411,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 		}
 
 		if e.Op.IsPrefix() {
-			var valueFlags printExprFlags
+			valueFlags := parentWasUnaryOrBinary
 			if e.Op == js_ast.UnOpDelete {
 				valueFlags |= isDeleteTarget
 			}
@@ -2393,9 +2504,9 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 			p.printSymbol(private.Ref)
 		} else if e.Op == js_ast.BinOpComma {
 			// The result of the left operand of the comma operator is unused
-			p.printExpr(e.Left, leftLevel, (flags&forbidIn)|exprResultIsUnused)
+			p.printExpr(e.Left, leftLevel, (flags&forbidIn)|exprResultIsUnused|parentWasUnaryOrBinary)
 		} else {
-			p.printExpr(e.Left, leftLevel, flags&forbidIn)
+			p.printExpr(e.Left, leftLevel, (flags&forbidIn)|parentWasUnaryOrBinary)
 		}
 
 		if e.Op != js_ast.BinOpComma {
@@ -2416,9 +2527,9 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 
 		if e.Op == js_ast.BinOpComma {
 			// The result of the right operand of the comma operator is unused if the caller doesn't use it
-			p.printExpr(e.Right, rightLevel, flags&(forbidIn|exprResultIsUnused))
+			p.printExpr(e.Right, rightLevel, (flags&(forbidIn|exprResultIsUnused))|parentWasUnaryOrBinary)
 		} else {
-			p.printExpr(e.Right, rightLevel, flags&forbidIn)
+			p.printExpr(e.Right, rightLevel, (flags&forbidIn)|parentWasUnaryOrBinary)
 		}
 
 		if wrap {
@@ -3490,6 +3601,9 @@ type Options struct {
 	// Cross-module inlining of TypeScript enums is actually done during printing
 	TSEnums map[js_ast.Ref]map[string]js_ast.TSEnumValue
 
+	// Cross-module inlining of detected inlinable constants is also done during printing
+	ConstValues map[js_ast.Ref]js_ast.ConstValue
+
 	// This will be present if the input file had a source map. In that case we
 	// want to map all the way back to the original input file(s).
 	InputSourceMap *sourcemap.SourceMap
@@ -3505,6 +3619,7 @@ type Options struct {
 	Indent              int
 	OutputFormat        config.Format
 	MinifyWhitespace    bool
+	MinifyIdentifiers   bool
 	MinifySyntax        bool
 	ASCIIOnly           bool
 	LegalComments       config.LegalComments
