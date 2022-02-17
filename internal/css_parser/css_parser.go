@@ -331,11 +331,20 @@ skipRule:
 	for i := n - 1; i >= 0; i-- {
 		rule := rules[i]
 
+		// Skip over preserved comments
+		next := i - 1
+		for next >= 0 {
+			if _, ok := rules[next].Data.(*css_ast.RComment); !ok {
+				break
+			}
+			next--
+		}
+
 		// Merge adjacent selectors with the same content
 		// "a { color: red; } b { color: red; }" => "a, b { color: red; }"
-		if i > 0 {
+		if next >= 0 {
 			if r, ok := rule.Data.(*css_ast.RSelector); ok {
-				if prev, ok := rules[i-1].Data.(*css_ast.RSelector); ok && css_ast.RulesEqual(r.Rules, prev.Rules) &&
+				if prev, ok := rules[next].Data.(*css_ast.RSelector); ok && css_ast.RulesEqual(r.Rules, prev.Rules) &&
 					isSafeSelectors(r.Selectors) && isSafeSelectors(prev.Selectors) {
 				nextSelector:
 					for _, sel := range r.Selectors {
@@ -955,6 +964,38 @@ type convertTokensOpts struct {
 func (p *parser) convertTokensHelper(tokens []css_lexer.Token, close css_lexer.T, opts convertTokensOpts) ([]css_ast.Token, []css_lexer.Token) {
 	var result []css_ast.Token
 	var nextWhitespace css_ast.WhitespaceFlags
+
+	// Enable verbatim whitespace mode when the first two non-whitespace tokens
+	// are a CSS variable name followed by a colon. This is because it could be
+	// a form of CSS variable usage, and removing whitespace could potentially
+	// break this usage. For example, the following CSS is ignored by Chrome if
+	// the whitespace isn't preserved:
+	//
+	//   @supports (--foo: ) {
+	//     html { background: green; }
+	//   }
+	//
+	// Strangely whitespace removal doesn't cause the declaration to be ignored
+	// in Firefox or Safari, so there's definitely a browser bug somewhere.
+	if !opts.verbatimWhitespace {
+		for i, t := range tokens {
+			if t.Kind == css_lexer.TWhitespace {
+				continue
+			}
+			if t.Kind == css_lexer.TIdent && strings.HasPrefix(t.DecodedText(p.source.Contents), "--") {
+				for _, t := range tokens[i+1:] {
+					if t.Kind == css_lexer.TWhitespace {
+						continue
+					}
+					if t.Kind == css_lexer.TColon {
+						opts.verbatimWhitespace = true
+					}
+					break
+				}
+			}
+			break
+		}
+	}
 
 loop:
 	for len(tokens) > 0 {

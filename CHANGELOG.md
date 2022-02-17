@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.14.22
+
+* Preserve whitespace for token lists that look like CSS variable declarations ([#2020](https://github.com/evanw/esbuild/issues/2020))
+
+    Previously esbuild removed the whitespace after the CSS variable declaration in the following CSS:
+
+    ```css
+    /* Original input */
+    @supports (--foo: ){html{background:green}}
+
+    /* Previous output */
+    @supports (--foo:){html{background:green}}
+    ```
+
+    However, that broke rendering in Chrome as it caused Chrome to ignore the entire rule. This did not break rendering in Firefox and Safari, so there's a browser by either with Chrome or with both Firefox and Safari. In any case, esbuild now preserves whitespace after the CSS variable declaration in this case.
+
+* Ignore legal comments when merging adjacent duplicate CSS rules ([#2016](https://github.com/evanw/esbuild/issues/2016))
+
+    This release now generates more compact minified CSS when there are legal comments in between two adjacent rules with identical content:
+
+    ```css
+    /* Original code */
+    a { color: red }
+    /* @preserve */
+    b { color: red }
+
+    /* Old output (with --minify) */
+    a{color:red}/* @preserve */b{color:red}
+
+    /* New output (with --minify) */
+    a,b{color:red}/* @preserve */
+    ```
+
+* Block `onResolve` and `onLoad` until `onStart` ends ([#1967](https://github.com/evanw/esbuild/issues/1967))
+
+    This release changes the semantics of the `onStart` callback. All `onStart` callbacks from all plugins are run concurrently so that a slow plugin doesn't hold up the entire build. That's still the case. However, previously the only thing waiting for the `onStart` callbacks to finish was the end of the build. This meant that `onResolve` and/or `onLoad` callbacks could sometimes run before `onStart` had finished. This was by design but violated user expectations. With this release, all `onStart` callbacks must finish before any `onResolve` and/or `onLoad` callbacks are run.
+
+* Add a self-referential `default` export to the JS API ([#1897](https://github.com/evanw/esbuild/issues/1897))
+
+    Some people try to use esbuild's API using `import esbuild from 'esbuild'` instead of `import * as esbuild from 'esbuild'` (i.e. using a default import instead of a namespace import). There is no `default` export so that wasn't ever intended to work. But it would work sometimes depending on which tools you used and how they were configured so some people still wrote code this way. This release tries to make that work by adding a self-referential `default` export that is equal to esbuild's module namespace object.
+
+    More detail: The published package for esbuild's JS API is in CommonJS format, although the source code for esbuild's JS API is in ESM format. The original ESM code for esbuild's JS API has no export named `default` so using a default import like this doesn't work with Babel-compatible toolchains (since they respect the semantics of the original ESM code). However, it happens to work with node-compatible toolchains because node's implementation of importing CommonJS from ESM broke compatibility with existing conventions and automatically creates a `default` export which is set to `module.exports`. This is an unfortunate compatibility headache because it means the `default` import only works sometimes. This release tries to fix this by explicitly creating a self-referential `default` export. It now doesn't matter if you do `esbuild.build()`, `esbuild.default.build()`, or `esbuild.default.default.build()` because they should all do the same thing. Hopefully this means people don't have to deal with this problem anymore.
+
+* Handle `write` errors when esbuild's child process is killed ([#2007](https://github.com/evanw/esbuild/issues/2007))
+
+    If you type Ctrl+C in a terminal when a script that uses esbuild's JS library is running, esbuild's child process may be killed before the parent process. In that case calls to the `write()` syscall may fail with an `EPIPE` error. Previously this resulted in an uncaught exception because esbuild didn't handle this case. Starting with this release, esbuild should now catch these errors and redirect them into a general `The service was stopped` error which should be returned from whatever top-level API calls were in progress.
+
+* Better error message when browser WASM bugs are present ([#1863](https://github.com/evanw/esbuild/issues/1863))
+
+    Safari's WebAssembly implementation appears to be broken somehow, at least when running esbuild. Sometimes this manifests as a stack overflow and sometimes as a Go panic. Previously a Go panic resulted in the error message `Can't find variable: fs` but this should now result in the Go panic being printed to the console. Using esbuild's WebAssembly library in Safari is still broken but now there's a more helpful error message.
+
+    More detail: When Go panics, it prints a stack trace to stderr (i.e. file descriptor 2). Go's WebAssembly shim calls out to node's `fs.writeSync()` function to do this, and it converts calls to `fs.writeSync()` into calls to `console.log()` in the browser by providing a shim for `fs`. However, Go's shim code stores the shim on `window.fs` in the browser. This is undesirable because it pollutes the global scope and leads to brittle code that can break if other code also uses `window.fs`. To avoid this, esbuild shadows the global object by wrapping Go's shim. But that broke bare references to `fs` since the shim is no longer stored on `window.fs`. This release now stores the shim in a local variable named `fs` so that bare references to `fs` work correctly.
+
+* Undo incorrect dead-code elimination with destructuring ([#1183](https://github.com/evanw/esbuild/issues/1183))
+
+    Previously esbuild eliminated these statements as dead code if tree-shaking was enabled:
+
+    ```js
+    let [a] = {}
+    let { b } = null
+    ```
+
+    This is incorrect because both of these lines will throw an error when evaluated. With this release, esbuild now preserves these statements even when tree shaking is enabled.
+
+* Update to Go 1.17.7
+
+    The version of the Go compiler used to compile esbuild has been upgraded from Go 1.17.6 to Go 1.17.7, which contains a few [compiler and security bug fixes](https://github.com/golang/go/issues?q=milestone%3AGo1.17.7+label%3ACherryPickApproved).
+
 ## 0.14.21
 
 * Handle an additional `browser` map edge case ([#2001](https://github.com/evanw/esbuild/pull/2001), [#2002](https://github.com/evanw/esbuild/issues/2002))
@@ -41,7 +109,7 @@
 
     Previously esbuild was incorrectly resolving `./sub` relative to the top-level package directory instead of to the subdirectory in this case, which meant `./sub` was incorrectly matching `"./sub": "./sub/foo.js"` instead of `"./sub/sub": "./sub/bar.js"`. This has been fixed so esbuild can now emulate Browserify's bug correctly in this edge case.
 
-* Support for esbuild with Linux on RISC-V 64bit ([#1624](https://github.com/evanw/esbuild/pull/1624))
+* Support for esbuild with Linux on RISC-V 64bit ([#2000](https://github.com/evanw/esbuild/pull/2000))
 
     With this release, esbuild now has a published binary executable for the RISC-V 64bit architecture in the [`esbuild-linux-riscv64`](https://www.npmjs.com/package/esbuild-linux-riscv64) npm package. This change was contributed by [@piggynl](https://github.com/piggynl).
 
