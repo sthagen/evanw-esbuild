@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.14.23
+
+* Update feature database to indicate that node 16.14+ supports import assertions ([#2030](https://github.com/evanw/esbuild/issues/2030))
+
+    Node versions 16.14 and above now support import assertions according to [these release notes](https://github.com/nodejs/node/blob/6db686710ee1579452b2908a7a41b91cb729b944/doc/changelogs/CHANGELOG_V16.md#16.14.0). This release updates esbuild's internal feature compatibility database with this information, so esbuild no longer strips import assertions with `--target=node16.14`:
+
+    ```js
+    // Original code
+    import data from './package.json' assert { type: 'json' }
+    console.log(data)
+
+    // Old output (with --target=node16.14)
+    import data from "./package.json";
+    console.log(data);
+
+    // New output (with --target=node16.14)
+    import data from "./package.json" assert { type: "json" };
+    console.log(data);
+    ```
+
+* Basic support for CSS `@layer` rules ([#2027](https://github.com/evanw/esbuild/issues/2027))
+
+    This adds basic parsing support for a new CSS feature called `@layer` that changes how the CSS cascade works. Adding parsing support for this rule to esbuild means esbuild can now minify the contents of `@layer` rules:
+
+    ```css
+    /* Original code */
+    @layer a {
+      @layer b {
+        div {
+          color: yellow;
+          margin: 0.0px;
+        }
+      }
+    }
+
+    /* Old output (with --minify) */
+    @layer a{@layer b {div {color: yellow; margin: 0px;}}}
+
+    /* New output (with --minify) */
+    @layer a.b{div{color:#ff0;margin:0}}
+    ```
+
+    You can read more about `@layer` here:
+
+    * Documentation: https://developer.mozilla.org/en-US/docs/Web/CSS/@layer
+    * Motivation: https://developer.chrome.com/blog/cascade-layers/
+
+    Note that the support added in this release is only for parsing and printing `@layer` rules. The bundler does not yet know about these rules and bundling with `@layer` may result in behavior changes since these new rules have unusual ordering constraints that behave differently than all other CSS rules. Specifically the order is derived from the _first_ instance while with every other CSS rule, the order is derived from the _last_ instance.
+
 ## 0.14.22
 
 * Preserve whitespace for token lists that look like CSS variable declarations ([#2020](https://github.com/evanw/esbuild/issues/2020))
@@ -14,7 +63,7 @@
     @supports (--foo:){html{background:green}}
     ```
 
-    However, that broke rendering in Chrome as it caused Chrome to ignore the entire rule. This did not break rendering in Firefox and Safari, so there's a browser by either with Chrome or with both Firefox and Safari. In any case, esbuild now preserves whitespace after the CSS variable declaration in this case.
+    However, that broke rendering in Chrome as it caused Chrome to ignore the entire rule. This did not break rendering in Firefox and Safari, so there's a browser bug either with Chrome or with both Firefox and Safari. In any case, esbuild now preserves whitespace after the CSS variable declaration in this case.
 
 * Ignore legal comments when merging adjacent duplicate CSS rules ([#2016](https://github.com/evanw/esbuild/issues/2016))
 
