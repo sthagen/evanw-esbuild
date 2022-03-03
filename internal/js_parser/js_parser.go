@@ -390,6 +390,7 @@ type optionsThatSupportStructuralEquality struct {
 	ignoreDCEAnnotations    bool
 	treeShaking             bool
 	dropDebugger            bool
+	mangleQuoted            bool
 	unusedImportsTS         config.UnusedImportsTS
 	useDefineForClassFields config.MaybeBool
 }
@@ -420,6 +421,7 @@ func OptionsFromConfig(options *config.Options) Options {
 			ignoreDCEAnnotations:    options.IgnoreDCEAnnotations,
 			treeShaking:             options.TreeShaking,
 			dropDebugger:            options.DropDebugger,
+			mangleQuoted:            options.MangleQuoted,
 			unusedImportsTS:         options.UnusedImportsTS,
 			useDefineForClassFields: options.UseDefineForClassFields,
 		},
@@ -1902,6 +1904,7 @@ type propertyOpts struct {
 
 	asyncRange     logger.Range
 	tsDeclareRange logger.Range
+	classKeyword   logger.Range
 	isAsync        bool
 	isGenerator    bool
 
@@ -2262,7 +2265,7 @@ func (p *parser) parseProperty(kind js_ast.PropertyKind, opts propertyOpts, erro
 			yield = allowExpr
 		}
 
-		fn, hadBody := p.parseFn(nil, fnOrArrowDataParse{
+		fn, hadBody := p.parseFn(nil, opts.classKeyword, fnOrArrowDataParse{
 			needsAsyncLoc:      key.Loc,
 			asyncRange:         opts.asyncRange,
 			await:              await,
@@ -2717,7 +2720,7 @@ func (p *parser) parseFnExpr(loc logger.Loc, isAsync bool, asyncRange logger.Ran
 		yield = allowExpr
 	}
 
-	fn, _ := p.parseFn(name, fnOrArrowDataParse{
+	fn, _ := p.parseFn(name, logger.Range{}, fnOrArrowDataParse{
 		needsAsyncLoc: loc,
 		asyncRange:    asyncRange,
 		await:         await,
@@ -4765,8 +4768,13 @@ func (p *parser) parseJSXElement(loc logger.Loc) js_ast.Expr {
 			p.lexer.NextInsideJSXElement()
 			endRange, endText, _ := p.parseJSXTag()
 			if startText != endText {
-				p.log.AddWithNotes(logger.Error, &p.tracker, endRange, fmt.Sprintf("Expected closing tag %q to match opening tag %q", endText, startText),
-					[]logger.MsgData{p.tracker.MsgData(startRange, fmt.Sprintf("The opening tag %q is here:", startText))})
+				msg := logger.Msg{
+					Kind:  logger.Error,
+					Data:  p.tracker.MsgData(endRange, fmt.Sprintf("Expected closing tag %q to match opening tag %q", endText, startText)),
+					Notes: []logger.MsgData{p.tracker.MsgData(startRange, fmt.Sprintf("The opening tag %q is here:", startText))},
+				}
+				msg.Data.Location.Suggestion = startText
+				p.log.AddMsg(msg)
 			}
 			if p.lexer.Token != js_lexer.TGreaterThan {
 				p.lexer.Expected(js_lexer.TGreaterThan)
@@ -5314,7 +5322,7 @@ func (p *parser) parseBinding() js_ast.Binding {
 	return js_ast.Binding{}
 }
 
-func (p *parser) parseFn(name *js_ast.LocRef, data fnOrArrowDataParse) (fn js_ast.Fn, hadBody bool) {
+func (p *parser) parseFn(name *js_ast.LocRef, classKeyword logger.Range, data fnOrArrowDataParse) (fn js_ast.Fn, hadBody bool) {
 	if data.await == allowExpr && data.yield == allowExpr {
 		p.markSyntaxFeature(compat.AsyncGenerator, data.asyncRange)
 	}
@@ -5362,6 +5370,8 @@ func (p *parser) parseFn(name *js_ast.LocRef, data fnOrArrowDataParse) (fn js_as
 		var tsDecorators []js_ast.Expr
 		if data.allowTSDecorators {
 			tsDecorators = p.parseTypeScriptDecorators()
+		} else if classKeyword.Len > 0 {
+			p.logInvalidDecoratorError(classKeyword)
 		}
 
 		if !fn.HasRestArg && p.lexer.Token == js_lexer.TDotDotDot {
@@ -5607,6 +5617,7 @@ func (p *parser) parseClass(classKeyword logger.Range, name *js_ast.LocRef, clas
 		isClass:           true,
 		allowTSDecorators: classOpts.allowTSDecorators,
 		classHasExtends:   extendsOrNil.Data != nil,
+		classKeyword:      classKeyword,
 	}
 	hasConstructor := false
 
@@ -5622,6 +5633,7 @@ func (p *parser) parseClass(classKeyword logger.Range, name *js_ast.LocRef, clas
 			opts.tsDecorators = p.parseTypeScriptDecorators()
 		} else {
 			opts.tsDecorators = nil
+			p.logInvalidDecoratorError(classKeyword)
 		}
 
 		// This property may turn out to be a type in TypeScript, which should be ignored
@@ -5802,7 +5814,7 @@ func (p *parser) parseFnStmt(loc logger.Loc, opts parseStmtOpts, isAsync bool, a
 		yield = allowExpr
 	}
 
-	fn, hadBody := p.parseFn(name, fnOrArrowDataParse{
+	fn, hadBody := p.parseFn(name, logger.Range{}, fnOrArrowDataParse{
 		needsAsyncLoc:       loc,
 		asyncRange:          asyncRange,
 		await:               await,
@@ -5911,7 +5923,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		// "@decorator export declare abstract class Foo {}"
 		if opts.tsDecorators != nil && p.lexer.Token != js_lexer.TClass && p.lexer.Token != js_lexer.TDefault &&
 			!p.lexer.IsContextualKeyword("abstract") && !p.lexer.IsContextualKeyword("declare") {
-			p.lexer.Expected(js_lexer.TClass)
+			p.logMisplacedDecoratorError(opts.tsDecorators)
 		}
 
 		switch p.lexer.Token {
@@ -5942,7 +5954,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 				return p.parseStmt(opts)
 			}
 
-			if opts.isTypeScriptDeclare && p.lexer.IsContextualKeyword("as") {
+			if p.lexer.IsContextualKeyword("as") {
 				// "export as namespace ns;"
 				p.lexer.Next()
 				p.lexer.ExpectContextualKeyword("namespace")
@@ -6018,7 +6030,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 			// "@decorator export default class Foo {}"
 			// "@decorator export default abstract class Foo {}"
 			if opts.tsDecorators != nil && p.lexer.Token != js_lexer.TClass && !p.lexer.IsContextualKeyword("abstract") {
-				p.lexer.Expected(js_lexer.TClass)
+				p.logMisplacedDecoratorError(opts.tsDecorators)
 			}
 
 			if p.lexer.IsContextualKeyword("async") {
@@ -6244,7 +6256,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 			// "@decorator export default abstract class Foo {}"
 			if p.lexer.Token != js_lexer.TClass && p.lexer.Token != js_lexer.TExport &&
 				!p.lexer.IsContextualKeyword("abstract") && !p.lexer.IsContextualKeyword("declare") {
-				p.lexer.Expected(js_lexer.TClass)
+				p.logMisplacedDecoratorError(opts.tsDecorators)
 			}
 
 			return p.parseStmt(opts)
@@ -6936,7 +6948,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 						// "@decorator declare class Foo {}"
 						// "@decorator declare abstract class Foo {}"
 						if opts.tsDecorators != nil && p.lexer.Token != js_lexer.TClass && !p.lexer.IsContextualKeyword("abstract") {
-							p.lexer.Expected(js_lexer.TClass)
+							p.logMisplacedDecoratorError(opts.tsDecorators)
 						}
 
 						// "declare global { ... }"
@@ -8498,7 +8510,9 @@ func (p *parser) visitBinding(binding js_ast.Binding, opts bindingOpts) {
 				if mangled, ok := property.Key.Data.(*js_ast.EMangledProp); ok {
 					mangled.Ref = p.symbolForMangledProp(p.loadNameFromRef(mangled.Ref))
 				} else {
-					property.Key = p.visitExpr(property.Key)
+					property.Key, _ = p.visitExprInOut(property.Key, exprIn{
+						shouldMangleStringsAsProps: true,
+					})
 				}
 			}
 			p.visitBinding(property.Value, opts)
@@ -9337,23 +9351,16 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		}
 
 	case *js_ast.SExpr:
-		shouldTrimUndefined := false
-		if !p.options.minifySyntax {
-			if _, ok := s.Value.Data.(*js_ast.ECall); ok {
-				shouldTrimUndefined = true
-			}
-		}
-
+		shouldTrimUnsightlyPrimitives := !p.options.minifySyntax && !isUnsightlyPrimitive(s.Value.Data)
 		p.stmtExprValue = s.Value.Data
 		s.Value = p.visitExpr(s.Value)
 
-		// If this was a call and is now undefined, then it probably was a console
-		// API call that was dropped with "--drop:console". Manually discard the
-		// undefined value even when we're not minifying for aesthetic reasons.
-		if shouldTrimUndefined {
-			if _, ok := s.Value.Data.(*js_ast.EUndefined); ok {
-				return stmts
-			}
+		// Expressions that have been simplified down to a single primitive don't
+		// have any effect, and are automatically removed during minification.
+		// However, some people are really bothered by seeing them. Remove them
+		// so we don't bother these people.
+		if shouldTrimUnsightlyPrimitives && isUnsightlyPrimitive(s.Value.Data) {
+			return stmts
 		}
 
 		// Trim expressions without side effects
@@ -9917,6 +9924,14 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 	return stmts
 }
 
+func isUnsightlyPrimitive(data js_ast.E) bool {
+	switch data.(type) {
+	case *js_ast.EBoolean, *js_ast.ENull, *js_ast.EUndefined, *js_ast.ENumber, *js_ast.EBigInt, *js_ast.EString:
+		return true
+	}
+	return false
+}
+
 // If we encounter a variable initializer that could possibly trigger access to
 // a constant declared later on, then we need to end the const local prefix.
 // We want to avoid situations like this:
@@ -10360,7 +10375,9 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class) js_ast
 			k.Ref = p.symbolForMangledProp(p.loadNameFromRef(k.Ref))
 
 		default:
-			key := p.visitExpr(property.Key)
+			key, _ := p.visitExprInOut(property.Key, exprIn{
+				shouldMangleStringsAsProps: true,
+			})
 			property.Key = key
 
 			// "class {['x'] = y}" => "class {x = y}"
@@ -10542,14 +10559,24 @@ func (p *parser) visitArgs(args []js_ast.Arg, opts visitArgsOpts) {
 	}
 }
 
-func (p *parser) isDotDefineMatch(expr js_ast.Expr, parts []string) bool {
+func (p *parser) isDotOrIndexDefineMatch(expr js_ast.Expr, parts []string) bool {
 	switch e := expr.Data.(type) {
 	case *js_ast.EDot:
 		if len(parts) > 1 {
 			// Intermediates must be dot expressions
 			last := len(parts) - 1
-			return parts[last] == e.Name && e.OptionalChain == js_ast.OptionalChainNone &&
-				p.isDotDefineMatch(e.Target, parts[:last])
+			return e.OptionalChain == js_ast.OptionalChainNone && parts[last] == e.Name &&
+				p.isDotOrIndexDefineMatch(e.Target, parts[:last])
+		}
+
+	case *js_ast.EIndex:
+		if len(parts) > 1 {
+			if str, ok := e.Index.Data.(*js_ast.EString); ok {
+				// Intermediates must be dot expressions
+				last := len(parts) - 1
+				return e.OptionalChain == js_ast.OptionalChainNone && parts[last] == helpers.UTF16ToString(str.Value) &&
+					p.isDotOrIndexDefineMatch(e.Target, parts[:last])
+			}
 		}
 
 	case *js_ast.EThis:
@@ -11197,6 +11224,11 @@ type exprIn struct {
 	// See also "thisArgFunc" and "thisArgWrapFunc" in "exprOut".
 	storeThisArgForParentOptionalChain bool
 
+	// If true, string literals that match the current property mangling pattern
+	// should be turned into EMangledProp expressions, which will cause us to
+	// rename them in the linker.
+	shouldMangleStringsAsProps bool
+
 	// Certain substitutions of identifiers are disallowed for assignment targets.
 	// For example, we shouldn't transform "undefined = 1" into "void 0 = 1". This
 	// isn't something real-world code would do but it matters for conformance
@@ -11467,6 +11499,14 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
+		if in.shouldMangleStringsAsProps && p.options.mangleQuoted && !e.PreferTemplate {
+			if name := helpers.UTF16ToString(e.Value); p.isMangledProp(name) {
+				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EMangledProp{
+					Ref: p.symbolForMangledProp(name),
+				}}, exprOut{}
+			}
+		}
+
 	case *js_ast.ENumber:
 		if p.legacyOctalLiterals != nil && p.isStrictMode() {
 			if r, ok := p.legacyOctalLiterals[expr.Data]; ok {
@@ -11495,7 +11535,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		// Check both user-specified defines and known globals
 		if defines, ok := p.options.defines.DotDefines["meta"]; ok {
 			for _, define := range defines {
-				if p.isDotDefineMatch(expr, define.Parts) {
+				if p.isDotOrIndexDefineMatch(expr, define.Parts) {
 					// Substitute user-specified defines
 					if define.Data.DefineFunc != nil {
 						return p.valueForDefine(expr.Loc, define.Data.DefineFunc, identifierOpts{
@@ -11780,7 +11820,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		isTemplateTag := e == p.templateTag
 		isStmtExpr := e == p.stmtExprValue
 		wasAnonymousNamedExpr := p.isAnonymousNamedExpr(e.Right)
-		e.Left, _ = p.visitExprInOut(e.Left, exprIn{assignTarget: e.Op.BinaryAssignTarget()})
+		e.Left, _ = p.visitExprInOut(e.Left, exprIn{
+			assignTarget:               e.Op.BinaryAssignTarget(),
+			shouldMangleStringsAsProps: e.Op == js_ast.BinOpIn,
+		})
 
 		// Mark the control flow as dead if the branch is never taken
 		switch e.Op {
@@ -11816,6 +11859,11 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			} else {
 				e.Right = p.visitExpr(e.Right)
 			}
+
+		case js_ast.BinOpComma:
+			e.Right, _ = p.visitExprInOut(e.Right, exprIn{
+				shouldMangleStringsAsProps: in.shouldMangleStringsAsProps,
+			})
 
 		default:
 			e.Right = p.visitExpr(e.Right)
@@ -12307,10 +12355,121 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
+	case *js_ast.EDot:
+		isDeleteTarget := e == p.deleteTarget
+		isCallTarget := e == p.callTarget
+
+		// Check both user-specified defines and known globals
+		if defines, ok := p.options.defines.DotDefines[e.Name]; ok {
+			for _, define := range defines {
+				if p.isDotOrIndexDefineMatch(expr, define.Parts) {
+					// Substitute user-specified defines
+					if define.Data.DefineFunc != nil {
+						return p.valueForDefine(expr.Loc, define.Data.DefineFunc, identifierOpts{
+							assignTarget:   in.assignTarget,
+							isCallTarget:   isCallTarget,
+							isDeleteTarget: isDeleteTarget,
+						}), exprOut{}
+					}
+
+					// Copy the side effect flags over in case this expression is unused
+					if define.Data.CanBeRemovedIfUnused {
+						e.CanBeRemovedIfUnused = true
+					}
+					if define.Data.CallCanBeUnwrappedIfUnused && !p.options.ignoreDCEAnnotations {
+						e.CallCanBeUnwrappedIfUnused = true
+					}
+					break
+				}
+			}
+		}
+
+		// Track ".then().catch()" chains
+		if isCallTarget && p.thenCatchChain.nextTarget == e {
+			if e.Name == "catch" {
+				p.thenCatchChain = thenCatchChain{
+					nextTarget: e.Target.Data,
+					hasCatch:   true,
+					catchLoc:   e.NameLoc,
+				}
+			} else if e.Name == "then" {
+				p.thenCatchChain = thenCatchChain{
+					nextTarget: e.Target.Data,
+					hasCatch:   p.thenCatchChain.hasCatch || p.thenCatchChain.hasMultipleArgs,
+					catchLoc:   p.thenCatchChain.catchLoc,
+				}
+			}
+		}
+
+		target, out := p.visitExprInOut(e.Target, exprIn{
+			hasChainParent: e.OptionalChain == js_ast.OptionalChainContinue,
+		})
+		e.Target = target
+
+		// Lower "super.prop" if necessary
+		if e.OptionalChain == js_ast.OptionalChainNone && in.assignTarget == js_ast.AssignTargetNone &&
+			!isCallTarget && p.shouldLowerSuperPropertyAccess(e.Target) {
+			// "super.foo" => "__superGet('foo')"
+			key := js_ast.Expr{Loc: e.NameLoc, Data: &js_ast.EString{Value: helpers.StringToUTF16(e.Name)}}
+			return p.lowerSuperPropertyGet(expr.Loc, key), exprOut{}
+		}
+
+		// Lower optional chaining if we're the top of the chain
+		containsOptionalChain := e.OptionalChain != js_ast.OptionalChainNone
+		if containsOptionalChain && !in.hasChainParent {
+			return p.lowerOptionalChain(expr, in, out)
+		}
+
+		// Potentially rewrite this property access
+		out = exprOut{
+			childContainsOptionalChain:            containsOptionalChain,
+			methodCallMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
+			thisArgFunc:                           out.thisArgFunc,
+			thisArgWrapFunc:                       out.thisArgWrapFunc,
+		}
+		if !in.hasChainParent {
+			out.thisArgFunc = nil
+			out.thisArgWrapFunc = nil
+		}
+		if e.OptionalChain == js_ast.OptionalChainNone {
+			if value, ok := p.maybeRewritePropertyAccess(expr.Loc, in.assignTarget,
+				isDeleteTarget, e.Target, e.Name, e.NameLoc, isCallTarget, false); ok {
+				return value, out
+			}
+		}
+		return js_ast.Expr{Loc: expr.Loc, Data: e}, out
+
 	case *js_ast.EIndex:
 		isCallTarget := e == p.callTarget
 		isTemplateTag := e == p.templateTag
 		isDeleteTarget := e == p.deleteTarget
+
+		// Check both user-specified defines and known globals
+		if str, ok := e.Index.Data.(*js_ast.EString); ok {
+			if defines, ok := p.options.defines.DotDefines[helpers.UTF16ToString(str.Value)]; ok {
+				for _, define := range defines {
+					if p.isDotOrIndexDefineMatch(expr, define.Parts) {
+						// Substitute user-specified defines
+						if define.Data.DefineFunc != nil {
+							return p.valueForDefine(expr.Loc, define.Data.DefineFunc, identifierOpts{
+								assignTarget:   in.assignTarget,
+								isCallTarget:   isCallTarget,
+								isDeleteTarget: isDeleteTarget,
+							}), exprOut{}
+						}
+
+						// Copy the side effect flags over in case this expression is unused
+						if define.Data.CanBeRemovedIfUnused {
+							e.CanBeRemovedIfUnused = true
+						}
+						if define.Data.CallCanBeUnwrappedIfUnused && !p.options.ignoreDCEAnnotations {
+							e.CallCanBeUnwrappedIfUnused = true
+						}
+						break
+					}
+				}
+			}
+		}
 
 		// "a['b']" => "a.b"
 		if p.options.minifySyntax {
@@ -12383,7 +12542,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			index.Ref = p.symbolForMangledProp(p.loadNameFromRef(index.Ref))
 
 		default:
-			e.Index = p.visitExpr(e.Index)
+			e.Index, _ = p.visitExprInOut(e.Index, exprIn{
+				shouldMangleStringsAsProps: true,
+			})
 		}
 
 		// Lower "super[prop]" if necessary
@@ -12579,90 +12740,6 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
-	case *js_ast.EDot:
-		isDeleteTarget := e == p.deleteTarget
-		isCallTarget := e == p.callTarget
-
-		// Check both user-specified defines and known globals
-		if defines, ok := p.options.defines.DotDefines[e.Name]; ok {
-			for _, define := range defines {
-				if p.isDotDefineMatch(expr, define.Parts) {
-					// Substitute user-specified defines
-					if define.Data.DefineFunc != nil {
-						return p.valueForDefine(expr.Loc, define.Data.DefineFunc, identifierOpts{
-							assignTarget:   in.assignTarget,
-							isCallTarget:   isCallTarget,
-							isDeleteTarget: isDeleteTarget,
-						}), exprOut{}
-					}
-
-					// Copy the side effect flags over in case this expression is unused
-					if define.Data.CanBeRemovedIfUnused {
-						e.CanBeRemovedIfUnused = true
-					}
-					if define.Data.CallCanBeUnwrappedIfUnused && !p.options.ignoreDCEAnnotations {
-						e.CallCanBeUnwrappedIfUnused = true
-					}
-					break
-				}
-			}
-		}
-
-		// Track ".then().catch()" chains
-		if isCallTarget && p.thenCatchChain.nextTarget == e {
-			if e.Name == "catch" {
-				p.thenCatchChain = thenCatchChain{
-					nextTarget: e.Target.Data,
-					hasCatch:   true,
-					catchLoc:   e.NameLoc,
-				}
-			} else if e.Name == "then" {
-				p.thenCatchChain = thenCatchChain{
-					nextTarget: e.Target.Data,
-					hasCatch:   p.thenCatchChain.hasCatch || p.thenCatchChain.hasMultipleArgs,
-					catchLoc:   p.thenCatchChain.catchLoc,
-				}
-			}
-		}
-
-		target, out := p.visitExprInOut(e.Target, exprIn{
-			hasChainParent: e.OptionalChain == js_ast.OptionalChainContinue,
-		})
-		e.Target = target
-
-		// Lower "super.prop" if necessary
-		if e.OptionalChain == js_ast.OptionalChainNone && in.assignTarget == js_ast.AssignTargetNone &&
-			!isCallTarget && p.shouldLowerSuperPropertyAccess(e.Target) {
-			// "super.foo" => "__superGet('foo')"
-			key := js_ast.Expr{Loc: e.NameLoc, Data: &js_ast.EString{Value: helpers.StringToUTF16(e.Name)}}
-			return p.lowerSuperPropertyGet(expr.Loc, key), exprOut{}
-		}
-
-		// Lower optional chaining if we're the top of the chain
-		containsOptionalChain := e.OptionalChain != js_ast.OptionalChainNone
-		if containsOptionalChain && !in.hasChainParent {
-			return p.lowerOptionalChain(expr, in, out)
-		}
-
-		// Potentially rewrite this property access
-		out = exprOut{
-			childContainsOptionalChain:            containsOptionalChain,
-			methodCallMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
-			thisArgFunc:                           out.thisArgFunc,
-			thisArgWrapFunc:                       out.thisArgWrapFunc,
-		}
-		if !in.hasChainParent {
-			out.thisArgFunc = nil
-			out.thisArgWrapFunc = nil
-		}
-		if e.OptionalChain == js_ast.OptionalChainNone {
-			if value, ok := p.maybeRewritePropertyAccess(expr.Loc, in.assignTarget,
-				isDeleteTarget, e.Target, e.Name, e.NameLoc, isCallTarget, false); ok {
-				return value, out
-			}
-		}
-		return js_ast.Expr{Loc: expr.Loc, Data: e}, out
-
 	case *js_ast.EIf:
 		isCallTarget := e == p.callTarget
 		e.Test = p.visitExpr(e.Test)
@@ -12671,18 +12748,23 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			e.Test = p.simplifyBooleanExpr(e.Test)
 		}
 
+		// Propagate these flags into the branches
+		childIn := exprIn{
+			shouldMangleStringsAsProps: in.shouldMangleStringsAsProps,
+		}
+
 		// Fold constants
 		if boolean, sideEffects, ok := toBooleanWithSideEffects(e.Test.Data); !ok {
-			e.Yes = p.visitExpr(e.Yes)
-			e.No = p.visitExpr(e.No)
+			e.Yes, _ = p.visitExprInOut(e.Yes, childIn)
+			e.No, _ = p.visitExprInOut(e.No, childIn)
 		} else {
 			// Mark the control flow as dead if the branch is never taken
 			if boolean {
 				// "true ? live : dead"
-				e.Yes = p.visitExpr(e.Yes)
+				e.Yes, _ = p.visitExprInOut(e.Yes, childIn)
 				old := p.isControlFlowDead
 				p.isControlFlowDead = true
-				e.No = p.visitExpr(e.No)
+				e.No, _ = p.visitExprInOut(e.No, childIn)
 				p.isControlFlowDead = old
 
 				if p.options.minifySyntax {
@@ -12704,9 +12786,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				// "false ? dead : live"
 				old := p.isControlFlowDead
 				p.isControlFlowDead = true
-				e.Yes = p.visitExpr(e.Yes)
+				e.Yes, _ = p.visitExprInOut(e.Yes, childIn)
 				p.isControlFlowDead = old
-				e.No = p.visitExpr(e.No)
+				e.No, _ = p.visitExprInOut(e.No, childIn)
 
 				if p.options.minifySyntax {
 					// "(a, false) ? b : c" => "a, c"
@@ -12800,7 +12882,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				if mangled, ok := key.Data.(*js_ast.EMangledProp); ok {
 					mangled.Ref = p.symbolForMangledProp(p.loadNameFromRef(mangled.Ref))
 				} else {
-					key = p.visitExpr(property.Key)
+					key, _ = p.visitExprInOut(property.Key, exprIn{
+						shouldMangleStringsAsProps: true,
+					})
 					property.Key = key
 				}
 
@@ -13330,6 +13414,12 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 		case *js_ast.EDot:
+			// Copy the call side effect flag over if this is a known target
+			if t.CallCanBeUnwrappedIfUnused {
+				e.CanBeUnwrappedIfUnused = true
+			}
+
+		case *js_ast.EIndex:
 			// Copy the call side effect flag over if this is a known target
 			if t.CallCanBeUnwrappedIfUnused {
 				e.CanBeUnwrappedIfUnused = true

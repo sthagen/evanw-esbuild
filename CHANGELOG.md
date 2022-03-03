@@ -1,5 +1,113 @@
 # Changelog
 
+## 0.14.24
+
+* Allow `es2022` as a target environment ([#2012](https://github.com/evanw/esbuild/issues/2012))
+
+    TypeScript recently [added support for `es2022`](https://devblogs.microsoft.com/typescript/announcing-typescript-4-6/#target-es2022) as a compilation target so esbuild now supports this too. Support for this is preliminary as there is no published ES2022 specification yet (i.e. https://tc39.es/ecma262/2021/ exists but https://tc39.es/ecma262/2022/ is a 404 error). The meaning of esbuild's `es2022` target may change in the future when the specification is finalized. Right now I have made the `es2022` target enable support for the syntax-related [finished proposals](https://github.com/tc39/proposals/blob/main/finished-proposals.md) that are marked as `2022`:
+
+    * Class fields
+    * Class private members
+    * Class static blocks
+    * Ergonomic class private member checks
+    * Top-level await
+
+    I have also included the "arbitrary module namespace names" feature since I'm guessing it will end up in the ES2022 specification (this syntax feature was added to the specification without a proposal). TypeScript has [not added support for this yet](https://github.com/microsoft/TypeScript/issues/40594).
+
+* Match `define` to strings in index expressions ([#2050](https://github.com/evanw/esbuild/issues/2050))
+
+    With this release, configuring `--define:foo.bar=baz` now matches and replaces both `foo.bar` and `foo['bar']` expressions in the original source code. This is necessary for people who have enabled TypeScript's [`noPropertyAccessFromIndexSignature` feature](https://www.typescriptlang.org/tsconfig#noPropertyAccessFromIndexSignature), which prevents you from using normal property access syntax on a type with an index signature such as in the following code:
+
+    ```ts
+    declare let foo: { [key: string]: any }
+    foo.bar // This is a type error if noPropertyAccessFromIndexSignature is enabled
+    foo['bar']
+    ```
+
+    Previously esbuild would generate the following output with `--define:foo.bar=baz`:
+
+    ```js
+    baz;
+    foo["bar"];
+    ```
+
+    Now esbuild will generate the following output instead:
+
+    ```js
+    baz;
+    baz;
+    ```
+
+* Add `--mangle-quoted` to mangle quoted properties ([#218](https://github.com/evanw/esbuild/issues/218))
+
+    The `--mangle-props=` flag tells esbuild to automatically rename all properties matching the provided regular expression to shorter names to save space. Previously esbuild never modified the contents of string literals. In particular, `--mangle-props=_` would mangle `foo._bar` but not `foo['_bar']`. There are some coding patterns where renaming quoted property names is desirable, such as when using TypeScript's [`noPropertyAccessFromIndexSignature` feature](https://www.typescriptlang.org/tsconfig#noPropertyAccessFromIndexSignature) or when using TypeScript's [discriminated union narrowing behavior](https://www.typescriptlang.org/docs/handbook/2/narrowing.html#discriminated-unions):
+
+    ```ts
+    interface Foo { _foo: string }
+    interface Bar { _bar: number }
+    declare const value: Foo | Bar
+    console.log('_foo' in value ? value._foo : value._bar)
+    ```
+
+    The `'_foo' in value` check tells TypeScript to narrow the type of `value` to `Foo` in the true branch and to `Bar` in the false branch. Previously esbuild didn't mangle the property name `'_foo'` because it was inside a string literal. With this release, you can now use `--mangle-quoted` to also rename property names inside string literals:
+
+    ```js
+    // Old output (with --mangle-props=_)
+    console.log("_foo" in value ? value.a : value.b);
+
+    // New output (with --mangle-props=_ --mangle-quoted)
+    console.log("a" in value ? value.a : value.b);
+    ```
+
+* Parse and discard TypeScript `export as namespace` statements ([#2070](https://github.com/evanw/esbuild/issues/2070))
+
+    TypeScript `.d.ts` type declaration files can sometimes contain statements of the form `export as namespace foo;`. I believe these serve to declare that the module adds a property of that name to the global object. You aren't supposed to feed `.d.ts` files to esbuild so this normally doesn't matter, but sometimes esbuild can end up having to parse them. One such case is if you import a type-only package who's `main` field in `package.json` is a `.d.ts` file.
+
+    Previously esbuild only allowed `export as namespace` statements inside a `declare` context:
+
+    ```ts
+    declare module Foo {
+      export as namespace foo;
+    }
+    ```
+
+    Now esbuild will also allow these statements outside of a `declare` context:
+
+    ```ts
+    export as namespace foo;
+    ```
+
+    These statements are still just ignored and discarded.
+
+* Strip import assertions from unrecognized `import()` expressions ([#2036](https://github.com/evanw/esbuild/issues/2036))
+
+    The new "import assertions" JavaScript language feature adds an optional second argument to dynamic `import()` expressions, which esbuild does support. However, this optional argument must be stripped when targeting older JavaScript environments for which this second argument would be a syntax error. Previously esbuild failed to strip this second argument in cases when the first argument to `import()` wasn't a string literal. This problem is now fixed:
+
+    ```js
+    // Original code
+    console.log(import(foo, { assert: { type: 'json' } }))
+
+    // Old output (with --target=es6)
+    console.log(import(foo, { assert: { type: "json" } }));
+
+    // New output (with --target=es6)
+    console.log(import(foo));
+    ```
+
+* Remove simplified statement-level literal expressions ([#2063](https://github.com/evanw/esbuild/issues/2063))
+
+    With this release, esbuild now removes simplified statement-level expressions if the simplified result is a literal expression even when minification is disabled. Previously this was only done when minification is enabled. This change was only made because some people are bothered by seeing top-level literal expressions. This change has no effect on code behavior.
+
+* Ignore `.d.ts` rules in `paths` in `tsconfig.json` files ([#2074](https://github.com/evanw/esbuild/issues/2074), [#2075](https://github.com/evanw/esbuild/pull/2075))
+
+    TypeScript's `tsconfig.json` configuration file has a `paths` field that lets you remap import paths to alternative files on the file system. This field is interpreted by esbuild during bundling so that esbuild's behavior matches that of the TypeScript type checker. However, people sometimes override import paths to JavaScript files to instead point to a `.d.ts` TypeScript type declaration file for that JavaScript file. The intent of this is to just use the remapping for type information and not to actually import the `.d.ts` file during the build.
+
+    With this release, esbuild will now ignore rules in `paths` that result in a `.d.ts` file during path resolution. This means code that does this should now be able to be bundled without modifying its `tsconfig.json` file to remove the `.d.ts` rule. This change was contributed by [@magic-akari](https://github.com/magic-akari).
+
+* Disable Go compiler optimizations for the Linux RISC-V 64bit build ([#2035](https://github.com/evanw/esbuild/pull/2035))
+
+    Go's RISC-V 64bit compiler target has a fatal compiler optimization bug that causes esbuild to crash when it's run: https://github.com/golang/go/issues/51101. As a temporary workaround until a version of the Go compiler with the fix is published, Go compiler optimizations have been disabled for RISC-V. The 7.7mb esbuild binary executable for RISC-V is now 8.7mb instead. This workaround was contributed by [@piggynl](https://github.com/piggynl).
+
 ## 0.14.23
 
 * Update feature database to indicate that node 16.14+ supports import assertions ([#2030](https://github.com/evanw/esbuild/issues/2030))
