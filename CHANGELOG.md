@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.14.25
+
+* Reduce minification of CSS transforms to avoid Safari bugs ([#2057](https://github.com/evanw/esbuild/issues/2057))
+
+    In Safari, applying a 3D CSS transform to an element can cause it to render in a different order than applying a 2D CSS transform even if the transformation matrix is identical. I believe this is a bug in Safari because the [CSS `transform` specification](https://drafts.csswg.org/css-transforms-1/#transform-rendering) doesn't seem to distinguish between 2D and 3D transforms as far as rendering order:
+
+    > For elements whose layout is governed by the CSS box model, any value other than `none` for the `transform` property results in the creation of a stacking context.
+
+    This bug means that minifying a 3D transform into a 2D transform must be avoided even though it's a valid transformation because it can cause rendering differences in Safari. Previously esbuild sometimes minified 3D CSS transforms into 2D CSS transforms but with this release, esbuild will no longer do that:
+
+    ```css
+    /* Original code */
+    div { transform: matrix3d(2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) }
+
+    /* Old output (with --minify) */
+    div{transform:scale(2)}
+
+    /* New output (with --minify) */
+    div{transform:scale3d(2,2,1)}
+    ```
+
+* Minification now takes advantage of the `?.` operator
+
+    This adds new code minification rules that shorten code with the `?.` optional chaining operator when the result is equivalent:
+
+    ```ts
+    // Original code
+    let foo = (x) => {
+      if (x !== null && x !== undefined) x.y()
+      return x === null || x === undefined ? undefined : x.z
+    }
+
+    // Old output (with --minify)
+    let foo=n=>(n!=null&&n.y(),n==null?void 0:n.z);
+
+    // New output (with --minify)
+    let foo=n=>(n?.y(),n?.z);
+    ```
+
+    This only takes effect when minification is enabled and when the configured target environment is known to support the optional chaining operator. As always, make sure to set `--target=` to the appropriate language target if you are running the minified code in an environment that doesn't support the latest JavaScript features.
+
+* Add source mapping information for some non-executable tokens ([#1448](https://github.com/evanw/esbuild/issues/1448))
+
+    Code coverage tools can generate reports that tell you if any code exists that has not been run (or "covered") during your tests. You can use this information to add additional tests for code that isn't currently covered.
+
+    Some popular JavaScript code coverage tools have bugs where they incorrectly consider lines without any executable code as uncovered, even though there's no test you could possibly write that would cause those lines to be executed. For example, they apparently complain about the lines that only contain the trailing `}` token of an object literal.
+
+    With this release, esbuild now generates source mappings for some of these trailing non-executable tokens. This may not successfully work around bugs in code coverage tools because there are many non-executable tokens in JavaScript and esbuild doesn't map them all (the drawback of mapping these extra tokens is that esbuild will use more memory, build more slowly, and output a bigger source map). The true solution is to fix the bugs in the code coverage tools in the first place.
+
+* Fall back to WebAssembly on Android x64 ([#2068](https://github.com/evanw/esbuild/issues/2068))
+
+    Go's compiler supports trivial cross-compiling to almost all platforms without installing any additional software other than the Go compiler itself. This has made it very easy for esbuild to publish native binary executables for many platforms. However, it strangely doesn't support cross-compiling to Android x64 without installing the Android build tools. So instead of publishing a native esbuild binary executable to npm, this release publishes a WebAssembly fallback build. This is essentially the same as the `esbuild-wasm` package but it's installed automatically when you install the `esbuild` package on Android x64. So packages that depend on the `esbuild` package should now work on Android x64. If you want to use a native binary executable of esbuild on Android x64, you may be able to build it yourself from source after installing the Android build tools.
+
+* Update to Go 1.17.8
+
+    The version of the Go compiler used to compile esbuild has been upgraded from Go 1.17.7 to Go 1.17.8, which fixes the RISC-V 64-bit build. Compiler optimizations for the RISC-V 64-bit build have now been re-enabled.
+
 ## 0.14.24
 
 * Allow `es2022` as a target environment ([#2012](https://github.com/evanw/esbuild/issues/2012))

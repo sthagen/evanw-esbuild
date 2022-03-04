@@ -2826,7 +2826,7 @@ func TestMangleLoopJump(t *testing.T) {
 	expectPrintedMangle(t, "while (x) { y(); debugger; if (1) continue; z(); }", "for (; x; ) {\n  y();\n  debugger;\n}\n")
 	expectPrintedMangle(t, "while (x) { let y = z(); if (1) continue; z(); }", "for (; x; ) {\n  let y = z();\n}\n")
 	expectPrintedMangle(t, "while (x) { debugger; if (y) { if (1) break; z() } }", "for (; x; ) {\n  debugger;\n  if (y)\n    break;\n}\n")
-	expectPrintedMangle(t, "while (x) { debugger; if (y) { if (1) continue; z() } }", "for (; x; ) {\n  debugger;\n  !y;\n}\n")
+	expectPrintedMangle(t, "while (x) { debugger; if (y) { if (1) continue; z() } }", "for (; x; ) {\n  debugger;\n  y;\n}\n")
 	expectPrintedMangle(t, "while (x) { debugger; if (1) { if (1) break; z() } }", "for (; x; ) {\n  debugger;\n  break;\n}\n")
 	expectPrintedMangle(t, "while (x) { debugger; if (1) { if (1) continue; z() } }", "for (; x; )\n  debugger;\n")
 
@@ -3159,9 +3159,9 @@ func TestMangleIf(t *testing.T) {
 	expectPrintedMangle(t, "if (a) throw c; if (b) throw d;", "if (a)\n  throw c;\nif (b)\n  throw d;\n")
 	expectPrintedMangle(t, "if (a) throw c; if (b) throw c;", "if (a || b)\n  throw c;\n")
 	expectPrintedMangle(t, "while (x) { if (a) break; if (b) break; }", "for (; x && !(a || b); )\n  ;\n")
-	expectPrintedMangle(t, "while (x) { if (a) continue; if (b) continue; }", "for (; x; )\n  a || !b;\n")
+	expectPrintedMangle(t, "while (x) { if (a) continue; if (b) continue; }", "for (; x; )\n  a || b;\n")
 	expectPrintedMangle(t, "while (x) { debugger; if (a) break; if (b) break; }", "for (; x; ) {\n  debugger;\n  if (a || b)\n    break;\n}\n")
-	expectPrintedMangle(t, "while (x) { debugger; if (a) continue; if (b) continue; }", "for (; x; ) {\n  debugger;\n  a || !b;\n}\n")
+	expectPrintedMangle(t, "while (x) { debugger; if (a) continue; if (b) continue; }", "for (; x; ) {\n  debugger;\n  a || b;\n}\n")
 	expectPrintedMangle(t, "x: while (x) y: while (y) { if (a) break x; if (b) break y; }",
 		"x:\n  for (; x; )\n    y:\n      for (; y; ) {\n        if (a)\n          break x;\n        if (b)\n          break y;\n      }\n")
 	expectPrintedMangle(t, "x: while (x) y: while (y) { if (a) continue x; if (b) continue y; }",
@@ -3170,6 +3170,77 @@ func TestMangleIf(t *testing.T) {
 		"x:\n  for (; x; )\n    y:\n      for (; y; )\n        if (a || b)\n          break x;\n")
 	expectPrintedMangle(t, "x: while (x) y: while (y) { if (a) continue x; if (b) continue x; }",
 		"x:\n  for (; x; )\n    y:\n      for (; y; )\n        if (a || b)\n          continue x;\n")
+
+	expectPrintedMangle(t, "if (x ? y : 0) foo()", "x && y && foo();\n")
+	expectPrintedMangle(t, "if (x ? y : 1) foo()", "(!x || y) && foo();\n")
+	expectPrintedMangle(t, "if (x ? 0 : y) foo()", "!x && y && foo();\n")
+	expectPrintedMangle(t, "if (x ? 1 : y) foo()", "(x || y) && foo();\n")
+
+	expectPrintedMangle(t, "if (x ? y : 0) ; else foo()", "x && y || foo();\n")
+	expectPrintedMangle(t, "if (x ? y : 1) ; else foo()", "!x || y || foo();\n")
+	expectPrintedMangle(t, "if (x ? 0 : y) ; else foo()", "!x && y || foo();\n")
+	expectPrintedMangle(t, "if (x ? 1 : y) ; else foo()", "x || y || foo();\n")
+
+	expectPrintedMangle(t, "(x ? y : 0) && foo();", "x && y && foo();\n")
+	expectPrintedMangle(t, "(x ? y : 1) && foo();", "(!x || y) && foo();\n")
+	expectPrintedMangle(t, "(x ? 0 : y) && foo();", "!x && y && foo();\n")
+	expectPrintedMangle(t, "(x ? 1 : y) && foo();", "(x || y) && foo();\n")
+
+	expectPrintedMangle(t, "(x ? y : 0) || foo();", "x && y || foo();\n")
+	expectPrintedMangle(t, "(x ? y : 1) || foo();", "!x || y || foo();\n")
+	expectPrintedMangle(t, "(x ? 0 : y) || foo();", "!x && y || foo();\n")
+	expectPrintedMangle(t, "(x ? 1 : y) || foo();", "x || y || foo();\n")
+}
+
+func TestMangleOptionalChain(t *testing.T) {
+	expectPrintedMangle(t, "let a; return a != null ? a.b : undefined", "let a;\nreturn a?.b;\n")
+	expectPrintedMangle(t, "let a; return a != null ? a[b] : undefined", "let a;\nreturn a?.[b];\n")
+	expectPrintedMangle(t, "let a; return a != null ? a(b) : undefined", "let a;\nreturn a?.(b);\n")
+
+	expectPrintedMangle(t, "let a; return a == null ? undefined : a.b", "let a;\nreturn a?.b;\n")
+	expectPrintedMangle(t, "let a; return a == null ? undefined : a[b]", "let a;\nreturn a?.[b];\n")
+	expectPrintedMangle(t, "let a; return a == null ? undefined : a(b)", "let a;\nreturn a?.(b);\n")
+
+	expectPrintedMangle(t, "let a; return null != a ? a.b : undefined", "let a;\nreturn a?.b;\n")
+	expectPrintedMangle(t, "let a; return null != a ? a[b] : undefined", "let a;\nreturn a?.[b];\n")
+	expectPrintedMangle(t, "let a; return null != a ? a(b) : undefined", "let a;\nreturn a?.(b);\n")
+
+	expectPrintedMangle(t, "let a; return null == a ? undefined : a.b", "let a;\nreturn a?.b;\n")
+	expectPrintedMangle(t, "let a; return null == a ? undefined : a[b]", "let a;\nreturn a?.[b];\n")
+	expectPrintedMangle(t, "let a; return null == a ? undefined : a(b)", "let a;\nreturn a?.(b);\n")
+
+	expectPrintedMangle(t, "return a != null ? a.b : undefined", "return a != null ? a.b : void 0;\n")
+	expectPrintedMangle(t, "let a; return a != null ? a.b : null", "let a;\nreturn a != null ? a.b : null;\n")
+	expectPrintedMangle(t, "let a; return a != null ? b.a : undefined", "let a;\nreturn a != null ? b.a : void 0;\n")
+	expectPrintedMangle(t, "let a; return a != 0 ? a.b : undefined", "let a;\nreturn a != 0 ? a.b : void 0;\n")
+	expectPrintedMangle(t, "let a; return a !== null ? a.b : undefined", "let a;\nreturn a !== null ? a.b : void 0;\n")
+	expectPrintedMangle(t, "let a; return a != undefined ? a.b : undefined", "let a;\nreturn a?.b;\n")
+	expectPrintedMangle(t, "let a; return a != null ? a?.b : undefined", "let a;\nreturn a?.b;\n")
+	expectPrintedMangle(t, "let a; return a != null ? a.b.c[d](e) : undefined", "let a;\nreturn a?.b.c[d](e);\n")
+	expectPrintedMangle(t, "let a; return a != null ? a?.b.c[d](e) : undefined", "let a;\nreturn a?.b.c[d](e);\n")
+	expectPrintedMangle(t, "let a; return a != null ? a.b.c?.[d](e) : undefined", "let a;\nreturn a?.b.c?.[d](e);\n")
+	expectPrintedMangle(t, "let a; return a != null ? a?.b.c?.[d](e) : undefined", "let a;\nreturn a?.b.c?.[d](e);\n")
+	expectPrintedMangleTarget(t, 2019, "let a; return a != null ? a.b : undefined", "let a;\nreturn a != null ? a.b : void 0;\n")
+	expectPrintedMangleTarget(t, 2020, "let a; return a != null ? a.b : undefined", "let a;\nreturn a?.b;\n")
+
+	expectPrintedMangle(t, "a != null && a.b()", "a?.b();\n")
+	expectPrintedMangle(t, "a == null || a.b()", "a?.b();\n")
+	expectPrintedMangle(t, "null != a && a.b()", "a?.b();\n")
+	expectPrintedMangle(t, "null == a || a.b()", "a?.b();\n")
+
+	expectPrintedMangle(t, "a == null && a.b()", "a == null && a.b();\n")
+	expectPrintedMangle(t, "a != null || a.b()", "a != null || a.b();\n")
+	expectPrintedMangle(t, "null == a && a.b()", "a == null && a.b();\n")
+	expectPrintedMangle(t, "null != a || a.b()", "a != null || a.b();\n")
+
+	expectPrintedMangle(t, "x = a != null && a.b()", "x = a != null && a.b();\n")
+	expectPrintedMangle(t, "x = a == null || a.b()", "x = a == null || a.b();\n")
+
+	expectPrintedMangle(t, "if (a != null) a.b()", "a?.b();\n")
+	expectPrintedMangle(t, "if (a == null) ; else a.b()", "a?.b();\n")
+
+	expectPrintedMangle(t, "if (a == null) a.b()", "a == null && a.b();\n")
+	expectPrintedMangle(t, "if (a != null) ; else a.b()", "a != null || a.b();\n")
 }
 
 func TestMangleNullOrUndefinedWithSideEffects(t *testing.T) {
@@ -3351,7 +3422,7 @@ func TestMangleReturn(t *testing.T) {
 	expectPrintedMangle(t, "function x() { debugger; if (y) return; z(); }", "function x() {\n  debugger;\n  y || z();\n}\n")
 	expectPrintedMangle(t, "function x() { debugger; if (y) return; else z(); w(); }", "function x() {\n  debugger;\n  y || (z(), w());\n}\n")
 	expectPrintedMangle(t, "function x() { if (y) { if (z) return; } }",
-		"function x() {\n  !(y && z);\n}\n")
+		"function x() {\n  y && z;\n}\n")
 	expectPrintedMangle(t, "function x() { if (y) { if (z) return; w(); } }",
 		"function x() {\n  if (y) {\n    if (z)\n      return;\n    w();\n  }\n}\n")
 
@@ -4012,12 +4083,12 @@ func TestMangleInlineLocals(t *testing.T) {
 	// Can substitute code without side effects into branches past an expression with side effects
 	check("let x = arg0; return y ? x : z;", "let x = arg0;\nreturn y ? x : z;")
 	check("let x = arg0; return y ? z : x;", "let x = arg0;\nreturn y ? z : x;")
-	check("let x = arg0; return (arg1 ? 1 : 2) ? x : 3;", "return (arg1 ? 1 : 2) ? arg0 : 3;")
-	check("let x = arg0; return (arg1 ? 1 : 2) ? 3 : x;", "return (arg1 ? 1 : 2) ? 3 : arg0;")
-	check("let x = arg0; return (arg1 ? y : 1) ? x : 2;", "let x = arg0;\nreturn (arg1 ? y : 1) ? x : 2;")
-	check("let x = arg0; return (arg1 ? 1 : y) ? x : 2;", "let x = arg0;\nreturn (arg1 ? 1 : y) ? x : 2;")
-	check("let x = arg0; return (arg1 ? y : 1) ? 2 : x;", "let x = arg0;\nreturn (arg1 ? y : 1) ? 2 : x;")
-	check("let x = arg0; return (arg1 ? 1 : y) ? 2 : x;", "let x = arg0;\nreturn (arg1 ? 1 : y) ? 2 : x;")
+	check("let x = arg0; return (arg1 ? 1 : 2) ? x : 3;", "return arg0;")
+	check("let x = arg0; return (arg1 ? 1 : 2) ? 3 : x;", "let x = arg0;\nreturn 3;")
+	check("let x = arg0; return (arg1 ? y : 1) ? x : 2;", "let x = arg0;\nreturn !arg1 || y ? x : 2;")
+	check("let x = arg0; return (arg1 ? 1 : y) ? x : 2;", "let x = arg0;\nreturn arg1 || y ? x : 2;")
+	check("let x = arg0; return (arg1 ? y : 1) ? 2 : x;", "let x = arg0;\nreturn !arg1 || y ? 2 : x;")
+	check("let x = arg0; return (arg1 ? 1 : y) ? 2 : x;", "let x = arg0;\nreturn arg1 || y ? 2 : x;")
 	check("let x = arg0; return y || x;", "let x = arg0;\nreturn y || x;")
 	check("let x = arg0; return y && x;", "let x = arg0;\nreturn y && x;")
 	check("let x = arg0; return y ?? x;", "let x = arg0;\nreturn y ?? x;")
