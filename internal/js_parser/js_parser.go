@@ -2977,6 +2977,9 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 			})}
 		}
 
+		// Allow `const a = b<c>`
+		p.trySkipTypeScriptTypeArgumentsWithBacktracking()
+
 		ref := p.storeNameInRef(name)
 		return js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}}
 
@@ -7509,7 +7512,6 @@ func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt 
 				prevStmt := result[len(result)-1]
 				if prevS, ok := prevStmt.Data.(*js_ast.SExpr); ok && !js_ast.IsSuperCall(prevStmt) && !js_ast.IsSuperCall(stmt) {
 					prevS.Value = js_ast.JoinWithComma(prevS.Value, s.Value)
-					prevS.DoesNotAffectTreeShaking = prevS.DoesNotAffectTreeShaking && s.DoesNotAffectTreeShaking
 					continue
 				}
 			}
@@ -8755,21 +8757,20 @@ func (p *parser) keepExprSymbolName(value js_ast.Expr, name string) js_ast.Expr 
 
 	// Make sure tree shaking removes this if the function is never used
 	value.Data.(*js_ast.ECall).CanBeUnwrappedIfUnused = true
+	value.Data.(*js_ast.ECall).IsKeepName = true
 	return value
 }
 
 func (p *parser) keepStmtSymbolName(loc logger.Loc, ref js_ast.Ref, name string) js_ast.Stmt {
 	p.symbols[ref.InnerIndex].Flags |= js_ast.DidKeepName
 
-	return js_ast.Stmt{Loc: loc, Data: &js_ast.SExpr{
-		Value: p.callRuntime(loc, "__name", []js_ast.Expr{
-			{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}},
-			{Loc: loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(name)}},
-		}),
+	call := p.callRuntime(loc, "__name", []js_ast.Expr{
+		{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}},
+		{Loc: loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(name)}},
+	})
+	call.Data.(*js_ast.ECall).IsKeepName = true
 
-		// Make sure tree shaking removes this if the function is never used
-		DoesNotAffectTreeShaking: true,
-	}}
+	return js_ast.Stmt{Loc: loc, Data: &js_ast.SExpr{Value: call}}
 }
 
 func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_ast.Stmt {
@@ -14282,12 +14283,6 @@ func (p *parser) stmtsCanBeRemovedIfUnused(stmts []js_ast.Stmt) bool {
 			}
 
 		case *js_ast.SExpr:
-			if s.DoesNotAffectTreeShaking {
-				// Expressions marked with this are automatically generated and have
-				// no side effects by construction.
-				break
-			}
-
 			if !p.exprCanBeRemovedIfUnused(s.Value) {
 				return false
 			}
@@ -14461,7 +14456,7 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		return true
 
 	case *js_ast.ECall:
-		canCallBeRemoved := e.CanBeUnwrappedIfUnused
+		canCallBeRemoved := e.CanBeUnwrappedIfUnused || e.IsKeepName
 
 		// Consider calls to our runtime "__publicField" function to be free of
 		// side effects for the purpose of expression removal. This allows class
@@ -15300,8 +15295,15 @@ func (p *parser) toAST(parts []js_ast.Part, hashbang string, directive string) j
 		for partIndex, part := range parts {
 			for _, declared := range part.DeclaredSymbols {
 				if declared.IsTopLevel {
-					p.topLevelSymbolToParts[declared.Ref] = append(
-						p.topLevelSymbolToParts[declared.Ref], uint32(partIndex))
+					// If this symbol was merged, use the symbol at the end of the
+					// linked list in the map. This is the case for multiple "var"
+					// declarations with the same name, for example.
+					ref := declared.Ref
+					for p.symbols[ref.InnerIndex].Link != js_ast.InvalidRef {
+						ref = p.symbols[ref.InnerIndex].Link
+					}
+					p.topLevelSymbolToParts[ref] = append(
+						p.topLevelSymbolToParts[ref], uint32(partIndex))
 				}
 			}
 		}

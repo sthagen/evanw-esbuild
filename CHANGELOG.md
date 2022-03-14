@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.14.26
+
+* Fix a tree shaking regression regarding `var` declarations ([#2080](https://github.com/evanw/esbuild/issues/2080), [#2085](https://github.com/evanw/esbuild/pull/2085), [#2098](https://github.com/evanw/esbuild/issues/2098), [#2099](https://github.com/evanw/esbuild/issues/2099))
+
+    Version 0.14.8 of esbuild enabled removal of duplicate function declarations when minification is enabled (see [#610](https://github.com/evanw/esbuild/issues/610)):
+
+    ```js
+    // Original code
+    function x() { return 1 }
+    console.log(x())
+    function x() { return 2 }
+
+    // Output (with --minify-syntax)
+    console.log(x());
+    function x() {
+      return 2;
+    }
+    ```
+
+    This transformation is safe because function declarations are "hoisted" in JavaScript, which means they are all done first before any other code is evaluted. This means the last function declaration will overwrite all previous function declarations with the same name.
+
+    However, this introduced an unintentional regression for `var` declarations in which all but the last declaration was dropped if tree-shaking was enabled. This only happens for top-level `var` declarations that re-declare the same variable multiple times. This regression has now been fixed:
+
+    ```js
+    // Original code
+    var x = 1
+    console.log(x)
+    var x = 2
+
+    // Old output (with --tree-shaking=true)
+    console.log(x);
+    var x = 2;
+
+    // New output (with --tree-shaking=true)
+    var x = 1;
+    console.log(x);
+    var x = 2;
+    ```
+
+    This case now has test coverage.
+
+* Add support for parsing "instantiation expressions" from TypeScript 4.7 ([#2038](https://github.com/evanw/esbuild/pull/2038))
+
+    The upcoming version of TypeScript now lets you specify `<...>` type parameters on a JavaScript identifier without using a call expression:
+
+    ```ts
+    const ErrorMap = Map<string, Error>;  // new () => Map<string, Error>
+    const errorMap = new ErrorMap();  // Map<string, Error>
+    ```
+
+    With this release, esbuild can now parse these new type annotations. This feature was contributed by [@g-plane](https://github.com/g-plane).
+
+* Avoid `new Function` in esbuild's library code ([#2081](https://github.com/evanw/esbuild/issues/2081))
+
+    Some JavaScript environments such as Cloudflare Workers or Deno Deploy don't allow `new Function` because they disallow dynamic JavaScript evaluation. Previously esbuild's WebAssembly-based library used this to construct the WebAssembly worker function. With this release, the code is now inlined without using `new Function` so it will be able to run even when this restriction is in place.
+
+* Drop superfluous `__name()` calls ([#2062](https://github.com/evanw/esbuild/pull/2062))
+
+    When the `--keep-names` option is specified, esbuild inserts calls to a `__name` helper function to ensure that the `.name` property on function and class objects remains consistent even if the function or class name is renamed to avoid a name collision or because name minification is enabled. With this release, esbuild will now try to omit these calls to the `__name` helper function when the name of the function or class object was not renamed during the linking process after all:
+
+    ```js
+    // Original code
+    import { foo as foo1 } from 'data:text/javascript,export function foo() { return "foo1" }'
+    import { foo as foo2 } from 'data:text/javascript,export function foo() { return "foo2" }'
+    console.log(foo1.name, foo2.name)
+
+    // Old output (with --bundle --keep-names)
+    (() => {
+      var __defProp = Object.defineProperty;
+      var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+      function foo() {
+        return "foo1";
+      }
+      __name(foo, "foo");
+      function foo2() {
+        return "foo2";
+      }
+      __name(foo2, "foo");
+      console.log(foo.name, foo2.name);
+    })();
+
+    // New output (with --bundle --keep-names)
+    (() => {
+      var __defProp = Object.defineProperty;
+      var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+      function foo() {
+        return "foo1";
+      }
+      function foo2() {
+        return "foo2";
+      }
+      __name(foo2, "foo");
+      console.log(foo.name, foo2.name);
+    })();
+    ```
+
+    Notice how one of the calls to `__name` is now no longer printed. This change was contributed by [@indutny](https://github.com/indutny).
+
 ## 0.14.25
 
 * Reduce minification of CSS transforms to avoid Safari bugs ([#2057](https://github.com/evanw/esbuild/issues/2057))
