@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck
 
 check-go-version:
-	@go version | grep ' go1\.17\.8 ' || (echo 'Please install Go version 1.17.8' && false)
+	@go version | grep ' go1\.18 ' || (echo 'Please install Go version 1.18.0' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -507,7 +507,7 @@ clean:
 	rm -rf npm/esbuild-sunos-64/bin
 	rm -rf npm/esbuild/bin
 	rm -f npm/esbuild-wasm/esbuild.wasm npm/esbuild-wasm/wasm_exec.js npm/esbuild-wasm/exit0.js
-	rm -r npm/esbuild/install.js
+	rm -f npm/esbuild/install.js
 	rm -rf npm/esbuild/lib
 	rm -rf npm/esbuild-wasm/esm
 	rm -rf npm/esbuild-wasm/lib
