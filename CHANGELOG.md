@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.14.31
+
+* Add support for parsing "optional variance annotations" from TypeScript 4.7 ([#2102](https://github.com/evanw/esbuild/pull/2102))
+
+    The upcoming version of TypeScript now lets you specify `in` and/or `out` on certain type parameters (specifically only on a type alias, an interface declaration, or a class declaration). These modifiers control type paramemter covariance and contravariance:
+
+    ```ts
+    type Provider<out T> = () => T;
+    type Consumer<in T> = (x: T) => void;
+    type Mapper<in T, out U> = (x: T) => U;
+    type Processor<in out T> = (x: T) => T;
+    ```
+
+    With this release, esbuild can now parse these new type parameter modifiers. This feature was contributed by [@magic-akari](https://github.com/magic-akari).
+
+* Improve support for `super()` constructor calls in nested locations ([#2134](https://github.com/evanw/esbuild/issues/2134))
+
+    In JavaScript, derived classes must call `super()` somewhere in the `constructor` method before being able to access `this`. Class public instance fields, class private instance fields, and TypeScript constructor parameter properties can all potentially cause code which uses `this` to be inserted into the constructor body, which must be inserted after the `super()` call. To make these insertions straightforward to implement, the TypeScript compiler doesn't allow calling `super()` somewhere other than in a root-level statement in the constructor body in these cases.
+
+    Previously esbuild's class transformations only worked correctly when `super()` was called in a root-level statement in the constructor body, just like the TypeScript compiler. But with this release, esbuild should now generate correct code as long as the call to `super()` appears anywhere in the constructor body:
+
+    ```ts
+    // Original code
+    class Foo extends Bar {
+      constructor(public skip = false) {
+        if (skip) {
+          super(null)
+          return
+        }
+        super({ keys: [] })
+      }
+    }
+
+    // Old output (incorrect)
+    class Foo extends Bar {
+      constructor(skip = false) {
+        if (skip) {
+          super(null);
+          return;
+        }
+        super({ keys: [] });
+        this.skip = skip;
+      }
+    }
+
+    // New output (correct)
+    class Foo extends Bar {
+      constructor(skip = false) {
+        var __super = (...args) => {
+          super(...args);
+          this.skip = skip;
+        };
+        if (skip) {
+          __super(null);
+          return;
+        }
+        __super({ keys: [] });
+      }
+    }
+    ```
+
+* Add support for the new `@container` CSS rule ([#2127](https://github.com/evanw/esbuild/pull/2127))
+
+    This release adds support for [`@container`](https://drafts.csswg.org/css-contain-3/#container-rule) in CSS files. This means esbuild will now pretty-print and minify these rules better since it now better understands the internal structure of these rules:
+
+    ```css
+    /* Original code */
+    @container (width <= 150px) {
+      #inner {
+        color: yellow;
+      }
+    }
+
+    /* Old output (with --minify) */
+    @container (width <= 150px){#inner {color: yellow;}}
+
+    /* New output (with --minify) */
+    @container (width <= 150px){#inner{color:#ff0}}
+    ```
+
+    This was contributed by [@yisibl](https://github.com/yisibl).
+
+* Avoid CSS cascade-dependent keywords in the `font-family` property ([#2135](https://github.com/evanw/esbuild/pull/2135))
+
+    In CSS, [`initial`](https://developer.mozilla.org/en-US/docs/Web/CSS/initial), [`inherit`](https://developer.mozilla.org/en-US/docs/Web/CSS/inherit), and [`unset`](https://developer.mozilla.org/en-US/docs/Web/CSS/unset) are [CSS-wide keywords](https://drafts.csswg.org/css-values-4/#css-wide-keywords) which means they have special behavior when they are specified as a property value. For example, while `font-family: 'Arial'` (as a string) and `font-family: Arial` (as an identifier) are the same, `font-family: 'inherit'` (as a string) uses the font family named `inherit` but `font-family: inherit` (as an identifier) inherits the font family from the parent element. This means esbuild must not unquote these CSS-wide keywords (and `default`, which is also reserved) during minification to avoid changing the meaning of the minified CSS.
+
+    The current draft of the new CSS Cascading and Inheritance Level 5 specification adds another concept called [cascade-dependent keywords](https://drafts.csswg.org/css-cascade-5/#defaulting-keywords) of which there are two: [`revert`](https://developer.mozilla.org/en-US/docs/Web/CSS/revert) and [`revert-layer`](https://developer.mozilla.org/en-US/docs/Web/CSS/revert-layer). This release of esbuild guards against unquoting these additional keywords as well to avoid accidentally breaking pages that use a font with the same name:
+
+    ```css
+    /* Original code */
+    a { font-family: 'revert'; }
+    b { font-family: 'revert-layer', 'Segoe UI', serif; }
+
+    /* Old output (with --minify) */
+    a{font-family:revert}b{font-family:revert-layer,Segoe UI,serif}
+
+    /* New output (with --minify) */
+    a{font-family:"revert"}b{font-family:"revert-layer",Segoe UI,serif}
+    ```
+
+    This fix was contributed by [@yisibl](https://github.com/yisibl).
+
 ## 0.14.30
 
 * Change the context of TypeScript parameter decorators ([#2147](https://github.com/evanw/esbuild/issues/2147))
@@ -161,15 +263,15 @@
 
     ```css
     /* Original code */
-    @font-palette-values Foo { base-palette: 1; }
+    @font-palette-values --Foo { base-palette: 1; }
     @counter-style bar { symbols: b a r; }
     @font-feature-values Bop { @styleset { test: 1; } }
 
     /* Old output (with --minify) */
-    @font-palette-values Foo{base-palette: 1;}@counter-style bar{symbols: b a r;}@font-feature-values Bop{@styleset {test: 1;}}
+    @font-palette-values --Foo{base-palette: 1;}@counter-style bar{symbols: b a r;}@font-feature-values Bop{@styleset {test: 1;}}
 
     /* New output (with --minify) */
-    @font-palette-values Foo{base-palette:1}@counter-style bar{symbols:b a r}@font-feature-values Bop{@styleset{test:1}}
+    @font-palette-values --Foo{base-palette:1}@counter-style bar{symbols:b a r}@font-feature-values Bop{@styleset{test:1}}
     ```
 
 * Upgrade to Go 1.18.0 ([#2105](https://github.com/evanw/esbuild/issues/2105))
@@ -447,7 +549,7 @@
 
 * Remove simplified statement-level literal expressions ([#2063](https://github.com/evanw/esbuild/issues/2063))
 
-    With this release, esbuild now removes simplified statement-level expressions if the simplified result is a literal expression even when minification is disabled. Previously this was only done when minification is enabled. This change was only made because some people are bothered by seeing top-level literal expressions. This change has no effect on code behavior.
+    With this release, esbuild now removes simplified statement-level expressions if the simplified result is a literal expression even when minification is disabled. Previously this was only done when minification is enabled. This change was only made because some people are bothered by seeing top-level literal expressions. This change has no effect on code behavior.
 
 * Ignore `.d.ts` rules in `paths` in `tsconfig.json` files ([#2074](https://github.com/evanw/esbuild/issues/2074), [#2075](https://github.com/evanw/esbuild/pull/2075))
 
@@ -3729,15 +3831,15 @@ In addition to the breaking changes above, the following features are also inclu
 
 * Minify the syntax `Infinity` to `1 / 0` ([#1385](https://github.com/evanw/esbuild/pull/1385))
 
-	The `--minify-syntax` flag (automatically enabled by `--minify`) will now minify the expression `Infinity` to `1 / 0`, which uses fewer bytes:
+    The `--minify-syntax` flag (automatically enabled by `--minify`) will now minify the expression   `Infinity` to `1 / 0`, which uses fewer bytes:
 
-	```js
-	// Original code
-	const a = Infinity;
+    ```js
+    // Original code
+    const a = Infinity;
 
-	// Output with "--minify-syntax"
-	const a = 1 / 0;
-	```
+    // Output with "--minify-syntax"
+    const a = 1 / 0;
+    ```
 
     This change was contributed by [@Gusted](https://github.com/Gusted).
 
@@ -5391,7 +5493,7 @@ In addition to the breaking changes above, the following features are also inclu
 
 * Fix some obscure TypeScript type parsing edge cases
 
-    In TypeScript, type parameters come after a type and are placed in angle brackets like `Foo<T>`. However, certain built-in types do not accept type parameters including primitive types such as `number`. This means `if (x as number < 1) {}` is not a syntax error while `if (x as Foo < 1) {}` is a syntax error. This release changes TypeScript type parsing to allow type parameters in a more restricted set of situations, which should hopefully better resolve these type parsing ambiguities.
+    In TypeScript, type parameters come after a type and are placed in angle brackets like `Foo<T>`. However, certain built-in types do not accept type parameters including primitive types such as `number`. This means `if (x as number < 1) {}` is not a syntax error while `if (x as Foo < 1) {}` is a syntax error. This release changes TypeScript type parsing to allow type parameters in a more restricted set of situations, which should hopefully better resolve these type parsing ambiguities.
 
 ## 0.10.2
 

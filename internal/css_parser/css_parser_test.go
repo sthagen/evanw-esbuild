@@ -855,12 +855,12 @@ func TestAtRule(t *testing.T) {
 
 	// https://drafts.csswg.org/css-fonts-4/#font-palette-values
 	expectPrinted(t, `
-		@font-palette-values Augusta {
+		@font-palette-values --Augusta {
 			font-family: Handover Sans;
 			base-palette: 3;
 			override-colors: 1 rgb(43, 12, 9), 2 #000, 3 var(--highlight)
 		}
-	`, `@font-palette-values Augusta {
+	`, `@font-palette-values --Augusta {
   font-family: Handover Sans;
   base-palette: 3;
   override-colors:
@@ -869,6 +869,32 @@ func TestAtRule(t *testing.T) {
     3 var(--highlight);
 }
 `)
+
+	// https://drafts.csswg.org/css-contain-3/#container-rule
+	expectPrinted(t, `
+		@container my-layout (inline-size > 45em) {
+			.foo {
+				color: skyblue;
+			}
+		}
+	`, `@container my-layout (inline-size > 45em) {
+  .foo {
+    color: skyblue;
+  }
+}
+`)
+	expectPrintedMinify(t, `@container card ( inline-size > 30em ) and style( --responsive = true ) {
+	.foo {
+		color: skyblue;
+	}
+}`, "@container card (inline-size > 30em) and style(--responsive = true){.foo{color:skyblue}}")
+	expectPrintedMangleMinify(t, `@supports ( container-type: size ) {
+	@container ( width <= 150px ) {
+		#inner {
+			background-color: skyblue;
+		}
+	}
+}`, "@supports (container-type: size){@container (width <= 150px){#inner{background-color:#87ceeb}}}")
 
 	// https://drafts.csswg.org/css-counter-styles/#the-counter-style-rule
 	expectPrinted(t, `
@@ -1788,6 +1814,12 @@ func TestFontFamily(t *testing.T) {
 
 	expectPrintedMangleMinify(t, "a {font-family: 'aaa bbb', serif }", "a{font-family:aaa bbb,serif}")
 	expectPrintedMangleMinify(t, "a {font-family: 'aaa bbb', 'ccc ddd' }", "a{font-family:aaa bbb,ccc ddd}")
+	expectPrintedMangleMinify(t, "a {font-family: 'initial', serif;}", "a{font-family:\"initial\",serif}")
+	expectPrintedMangleMinify(t, "a {font-family: 'inherit', serif;}", "a{font-family:\"inherit\",serif}")
+	expectPrintedMangleMinify(t, "a {font-family: 'unset', serif;}", "a{font-family:\"unset\",serif}")
+	expectPrintedMangleMinify(t, "a {font-family: 'revert', serif;}", "a{font-family:\"revert\",serif}")
+	expectPrintedMangleMinify(t, "a {font-family: 'revert-layer', 'Segoe UI', serif;}", "a{font-family:\"revert-layer\",Segoe UI,serif}")
+	expectPrintedMangleMinify(t, "a {font-family: 'default', serif;}", "a{font-family:\"default\",serif}")
 }
 
 func TestFont(t *testing.T) {
