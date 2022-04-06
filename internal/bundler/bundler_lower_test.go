@@ -558,7 +558,7 @@ func TestLowerPrivateGetterSetterNext(t *testing.T) {
 	lower_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
-				class Foo {
+				export class Foo {
 					get #foo() { return this.foo }
 					set #bar(val) { this.bar = val }
 					get #prop() { return this.prop }
@@ -692,7 +692,7 @@ func TestLowerPrivateMethodNext(t *testing.T) {
 	lower_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
-				class Foo {
+				export class Foo {
 					#field
 					#method() {}
 					baseline() {
@@ -973,6 +973,16 @@ func TestLowerAsyncSuperES2017NoBundle(t *testing.T) {
 					async a() { return class { [super.foo] = 123 } }
 					b = async () => class { [super.foo] = 123 }
 				}
+
+				// This covers putting the generated temporary variable inside the loop
+				for (let i = 0; i < 3; i++) {
+					objs.push({
+						__proto__: {
+							foo() { return i },
+						},
+						async bar() { return super.foo() },
+					})
+				}
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
@@ -1035,6 +1045,16 @@ func TestLowerAsyncSuperES2016NoBundle(t *testing.T) {
 				class Derived2 extends Base {
 					async a() { return class { [super.foo] = 123 } }
 					b = async () => class { [super.foo] = 123 }
+				}
+
+				// This covers putting the generated temporary variable inside the loop
+				for (let i = 0; i < 3; i++) {
+					objs.push({
+						__proto__: {
+							foo() { return i },
+						},
+						async bar() { return super.foo() },
+					})
 				}
 			`,
 		},
@@ -1445,6 +1465,68 @@ func TestLowerStaticAsyncArrowSuperSetterES2016(t *testing.T) {
 		options: config.Options{
 			Mode:                  config.ModeBundle,
 			UnsupportedJSFeatures: es(2016),
+			AbsOutputFile:         "/out.js",
+		},
+	})
+}
+
+func TestLowerPrivateSuperES2022(t *testing.T) {
+	lower_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				export { default as foo1 } from "./foo1"
+				export { default as foo2 } from "./foo2"
+				export { default as foo3 } from "./foo3"
+				export { default as foo4 } from "./foo4"
+				export { default as foo5 } from "./foo5"
+				export { default as foo6 } from "./foo6"
+				export { default as foo7 } from "./foo7"
+				export { default as foo8 } from "./foo8"
+			`,
+			"/foo1.js": `export default class extends x { #foo() { super.foo() } }`,
+			"/foo2.js": `export default class extends x { #foo() { super.foo++ } }`,
+			"/foo3.js": `export default class extends x { static #foo() { super.foo() } }`,
+			"/foo4.js": `export default class extends x { static #foo() { super.foo++ } }`,
+			"/foo5.js": `export default class extends x { #foo = () => { super.foo() } }`,
+			"/foo6.js": `export default class extends x { #foo = () => { super.foo++ } }`,
+			"/foo7.js": `export default class extends x { static #foo = () => { super.foo() } }`,
+			"/foo8.js": `export default class extends x { static #foo = () => { super.foo++ } }`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:                  config.ModeBundle,
+			UnsupportedJSFeatures: es(2022),
+			AbsOutputFile:         "/out.js",
+		},
+	})
+}
+
+func TestLowerPrivateSuperES2021(t *testing.T) {
+	lower_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				export { default as foo1 } from "./foo1"
+				export { default as foo2 } from "./foo2"
+				export { default as foo3 } from "./foo3"
+				export { default as foo4 } from "./foo4"
+				export { default as foo5 } from "./foo5"
+				export { default as foo6 } from "./foo6"
+				export { default as foo7 } from "./foo7"
+				export { default as foo8 } from "./foo8"
+			`,
+			"/foo1.js": `export default class extends x { #foo() { super.foo() } }`,
+			"/foo2.js": `export default class extends x { #foo() { super.foo++ } }`,
+			"/foo3.js": `export default class extends x { static #foo() { super.foo() } }`,
+			"/foo4.js": `export default class extends x { static #foo() { super.foo++ } }`,
+			"/foo5.js": `export default class extends x { #foo = () => { super.foo() } }`,
+			"/foo6.js": `export default class extends x { #foo = () => { super.foo++ } }`,
+			"/foo7.js": `export default class extends x { static #foo = () => { super.foo() } }`,
+			"/foo8.js": `export default class extends x { static #foo = () => { super.foo++ } }`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:                  config.ModeBundle,
+			UnsupportedJSFeatures: es(2021),
 			AbsOutputFile:         "/out.js",
 		},
 	})
@@ -2097,7 +2179,7 @@ func TestLowerNullishCoalescingAssignmentIssue1493(t *testing.T) {
 	lower_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
-				class A {
+				export class A {
 					#a;
 					f() {
 						this.#a ??= 1;

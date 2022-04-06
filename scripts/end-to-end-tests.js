@@ -2622,15 +2622,15 @@
   tests.push(
     test(['in.js', '--outfile=node.js', '--minify'], {
       // Top-level names should not be minified
-      'in.js': `function foo() {} if (foo.name !== 'foo') throw 'fail'`,
+      'in.js': `function foo() {} if (foo.name !== 'foo') throw 'fail: ' + foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify'], {
       // Nested names should be minified
-      'in.js': `(() => { function foo() {} if (foo.name === 'foo') throw 'fail' })()`,
+      'in.js': `(() => { function foo() {} if (foo.name === 'foo') throw 'fail: ' + foo.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--target=es6'], {
       // Importing the "__pow()" runtime function should not affect top-level name minification
-      'in.js': `let _8 = 2 ** 3; function foo8() {} if (foo8.name !== 'foo' + _8) throw 'fail'`,
+      'in.js': `let _8 = 2 ** 3; function foo8() {} if (foo8.name !== 'foo' + _8) throw 'fail: ' + foo8.name`,
     }),
   )
 
@@ -2639,274 +2639,274 @@
     tests.push(
       // Arrow functions
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn = () => {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn = () => {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; fn = () => {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; fn = () => {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let [fn = () => {}] = []; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let [fn = () => {}] = []; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; [fn = () => {}] = []; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; [fn = () => {}] = []; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let {fn = () => {}} = {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let {fn = () => {}} = {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let {prop: fn = () => {}} = {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let {prop: fn = () => {}} = {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; ({fn = () => {}} = {}); if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; ({fn = () => {}} = {}); if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; ({prop: fn = () => {}} = {}); if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; ({prop: fn = () => {}} = {}); if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = {}; obj.fn = () => {}; if (obj.fn.name !== '') throw 'fail' })()`,
+        'in.js': `(() => { let obj = {}; obj.fn = () => {}; if (obj.fn.name !== '') throw 'fail: ' + obj.fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = {}; obj['fn'] = () => {}; if (obj.fn.name !== '') throw 'fail' })()`,
+        'in.js': `(() => { let obj = {}; obj['fn'] = () => {}; if (obj.fn.name !== '') throw 'fail: ' + obj.fn.name })()`,
       }),
 
       // Functions
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { function foo() {} if (foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { function foo() {} if (foo.name !== 'foo') throw 'fail: ' + foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
         'in.js': `(() => { let fn = function foo() {}; if (fn.name !== 'foo') throw 'fail' })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn = function() {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn = function() {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; fn = function() {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; fn = function() {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let [fn = function() {}] = []; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let [fn = function() {}] = []; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; [fn = function() {}] = []; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; [fn = function() {}] = []; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let {fn = function() {}} = {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let {fn = function() {}} = {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let {prop: fn = function() {}} = {}; if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let {prop: fn = function() {}} = {}; if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; ({fn = function() {}} = {}); if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; ({fn = function() {}} = {}); if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let fn; ({prop: fn = function() {}} = {}); if (fn.name !== 'fn') throw 'fail' })()`,
+        'in.js': `(() => { let fn; ({prop: fn = function() {}} = {}); if (fn.name !== 'fn') throw 'fail: ' + fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = {}; obj.fn = function() {}; if (obj.fn.name !== '') throw 'fail' })()`,
+        'in.js': `(() => { let obj = {}; obj.fn = function() {}; if (obj.fn.name !== '') throw 'fail: ' + obj.fn.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = {}; obj['fn'] = function() {}; if (obj.fn.name !== '') throw 'fail' })()`,
+        'in.js': `(() => { let obj = {}; obj['fn'] = function() {}; if (obj.fn.name !== '') throw 'fail: ' + obj.fn.name })()`,
       }),
 
       // Classes
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { class foo {} if (foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { class foo {} if (foo.name !== 'foo') throw 'fail: ' + foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let cls = class foo {}; if (cls.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { let cls = class foo {}; if (cls.name !== 'foo') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let cls = class {}; if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let cls = class {}; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let cls; cls = class {}; if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let cls; cls = class {}; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let [cls = class {}] = []; if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let [cls = class {}] = []; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let cls; [cls = class {}] = []; if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let cls; [cls = class {}] = []; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let {cls = class {}} = {}; if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let {cls = class {}} = {}; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let {prop: cls = class {}} = {}; if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let {prop: cls = class {}} = {}; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let cls; ({cls = class {}} = {}); if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let cls; ({cls = class {}} = {}); if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let cls; ({prop: cls = class {}} = {}); if (cls.name !== 'cls') throw 'fail' })()`,
+        'in.js': `(() => { let cls; ({prop: cls = class {}} = {}); if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = {}; obj.cls = class {}; if (obj.cls.name !== '') throw 'fail' })()`,
+        'in.js': `(() => { let obj = {}; obj.cls = class {}; if (obj.cls.name !== '') throw 'fail: ' + obj.cls.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = {}; obj['cls'] = class {}; if (obj.cls.name !== '') throw 'fail' })()`,
+        'in.js': `(() => { let obj = {}; obj['cls'] = class {}; if (obj.cls.name !== '') throw 'fail: ' + obj.cls.name })()`,
       }),
 
       // Methods
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = { foo() {} }; if (obj.foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { let obj = { foo() {} }; if (obj.foo.name !== 'foo') throw 'fail: ' + obj.foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let obj = { foo: () => {} }; if (obj.foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { let obj = { foo: () => {} }; if (obj.foo.name !== 'foo') throw 'fail: ' + obj.foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { class Foo { foo() {} }; if (new Foo().foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { class Foo { foo() {} }; if (new Foo().foo.name !== 'foo') throw 'fail: ' + new Foo().foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { class Foo { static foo() {} }; if (Foo.foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { class Foo { static foo() {} }; if (Foo.foo.name !== 'foo') throw 'fail: ' + Foo.foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let Foo = class { foo() {} }; if (new Foo().foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { let Foo = class { foo() {} }; if (new Foo().foo.name !== 'foo') throw 'fail: ' + new Foo().foo.name })()`,
       }),
       test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
-        'in.js': `(() => { let Foo = class { static foo() {} }; if (Foo.foo.name !== 'foo') throw 'fail' })()`,
+        'in.js': `(() => { let Foo = class { static foo() {} }; if (Foo.foo.name !== 'foo') throw 'fail: ' + Foo.foo.name })()`,
       }),
     )
   }
   tests.push(
     // Arrow functions
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default () => {}`,
     }),
 
     // Functions
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'foo') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'foo') throw 'fail: ' + foo.name`,
       'other.js': `export default function foo() {}`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default function() {}`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default (function() {})`,
     }),
 
     // Classes
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'foo') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'foo') throw 'fail: ' + foo.name`,
       'other.js': `export default class foo {}`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default class {}`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default (class {})`,
     }),
     test(['in.js', '--outfile=out.js', '--minify', '--keep-names', '--format=esm'], {
-      'node.js': `import foo from './out.js'; if (foo.name !== 'foo') throw 'fail'`,
+      'node.js': `import foo from './out.js'; if (foo.name !== 'foo') throw 'fail: ' + foo.name`,
       'in.js': `export default class foo {}`,
     }),
     test(['in.js', '--outfile=out.js', '--minify', '--keep-names', '--format=esm'], {
-      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail'`,
+      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'in.js': `export default class {}`,
     }),
     test(['in.js', '--outfile=out.js', '--minify', '--keep-names', '--format=esm'], {
-      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail'`,
+      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'in.js': `export default (class {})`,
     }),
 
     // Class fields
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { class Foo { foo = () => {} } if (new Foo().foo.name !== 'foo') throw 'fail' })()`,
+      'in.js': `(() => { class Foo { foo = () => {} } if (new Foo().foo.name !== 'foo') throw 'fail: ' + new Foo().foo.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { class Foo { static foo = () => {} } if (Foo.foo.name !== 'foo') throw 'fail' })()`,
+      'in.js': `(() => { class Foo { static foo = () => {} } if (Foo.foo.name !== 'foo') throw 'fail: ' + Foo.foo.name })()`,
     }),
 
     // Private methods
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { class foo { a() { return this.#b } #b() {} } if (foo.name !== 'foo') throw 'fail' })()`,
+      'in.js': `(() => { class foo { a() { return this.#b } #b() {} } if (foo.name !== 'foo') throw 'fail: ' + foo.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let cls = class foo { a() { return this.#b } #b() {} }; if (cls.name !== 'foo') throw 'fail' })()`,
+      'in.js': `(() => { let cls = class foo { a() { return this.#b } #b() {} }; if (cls.name !== 'foo') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let cls = class { a() { return this.#b } #b() {} }; if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let cls = class { a() { return this.#b } #b() {} }; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let cls; cls = class { a() { return this.#b } #b() {} }; if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let cls; cls = class { a() { return this.#b } #b() {} }; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let [cls = class { a() { return this.#b } #b() {} }] = []; if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let [cls = class { a() { return this.#b } #b() {} }] = []; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let cls; [cls = class { a() { return this.#b } #b() {} }] = []; if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let cls; [cls = class { a() { return this.#b } #b() {} }] = []; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let {cls = class { a() { return this.#b } #b() {} }} = {}; if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let {cls = class { a() { return this.#b } #b() {} }} = {}; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let {prop: cls = class { a() { return this.#b } #b() {} }} = {}; if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let {prop: cls = class { a() { return this.#b } #b() {} }} = {}; if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let cls; ({cls = class { a() { return this.#b } #b() {} }} = {}); if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let cls; ({cls = class { a() { return this.#b } #b() {} }} = {}); if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `(() => { let cls; ({prop: cls = class { a() { return this.#b } #b() {} }} = {}); if (cls.name !== 'cls') throw 'fail' })()`,
+      'in.js': `(() => { let cls; ({prop: cls = class { a() { return this.#b } #b() {} }} = {}); if (cls.name !== 'cls') throw 'fail: ' + cls.name })()`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'foo') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'foo') throw 'fail: ' + foo.name`,
       'other.js': `export default class foo { a() { return this.#b } #b() {} }`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default class { a() { return this.#b } #b() {} }`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--bundle', '--target=es6'], {
-      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail'`,
+      'in.js': `import foo from './other'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'other.js': `export default (class { a() { return this.#b } #b() {} })`,
     }),
     test(['in.js', '--outfile=out.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'node.js': `import foo from './out.js'; if (foo.name !== 'foo') throw 'fail'`,
+      'node.js': `import foo from './out.js'; if (foo.name !== 'foo') throw 'fail: ' + foo.name`,
       'in.js': `export default class foo { a() { return this.#b } #b() {} }`,
     }),
     test(['in.js', '--outfile=out.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail'`,
+      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'in.js': `export default class { a() { return this.#b } #b() {} }`,
     }),
     test(['in.js', '--outfile=out.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail'`,
+      'node.js': `import foo from './out.js'; if (foo.name !== 'default') throw 'fail: ' + foo.name`,
       'in.js': `export default (class { a() { return this.#b } #b() {} })`,
     }),
 
     // Private fields
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { foo = this.#foo; #foo() {} } if (new Foo().foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { foo = this.#foo; #foo() {} } if (new Foo().foo.name !== '#foo') throw 'fail: ' + new Foo().foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { static foo = this.#foo; static #foo() {} } if (Foo.foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { static foo = this.#foo; static #foo() {} } if (Foo.foo.name !== '#foo') throw 'fail: ' + Foo.foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { #foo = function() {}; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { #foo = function() {}; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail: ' + new Foo().foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { static #foo = function() {}; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { static #foo = function() {}; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail: ' + Foo.foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { #foo = () => {}; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { #foo = () => {}; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail: ' + new Foo().foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { static #foo = () => {}; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { static #foo = () => {}; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail: ' + Foo.foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { #foo = class {}; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { #foo = class {}; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail: ' + new Foo().foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { static #foo = class {}; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { static #foo = class {}; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail: ' + Foo.foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { #foo = class { #bar = 123; bar = this.#bar }; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { #foo = class { #bar = 123; bar = this.#bar }; foo = this.#foo } if (new Foo().foo.name !== '#foo') throw 'fail: ' + new Foo().foo.name`,
     }),
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
-      'in.js': `class Foo { static #foo = class { #bar = 123; bar = this.#bar }; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail'`,
+      'in.js': `class Foo { static #foo = class { #bar = 123; bar = this.#bar }; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail: ' + Foo.foo.name`,
     }),
   )
 
@@ -4126,7 +4126,7 @@
   }
 
   // Async lowering tests
-  for (let flags of [[], ['--target=es6']]) {
+  for (let flags of [[], ['--target=es2017'], ['--target=es6']]) {
     tests.push(
       test(['in.js', '--outfile=node.js'].concat(flags), {
         'in.js': `
@@ -4582,20 +4582,47 @@
               bar4 = async () => async () => super.foo('bar4')
               async baz1() { return () => super.foo('baz1') }
               async baz2() { return () => () => super.foo('baz2') }
+
+              #foo1() { return async () => super.foo('foo1') }
+              #foo2() { return async () => () => super.foo('foo2') }
+              #foo3() { return () => async () => super.foo('foo3') }
+              #foo4() { return async () => async () => super.foo('foo4') }
+              #bar1 = async () => super.foo('bar1')
+              #bar2 = async () => () => super.foo('bar2')
+              #bar3 = () => async () => super.foo('bar3')
+              #bar4 = async () => async () => super.foo('bar4')
+              async #baz1() { return () => super.foo('baz1') }
+              async #baz2() { return () => () => super.foo('baz2') }
+
+              async run() {
+                await derived.foo1()();
+                (await derived.foo2()())();
+                await derived.foo3()()();
+                await (await derived.foo4()())();
+                await derived.bar1();
+                (await derived.bar2())();
+                await derived.bar3()();
+                await (await derived.bar4())();
+                (await derived.baz1())();
+                (await derived.baz2())()();
+
+                await this.#foo1()();
+                (await this.#foo2()())();
+                await this.#foo3()()();
+                await (await this.#foo4()())();
+                await this.#bar1();
+                (await this.#bar2())();
+                await this.#bar3()();
+                await (await this.#bar4())();
+                (await this.#baz1())();
+                (await this.#baz2())()();
+              }
             }
-            const derived = new Derived;
-            await derived.foo1()();
-            (await derived.foo2()())();
-            await derived.foo3()()();
-            await (await derived.foo4()())();
-            await derived.bar1();
-            (await derived.bar2())();
-            await derived.bar3()();
-            await (await derived.bar4())();
-            (await derived.baz1())();
-            (await derived.baz2())()();
-            const observed = log.join(',');
-            const expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            let derived = new Derived;
+            await derived.run();
+            let observed = log.join(',');
+            let expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            expected += ',' + expected;
             if (observed !== expected) throw 'fail: ' + observed + ' != ' + expected;
           }
         `,
@@ -4619,20 +4646,47 @@
               bar4 = async () => async () => super.foo = 'bar4'
               async baz1() { return () => super.foo = 'baz1' }
               async baz2() { return () => () => super.foo = 'baz2' }
+
+              #foo1() { return async () => super.foo = 'foo1' }
+              #foo2() { return async () => () => super.foo = 'foo2' }
+              #foo3() { return () => async () => super.foo = 'foo3' }
+              #foo4() { return async () => async () => super.foo = 'foo4' }
+              #bar1 = async () => super.foo = 'bar1'
+              #bar2 = async () => () => super.foo = 'bar2'
+              #bar3 = () => async () => super.foo = 'bar3'
+              #bar4 = async () => async () => super.foo = 'bar4'
+              async #baz1() { return () => super.foo = 'baz1' }
+              async #baz2() { return () => () => super.foo = 'baz2' }
+
+              async run() {
+                await this.foo1()();
+                (await this.foo2()())();
+                await this.foo3()()();
+                await (await this.foo4()())();
+                await this.bar1();
+                (await this.bar2())();
+                await this.bar3()();
+                await (await this.bar4())();
+                (await this.baz1())();
+                (await this.baz2())()();
+
+                await this.#foo1()();
+                (await this.#foo2()())();
+                await this.#foo3()()();
+                await (await this.#foo4()())();
+                await this.#bar1();
+                (await this.#bar2())();
+                await this.#bar3()();
+                await (await this.#bar4())();
+                (await this.#baz1())();
+                (await this.#baz2())()();
+              }
             }
-            const derived = new Derived;
-            await derived.foo1()();
-            (await derived.foo2()())();
-            await derived.foo3()()();
-            await (await derived.foo4()())();
-            await derived.bar1();
-            (await derived.bar2())();
-            await derived.bar3()();
-            await (await derived.bar4())();
-            (await derived.baz1())();
-            (await derived.baz2())()();
-            const observed = log.join(',');
-            const expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            let derived = new Derived;
+            await derived.run();
+            let observed = log.join(',');
+            let expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            expected += ',' + expected;
             if (observed !== expected) throw 'fail: ' + observed + ' != ' + expected;
           }
         `,
@@ -4656,19 +4710,46 @@
               static bar4 = async () => async () => super.foo('bar4')
               static async baz1() { return () => super.foo('baz1') }
               static async baz2() { return () => () => super.foo('baz2') }
+
+              static #foo1() { return async () => super.foo('foo1') }
+              static #foo2() { return async () => () => super.foo('foo2') }
+              static #foo3() { return () => async () => super.foo('foo3') }
+              static #foo4() { return async () => async () => super.foo('foo4') }
+              static #bar1 = async () => super.foo('bar1')
+              static #bar2 = async () => () => super.foo('bar2')
+              static #bar3 = () => async () => super.foo('bar3')
+              static #bar4 = async () => async () => super.foo('bar4')
+              static async #baz1() { return () => super.foo('baz1') }
+              static async #baz2() { return () => () => super.foo('baz2') }
+
+              static async run() {
+                await this.foo1()();
+                (await this.foo2()())();
+                await this.foo3()()();
+                await (await this.foo4()())();
+                await this.bar1();
+                (await this.bar2())();
+                await this.bar3()();
+                await (await this.bar4())();
+                (await this.baz1())();
+                (await this.baz2())()();
+
+                await this.#foo1()();
+                (await this.#foo2()())();
+                await this.#foo3()()();
+                await (await this.#foo4()())();
+                await this.#bar1();
+                (await this.#bar2())();
+                await this.#bar3()();
+                await (await this.#bar4())();
+                (await this.#baz1())();
+                (await this.#baz2())()();
+              }
             }
-            await Derived.foo1()();
-            (await Derived.foo2()())();
-            await Derived.foo3()()();
-            await (await Derived.foo4()())();
-            await Derived.bar1();
-            (await Derived.bar2())();
-            await Derived.bar3()();
-            await (await Derived.bar4())();
-            (await Derived.baz1())();
-            (await Derived.baz2())()();
-            const observed = log.join(',');
-            const expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            await Derived.run();
+            let observed = log.join(',');
+            let expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            expected += ',' + expected;
             if (observed !== expected) throw 'fail: ' + observed + ' != ' + expected;
           }
         `,
@@ -4692,19 +4773,46 @@
               static bar4 = async () => async () => super.foo = 'bar4'
               static async baz1() { return () => super.foo = 'baz1' }
               static async baz2() { return () => () => super.foo = 'baz2' }
+
+              static #foo1() { return async () => super.foo = 'foo1' }
+              static #foo2() { return async () => () => super.foo = 'foo2' }
+              static #foo3() { return () => async () => super.foo = 'foo3' }
+              static #foo4() { return async () => async () => super.foo = 'foo4' }
+              static #bar1 = async () => super.foo = 'bar1'
+              static #bar2 = async () => () => super.foo = 'bar2'
+              static #bar3 = () => async () => super.foo = 'bar3'
+              static #bar4 = async () => async () => super.foo = 'bar4'
+              static async #baz1() { return () => super.foo = 'baz1' }
+              static async #baz2() { return () => () => super.foo = 'baz2' }
+
+              static async run() {
+                await this.foo1()();
+                (await this.foo2()())();
+                await this.foo3()()();
+                await (await this.foo4()())();
+                await this.bar1();
+                (await this.bar2())();
+                await this.bar3()();
+                await (await this.bar4())();
+                (await this.baz1())();
+                (await this.baz2())()();
+
+                await this.#foo1()();
+                (await this.#foo2()())();
+                await this.#foo3()()();
+                await (await this.#foo4()())();
+                await this.#bar1();
+                (await this.#bar2())();
+                await this.#bar3()();
+                await (await this.#bar4())();
+                (await this.#baz1())();
+                (await this.#baz2())()();
+              }
             }
-            await Derived.foo1()();
-            (await Derived.foo2()())();
-            await Derived.foo3()()();
-            await (await Derived.foo4()())();
-            await Derived.bar1();
-            (await Derived.bar2())();
-            await Derived.bar3()();
-            await (await Derived.bar4())();
-            (await Derived.baz1())();
-            (await Derived.baz2())()();
-            const observed = log.join(',');
-            const expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            await Derived.run();
+            let observed = log.join(',');
+            let expected = 'foo1,foo2,foo3,foo4,bar1,bar2,bar3,bar4,baz1,baz2';
+            expected += ',' + expected;
             if (observed !== expected) throw 'fail: ' + observed + ' != ' + expected;
           }
         `,
@@ -4819,11 +4927,18 @@
         // Check default export name preservation with lowered "super" inside lowered "async"
         'in.js': `
           import fn from './export'
+          import pfn from './export-private'
           if (fn.name !== 'default') throw 'fail: ' + fn.name
+          if (pfn.name !== 'default') throw 'fail: ' + pfn.name
         `,
         'export.js': `
           export default class extends Object {
             async foo() { super.bar() }
+          }
+        `,
+        'export-private.js': `
+          export default class extends Object {
+            async #foo() { super.bar() }
           }
         `,
       }),
@@ -4831,11 +4946,18 @@
         // (minified) Check default export name preservation with lowered "super" inside lowered "async"
         'in.js': `
           import fn from './export'
+          import pfn from './export-private'
           if (fn.name !== 'default') throw 'fail: ' + fn.name
+          if (pfn.name !== 'default') throw 'fail: ' + pfn.name
         `,
         'export.js': `
           export default class extends Object {
             async foo() { super.bar() }
+          }
+        `,
+        'export-private.js': `
+          export default class extends Object {
+            async #foo() { super.bar() }
           }
         `,
       }),
@@ -5161,14 +5283,14 @@
       'in.js': `
         var f
         if (1) function f() { return f }
-        if (typeof f !== 'function' || f.name !== 'f') throw 'fail'
+        if (typeof f !== 'function' || f.name !== 'f') throw 'fail: ' + f.name
       `,
     }),
     test(['in.js', '--bundle', '--outfile=node.js', '--keep-names'], {
       'in.js': `
         var f
         if (1) function f() { return f }
-        if (typeof f !== 'function' || f.name !== 'f') throw 'fail'
+        if (typeof f !== 'function' || f.name !== 'f') throw 'fail: ' + f.name
       `,
     }),
     test(['in.ts', '--outfile=node.js', '--keep-names'], {

@@ -1,5 +1,128 @@
 # Changelog
 
+## 0.14.32
+
+* Fix `super` usage in lowered private methods ([#2039](https://github.com/evanw/esbuild/issues/2039))
+
+    Previously esbuild failed to transform `super` property accesses inside private methods in the case when private methods have to be lowered because the target environment doesn't support them. The generated code still contained the `super` keyword even though the method was moved outside of the class body, which is a syntax error in JavaScript. This release fixes this transformation issue and now produces valid code:
+
+    ```js
+    // Original code
+    class Derived extends Base {
+      #foo() { super.foo() }
+      bar() { this.#foo() }
+    }
+
+    // Old output (with --target=es6)
+    var _foo, foo_fn;
+    class Derived extends Base {
+      constructor() {
+        super(...arguments);
+        __privateAdd(this, _foo);
+      }
+      bar() {
+        __privateMethod(this, _foo, foo_fn).call(this);
+      }
+    }
+    _foo = new WeakSet();
+    foo_fn = function() {
+      super.foo();
+    };
+
+    // New output (with --target=es6)
+    var _foo, foo_fn;
+    const _Derived = class extends Base {
+      constructor() {
+        super(...arguments);
+        __privateAdd(this, _foo);
+      }
+      bar() {
+        __privateMethod(this, _foo, foo_fn).call(this);
+      }
+    };
+    let Derived = _Derived;
+    _foo = new WeakSet();
+    foo_fn = function() {
+      __superGet(_Derived.prototype, this, "foo").call(this);
+    };
+    ```
+
+    Because of this change, lowered `super` property accesses on instances were rewritten so that they can exist outside of the class body. This rewrite affects code generation for all `super` property accesses on instances including those inside lowered `async` functions. The new approach is different but should be equivalent to the old approach:
+
+    ```js
+    // Original code
+    class Foo {
+      foo = async () => super.foo()
+    }
+
+    // Old output (with --target=es6)
+    class Foo {
+      constructor() {
+        __publicField(this, "foo", () => {
+          var __superGet = (key) => super[key];
+          return __async(this, null, function* () {
+            return __superGet("foo").call(this);
+          });
+        });
+      }
+    }
+
+    // New output (with --target=es6)
+    class Foo {
+      constructor() {
+        __publicField(this, "foo", () => __async(this, null, function* () {
+          return __superGet(Foo.prototype, this, "foo").call(this);
+        }));
+      }
+    }
+    ```
+
+* Fix some tree-shaking bugs regarding property side effects
+
+    This release fixes some cases where side effects in computed properties were not being handled correctly. Specifically primitives and private names as properties should not be considered to have side effects, and object literals as properties should be considered to have side effects:
+
+    ```js
+    // Original code
+    let shouldRemove = { [1]: 2 }
+    let shouldRemove2 = class { #foo }
+    let shouldKeep = class { [{ toString() { sideEffect() } }] }
+
+    // Old output (with --tree-shaking=true)
+    let shouldRemove = { [1]: 2 };
+    let shouldRemove2 = class {
+      #foo;
+    };
+
+    // New output (with --tree-shaking=true)
+    let shouldKeep = class {
+      [{ toString() {
+        sideEffect();
+      } }];
+    };
+    ```
+
+* Add the `wasmModule` option to the `initialize` JS API ([#1093](https://github.com/evanw/esbuild/issues/1093))
+
+    The `initialize` JS API must be called when using esbuild in the browser to provide the WebAssembly module for esbuild to use. Previously the only way to do that was using the `wasmURL` API option like this:
+
+    ```js
+    await esbuild.initialize({
+      wasmURL: '/node_modules/esbuild-wasm/esbuild.wasm',
+    })
+    console.log(await esbuild.transform('1+2'))
+    ```
+
+    With this release, you can now also initialize esbuild using a `WebAssembly.Module` instance using the `wasmModule` API option instead. The example above is equivalent to the following code:
+
+    ```js
+    await esbuild.initialize({
+      wasmModule: await WebAssembly.compileStreaming(fetch('/node_modules/esbuild-wasm/esbuild.wasm'))
+    })
+    console.log(await esbuild.transform('1+2'))
+    ```
+
+    This could be useful for environments where you want more control over how the WebAssembly download happens or where downloading the WebAssembly module is not possible.
+
 ## 0.14.31
 
 * Add support for parsing "optional variance annotations" from TypeScript 4.7 ([#2102](https://github.com/evanw/esbuild/pull/2102))
