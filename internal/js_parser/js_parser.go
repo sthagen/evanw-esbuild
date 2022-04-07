@@ -7617,6 +7617,7 @@ func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt 
 				prevStmt := result[len(result)-1]
 				if prevS, ok := prevStmt.Data.(*js_ast.SExpr); ok {
 					prevS.Value = js_ast.JoinWithComma(prevS.Value, s.Value)
+					prevS.DoesNotAffectTreeShaking = prevS.DoesNotAffectTreeShaking && s.DoesNotAffectTreeShaking
 					continue
 				}
 			}
@@ -8852,20 +8853,21 @@ func (p *parser) keepExprSymbolName(value js_ast.Expr, name string) js_ast.Expr 
 
 	// Make sure tree shaking removes this if the function is never used
 	value.Data.(*js_ast.ECall).CanBeUnwrappedIfUnused = true
-	value.Data.(*js_ast.ECall).IsKeepName = true
 	return value
 }
 
 func (p *parser) keepStmtSymbolName(loc logger.Loc, ref js_ast.Ref, name string) js_ast.Stmt {
 	p.symbols[ref.InnerIndex].Flags |= js_ast.DidKeepName
 
-	call := p.callRuntime(loc, "__name", []js_ast.Expr{
-		{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}},
-		{Loc: loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(name)}},
-	})
-	call.Data.(*js_ast.ECall).IsKeepName = true
+	return js_ast.Stmt{Loc: loc, Data: &js_ast.SExpr{
+		Value: p.callRuntime(loc, "__name", []js_ast.Expr{
+			{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}},
+			{Loc: loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(name)}},
+		}),
 
-	return js_ast.Stmt{Loc: loc, Data: &js_ast.SExpr{Value: call}}
+		// Make sure tree shaking removes this if the function is never used
+		DoesNotAffectTreeShaking: true,
+	}}
 }
 
 func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_ast.Stmt {
@@ -10158,6 +10160,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class, defaul
 	// field initializers outside of the class body and "this" will no longer
 	// reference the same thing.
 	classLoweringInfo := p.computeClassLoweringInfo(class)
+	recomputeClassLoweringInfo := false
 
 	// Sometimes we need to lower private members even though they are supported.
 	// This flags them for lowering so that we lower references to them as we
@@ -10186,6 +10189,7 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class, defaul
 			// The private getter must be lowered too.
 			if private, ok := prop.Key.Data.(*js_ast.EPrivateIdentifier); ok {
 				p.symbols[private.Ref.InnerIndex].Flags |= js_ast.PrivateSymbolMustBeLowered
+				recomputeClassLoweringInfo = true
 			}
 		}
 	}
@@ -10197,9 +10201,16 @@ func (p *parser) visitClass(nameScopeLoc logger.Loc, class *js_ast.Class, defaul
 			if private, ok := prop.Key.Data.(*js_ast.EPrivateIdentifier); ok {
 				if symbol := &p.symbols[private.Ref.InnerIndex]; p.classPrivateBrandChecksToLower[symbol.OriginalName] {
 					symbol.Flags |= js_ast.PrivateSymbolMustBeLowered
+					recomputeClassLoweringInfo = true
 				}
 			}
 		}
+	}
+
+	// If we changed private symbol lowering decisions, then recompute class
+	// lowering info because that may have changed other decisions too
+	if recomputeClassLoweringInfo {
+		classLoweringInfo = p.computeClassLoweringInfo(class)
 	}
 
 	p.pushScopeForVisitPass(js_ast.ScopeClassName, nameScopeLoc)
@@ -14450,6 +14461,12 @@ func (p *parser) stmtsCanBeRemovedIfUnused(stmts []js_ast.Stmt) bool {
 			}
 
 		case *js_ast.SExpr:
+			if s.DoesNotAffectTreeShaking {
+				// Expressions marked with this are automatically generated and have
+				// no side effects by construction.
+				break
+			}
+
 			if !p.exprCanBeRemovedIfUnused(s.Value) {
 				return false
 			}
@@ -14628,7 +14645,7 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		return true
 
 	case *js_ast.ECall:
-		canCallBeRemoved := e.CanBeUnwrappedIfUnused || e.IsKeepName
+		canCallBeRemoved := e.CanBeUnwrappedIfUnused
 
 		// Consider calls to our runtime "__publicField" function to be free of
 		// side effects for the purpose of expression removal. This allows class

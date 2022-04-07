@@ -2908,6 +2908,22 @@
     test(['in.js', '--outfile=node.js', '--minify', '--keep-names', '--format=esm', '--target=es6'], {
       'in.js': `class Foo { static #foo = class { #bar = 123; bar = this.#bar }; static foo = this.#foo } if (Foo.foo.name !== '#foo') throw 'fail: ' + Foo.foo.name`,
     }),
+
+    // https://github.com/evanw/esbuild/issues/2149
+    test(['in.js', '--outfile=node.js', '--target=es6', '--keep-names'], {
+      'in.js': `
+        class Foo {
+          static get #foo() { return Foo.name }
+          static get foo() { return this.#foo }
+        }
+        let Bar = Foo
+        if (Foo.name !== 'Foo') throw 'fail: ' + Foo.name
+        if (Bar.foo !== 'Foo') throw 'fail: ' + Bar.foo
+        Foo = { name: 'Bar' }
+        if (Foo.name !== 'Bar') throw 'fail: ' + Foo.name
+        if (Bar.foo !== 'Foo') throw 'fail: ' + Bar.foo
+      `,
+    }),
   )
 
   // Test minification of mangled properties (class and object) with a keyword before them
@@ -4923,6 +4939,26 @@
           }
         `,
       }, { async: true }),
+      test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+        // Check edge case in https://github.com/evanw/esbuild/issues/2158
+        'in.js': `
+        class Foo {
+          constructor(x) {
+            this.base = x
+          }
+        }
+        class Bar extends Foo {
+          static FOO = 1
+          constructor() {
+            super(2)
+            this.derived = this.#foo + Bar.FOO
+          }
+          #foo = 3
+        }
+        let bar = new Bar
+        if (bar.base !== 2 || bar.derived !== 4) throw 'fail'
+        `,
+      }),
       test(['in.js', '--outfile=node.js', '--keep-names', '--bundle'].concat(flags), {
         // Check default export name preservation with lowered "super" inside lowered "async"
         'in.js': `
