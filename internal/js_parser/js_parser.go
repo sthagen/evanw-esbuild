@@ -489,7 +489,7 @@ func isSameRegexp(a *regexp.Regexp, b *regexp.Regexp) bool {
 }
 
 func jsxExprsEqual(a config.JSXExpr, b config.JSXExpr) bool {
-	if !stringArraysEqual(a.Parts, b.Parts) {
+	if !helpers.StringArraysEqual(a.Parts, b.Parts) {
 		return false
 	}
 
@@ -501,18 +501,6 @@ func jsxExprsEqual(a config.JSXExpr, b config.JSXExpr) bool {
 		return false
 	}
 
-	return true
-}
-
-func stringArraysEqual(a []string, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, x := range a {
-		if x != b[i] {
-			return false
-		}
-	}
 	return true
 }
 
@@ -14899,8 +14887,8 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 		// silently changed in TypeScript 4.3. It's a breaking change even though
 		// it wasn't mentioned in the announcement blog post for TypeScript 4.3:
 		// https://devblogs.microsoft.com/typescript/announcing-typescript-4-3/.
-		if options.targetFromAPI == config.TargetWasConfiguredIncludingESNext ||
-			(options.tsTarget != nil && strings.EqualFold(options.tsTarget.Target, "ESNext")) {
+		if options.targetFromAPI == config.TargetWasConfiguredAndAtLeastES2022 ||
+			(options.tsTarget != nil && options.tsTarget.TargetIsAtLeastES2022) {
 			options.useDefineForClassFields = config.True
 		} else {
 			options.useDefineForClassFields = config.False

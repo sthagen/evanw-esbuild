@@ -1,5 +1,145 @@
 # Changelog
 
+## 0.14.35
+
+* Add support for parsing `typeof` on #private fields from TypeScript 4.7 ([#2174](https://github.com/evanw/esbuild/pull/2174))
+
+    The upcoming version of TypeScript now lets you use `#private` fields in `typeof` type expressions:
+
+    https://devblogs.microsoft.com/typescript/announcing-typescript-4-7-beta/#typeof-on-private-fields
+
+    ```ts
+    class Container {
+      #data = "hello!";
+
+      get data(): typeof this.#data {
+        return this.#data;
+      }
+
+      set data(value: typeof this.#data) {
+        this.#data = value;
+      }
+    }
+    ```
+
+    With this release, esbuild can now parse these new type expressions as well. This feature was contributed by [@magic-akari](https://github.com/magic-akari).
+
+* Add Opera and IE to internal CSS feature support matrix ([#2170](https://github.com/evanw/esbuild/pull/2170))
+
+    Version 0.14.18 of esbuild added Opera and IE as available target environments, and added them to the internal JS feature support matrix. CSS feature support was overlooked, however. This release adds knowledge of Opera and IE to esbuild's internal CSS feature support matrix:
+
+    ```css
+    /* Original input */
+    a {
+      color: rgba(0, 0, 0, 0.5);
+    }
+
+    /* Old output (with --target=opera49 --minify) */
+    a{color:rgba(0,0,0,.5)}
+
+    /* New output (with --target=opera49 --minify) */
+    a{color:#00000080}
+    ```
+
+    The fix for this issue was contributed by [@sapphi-red](https://github.com/sapphi-red).
+
+* Change TypeScript class field behavior when targeting ES2022
+
+    TypeScript 4.3 introduced a breaking change where class field behavior changes from assign semantics to define semantics when the `target` setting in `tsconfig.json` is set to `ESNext`. Specifically, the default value for TypeScript's `useDefineForClassFields` setting when unspecified is `true` if and only if `target` is `ESNext`. TypeScript 4.6 introduced another change where this behavior now happens for both `ESNext` and `ES2022`. Presumably this will be the case for `ES2023` and up as well. With this release, esbuild's behavior has also been changed to match. Now configuring esbuild with `--target=es2022` will also cause TypeScript files to use the new class field behavior.
+
+* Validate that path metadata returned by plugins is consistent
+
+    The plugin API assumes that all metadata for the same path returned by a plugin's `onResolve` callback is consistent. Previously this assumption was just assumed without any enforcement. Starting with this release, esbuild will now enforce this by generating a build error if this assumption is violated. The lack of validation has not been an issue (I have never heard of this being a problem), but it still seems like a good idea to enforce it. Here's a simple example of a plugin that generates inconsistent `sideEffects` metadata:
+
+    ```js
+    let buggyPlugin = {
+      name: 'buggy',
+      setup(build) {
+        let count = 0
+        build.onResolve({ filter: /^react$/ }, args => {
+          return {
+            path: require.resolve(args.path),
+            sideEffects: count++ > 0,
+          }
+        })
+      },
+    }
+    ```
+
+    Since esbuild processes everything in parallel, the set of metadata that ends up being used for a given path is essentially random since it's whatever the task scheduler decides to schedule first. Thus if a plugin does not consistently provide the same metadata for a given path, subsequent builds may return different results. This new validation check prevents this problem.
+
+    Here's the new error message that's shown when this happens:
+
+    ```
+    ✘ [ERROR] [plugin buggy] Detected inconsistent metadata for the path "node_modules/react/index.js" when it was imported here:
+
+        button.tsx:1:30:
+          1 │ import { createElement } from 'react'
+            ╵                               ~~~~~~~
+
+      The original metadata for that path comes from when it was imported here:
+
+        app.tsx:1:23:
+          1 │ import * as React from 'react'
+            ╵                        ~~~~~~~
+
+      The difference in metadata is displayed below:
+
+       {
+      -  "sideEffects": true,
+      +  "sideEffects": false,
+       }
+
+      This is a bug in the "buggy" plugin. Plugins provide metadata for a given path in an "onResolve"
+      callback. All metadata provided for the same path must be consistent to ensure deterministic
+      builds. Due to parallelism, one set of provided metadata will be randomly chosen for a given path,
+      so providing inconsistent metadata for the same path can cause non-determinism.
+    ```
+
+* Suggest enabling a missing condition when `exports` map fails ([#2163](https://github.com/evanw/esbuild/issues/2163))
+
+    This release adds another suggestion to the error message that happens when an `exports` map lookup fails if the failure could potentially be fixed by adding a missing condition. Here's what the new error message looks like (which now suggests `--conditions=module` as a possible workaround):
+
+    ```
+    ✘ [ERROR] Could not resolve "@sentry/electron/main"
+
+        index.js:1:24:
+          1 │ import * as Sentry from '@sentry/electron/main'
+            ╵                         ~~~~~~~~~~~~~~~~~~~~~~~
+
+      The path "./main" is not currently exported by package "@sentry/electron":
+
+        node_modules/@sentry/electron/package.json:8:13:
+          8 │   "exports": {
+            ╵              ^
+
+      None of the conditions provided ("require", "module") match any of the currently active conditions
+      ("browser", "default", "import"):
+
+        node_modules/@sentry/electron/package.json:16:14:
+          16 │     "./main": {
+             ╵               ^
+
+      Consider enabling the "module" condition if this package expects it to be enabled. You can use
+      "--conditions=module" to do that:
+
+        node_modules/@sentry/electron/package.json:18:6:
+          18 │       "module": "./esm/main/index.js"
+             ╵       ~~~~~~~~
+
+      Consider using a "require()" call to import this file, which will work because the "require"
+      condition is supported by this package:
+
+        index.js:1:24:
+          1 │ import * as Sentry from '@sentry/electron/main'
+            ╵                         ~~~~~~~~~~~~~~~~~~~~~~~
+
+      You can mark the path "@sentry/electron/main" as external to exclude it from the bundle, which
+      will remove this error.
+    ```
+
+    This particular package had an issue where it was using the Webpack-specific `module` condition without providing a `default` condition. It looks like the intent in this case was to use the standard `import` condition instead. This specific change wasn't suggested here because this error message is for package consumers, not package authors.
+
 ## 0.14.34
 
 Something went wrong with the publishing script for the previous release. Publishing again.
