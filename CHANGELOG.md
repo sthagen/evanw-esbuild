@@ -1,6 +1,60 @@
 # Changelog
 
-## Unreleased
+## 0.14.41
+
+* Fix a minification regression in 0.14.40 ([#2270](https://github.com/evanw/esbuild/issues/2270), [#2271](https://github.com/evanw/esbuild/issues/2271), [#2273](https://github.com/evanw/esbuild/pull/2273))
+
+    Version 0.14.40 substituted string property keys with numeric property keys if the number has the same string representation as the original string. This was done in three places: computed member expressions, object literal properties, and class fields. However, negative numbers are only valid in computed member expressions while esbuild incorrectly applied this substitution for negative numbers in all places. This release fixes the regression by only doing this substitution for negative numbers in computed member expressions.
+
+    This fix was contributed by [@susiwen8](https://github.com/susiwen8).
+
+## 0.14.40
+
+* Correct esbuild's implementation of `"preserveValueImports": true` ([#2268](https://github.com/evanw/esbuild/issues/2268))
+
+    TypeScript's [`preserveValueImports` setting](https://www.typescriptlang.org/tsconfig#preserveValueImports) tells the compiler to preserve unused imports, which can sometimes be necessary because otherwise TypeScript will remove unused imports as it assumes they are type annotations. This setting is useful for programming environments that strip TypeScript types as part of a larger code transformation where additional code is appended later that will then make use of those unused imports, such as with [Svelte](https://svelte.dev/) or [Vue](https://vuejs.org/).
+
+    This release fixes an issue where esbuild's implementation of `preserveValueImports` diverged from the official TypeScript compiler. If the import clause is present but empty of values (even if it contains types), then the import clause should be considered a type-only import clause. This was an oversight, and has now been fixed:
+
+    ```ts
+    // Original code
+    import "keep"
+    import { k1 } from "keep"
+    import k2, { type t1 } from "keep"
+    import {} from "remove"
+    import { type t2 } from "remove"
+
+    // Old output under "preserveValueImports": true
+    import "keep";
+    import { k1 } from "keep";
+    import k2, {} from "keep";
+    import {} from "remove";
+    import {} from "remove";
+
+    // New output under "preserveValueImports": true (matches the TypeScript compiler)
+    import "keep";
+    import { k1 } from "keep";
+    import k2 from "keep";
+    ```
+
+* Avoid regular expression syntax errors in older browsers ([#2215](https://github.com/evanw/esbuild/issues/2215))
+
+    Previously esbuild always passed JavaScript regular expression literals through unmodified from the input to the output. This is undesirable when the regular expression uses newer features that the configured target environment doesn't support. For example, the `d` flag (i.e. the [match indices feature](https://v8.dev/features/regexp-match-indices)) is new in ES2022 and doesn't work in older browsers. If esbuild generated a regular expression literal containing the `d` flag, then older browsers would consider esbuild's output to be a syntax error and none of the code would run.
+
+    With this release, esbuild now detects when an unsupported feature is being used and converts the regular expression literal into a `new RegExp()` constructor instead. One consequence of this is that the syntax error is transformed into a run-time error, which allows the output code to run (and to potentially handle the run-time error). Another consequence of this is that it allows you to include a polyfill that overwrites the `RegExp` constructor in older browsers with one that supports modern features. Note that esbuild does not handle polyfills for you, so you will need to include a `RegExp` polyfill yourself if you want one.
+
+    ```js
+    // Original code
+    console.log(/b/d.exec('abc').indices)
+
+    // New output (with --target=chrome90)
+    console.log(/b/d.exec("abc").indices);
+
+    // New output (with --target=chrome89)
+    console.log(new RegExp("b", "d").exec("abc").indices);
+    ```
+
+    This is currently done transparently without a warning. If you would like to debug this transformation to see where in your code esbuild is transforming regular expression literals and why, you can pass `--log-level=debug` to esbuild and review the information present in esbuild's debug logs.
 
 * Add Opera to more internal feature compatibility tables ([#2247](https://github.com/evanw/esbuild/issues/2247), [#2252](https://github.com/evanw/esbuild/pull/2252))
 
@@ -11,6 +65,27 @@
 * Ignore `EPERM` errors on directories ([#2261](https://github.com/evanw/esbuild/issues/2261))
 
     Previously bundling with esbuild when inside a sandbox environment which does not have permission to access the parent directory did not work because esbuild would try to read the directory to search for a `node_modules` folder and would then fail the build when that failed. In practice this caused issues with running esbuild with `sandbox-exec` on macOS. With this release, esbuild will treat directories with permission failures as empty to allow for the `node_modules` search to continue past the denied directory and into its parent directory. This means it should now be possible to bundle with esbuild in these situations. This fix is similar to the fix in version 0.9.1 but is for `EPERM` while that fix was for `EACCES`.
+
+* Remove an irrelevant extra `"use strict"` directive ([#2264](https://github.com/evanw/esbuild/issues/2264))
+
+    The presence of a `"use strict"` directive in the output file is controlled by the presence of one in the entry point. However, there was a bug that would include one twice if the output format is ESM. This bug has been fixed.
+
+* Minify strings into integers inside computed properties ([#2214](https://github.com/evanw/esbuild/issues/2214))
+
+    This release now minifies `a["0"]` into `a[0]` when the result is equivalent:
+
+    ```js
+    // Original code
+    console.log(x['0'], { '0': x }, class { '0' = x })
+
+    // Old output (with --minify)
+    console.log(x["0"],{"0":x},class{"0"=x});
+
+    // New output (with --minify)
+    console.log(x[0],{0:x},class{0=x});
+    ```
+
+    This transformation currently only happens when the numeric property represents an integer within the signed 32-bit integer range.
 
 ## 0.14.39
 
