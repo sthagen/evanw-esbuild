@@ -19,7 +19,7 @@ func expectParseErrorCommon(t *testing.T, contents string, expected string, opti
 	t.Helper()
 	t.Run(contents, func(t *testing.T) {
 		t.Helper()
-		log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug)
+		log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug, nil)
 		Parse(log, test.SourceForTest(contents), OptionsFromConfig(&options))
 		msgs := log.Done()
 		text := ""
@@ -48,7 +48,7 @@ func expectPrintedCommon(t *testing.T, contents string, expected string, options
 	t.Helper()
 	t.Run(contents, func(t *testing.T) {
 		t.Helper()
-		log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug)
+		log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug, nil)
 		options.OmitRuntimeForTests = true
 		tree, ok := Parse(log, test.SourceForTest(contents), OptionsFromConfig(&options))
 		msgs := log.Done()
@@ -3561,6 +3561,18 @@ func TestMangleCall(t *testing.T) {
 	expectPrintedMangle(t, "x = foo(1, ...[,2,,], 3)", "x = foo(1, void 0, 2, void 0, 3);\n")
 }
 
+func TestMangleNew(t *testing.T) {
+	expectPrintedMangle(t, "x = new foo(1, ...[], 2)", "x = new foo(1, 2);\n")
+	expectPrintedMangle(t, "x = new foo(1, ...2, 3)", "x = new foo(1, ...2, 3);\n")
+	expectPrintedMangle(t, "x = new foo(1, ...[2], 3)", "x = new foo(1, 2, 3);\n")
+	expectPrintedMangle(t, "x = new foo(1, ...[2, 3], 4)", "x = new foo(1, 2, 3, 4);\n")
+	expectPrintedMangle(t, "x = new foo(1, ...[2, ...y, 3], 4)", "x = new foo(1, 2, ...y, 3, 4);\n")
+	expectPrintedMangle(t, "x = new foo(1, ...{a, b}, 4)", "x = new foo(1, ...{ a, b }, 4);\n")
+
+	// Holes must become undefined
+	expectPrintedMangle(t, "x = new foo(1, ...[,2,,], 3)", "x = new foo(1, void 0, 2, void 0, 3);\n")
+}
+
 func TestMangleArray(t *testing.T) {
 	expectPrintedMangle(t, "x = [1, ...[], 2]", "x = [1, 2];\n")
 	expectPrintedMangle(t, "x = [1, ...2, 3]", "x = [1, ...2, 3];\n")
@@ -3674,6 +3686,10 @@ func TestMangleIIFE(t *testing.T) {
 	expectPrintedMangle(t, "(function() { a() })()", "(function() {\n  a();\n})();\n")
 	expectPrintedMangle(t, "(function*() { a() })()", "(function* () {\n  a();\n})();\n")
 	expectPrintedMangle(t, "(async function() { a() })()", "(async function() {\n  a();\n})();\n")
+
+	expectPrintedMangle(t, "(() => x)()", "x;\n")
+	expectPrintedMangle(t, "/* @__PURE__ */ (() => x)()", "")
+	expectPrintedMangle(t, "/* @__PURE__ */ (() => x)(y, z)", "y, z;\n")
 }
 
 func TestMangleTemplate(t *testing.T) {

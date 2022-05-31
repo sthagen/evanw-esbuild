@@ -1,5 +1,117 @@
 # Changelog
 
+## Unreleased
+
+* Fix minification regression with pure IIFEs ([#2279](https://github.com/evanw/esbuild/issues/2279))
+
+    An Immediately Invoked Function Expression (IIFE) is a function call to an anonymous function, and is a way of introducing a new function-level scope in JavaScript since JavaScript lacks a way to do this otherwise. And a pure function call is a function call with the special `/* @__PURE__ */` comment before it, which tells JavaScript build tools that the function call can be considered to have no side effects (and can be removed if it's unused).
+
+    Version 0.14.9 of esbuild introduced a regression that changed esbuild's behavior when these two features were combined. If the IIFE body contains a single expression, the resulting output still contained that expression instead of being empty. This is a minor regression because you normally wouldn't write code like this, so this shouldn't come up in practice, and it doesn't cause any correctness issues (just larger-than-necessary output). It's unusual that you would tell esbuild "remove this if the result is unused" and then not store the result anywhere, since the result is unused by construction. But regardless, the issue has now been fixed.
+
+    For example, the following code is a pure IIFE, which means it should be completely removed when minification is enabled. Previously it was replaced by the contents of the IIFE but it's now completely removed:
+
+    ```js
+    // Original code
+    /* @__PURE__ */ (() => console.log(1))()
+
+    // Old output (with --minify)
+    console.log(1);
+
+    // New output (with --minify)
+    ```
+
+## 0.14.42
+
+* Fix a parser hang on invalid CSS ([#2276](https://github.com/evanw/esbuild/issues/2276))
+
+    Previously invalid CSS with unbalanced parentheses could cause esbuild's CSS parser to hang. An example of such an input is the CSS file `:x(`. This hang has been fixed.
+
+* Add support for custom log message levels
+
+    This release allows you to override the default log level of esbuild's individual log messages. For example, CSS syntax errors are treated as warnings instead of errors by default because CSS grammar allows for rules containing syntax errors to be ignored. However, if you would like for esbuild to consider CSS syntax errors to be build errors, you can now configure that like this:
+
+    * CLI
+
+        ```sh
+        $ esbuild example.css --log-override:css-syntax-error=error
+        ```
+
+    * JS API
+
+        ```js
+        let result = await esbuild.build({
+          entryPoints: ['example.css'],
+          logOverride: {
+            'css-syntax-error': 'error',
+          },
+        })
+        ```
+
+    * Go API
+
+        ```go
+        result := api.Build(api.BuildOptions{
+          EntryPoints: []string{"example.ts"},
+          LogOverride: map[string]api.LogLevel{
+            "css-syntax-error": api.LogLevelError,
+          },
+        })
+        ```
+
+    You can also now use this feature to silence warnings that you are not interested in. Log messages are referred to by their identifier. Each identifier is stable (i.e. shouldn't change over time) except there is no guarantee that the log message will continue to exist. A given log message may potentially be removed in the future, in which case esbuild will ignore log levels set for that identifier. The current list of supported log level identifiers for use with this feature can be found below:
+
+    **JavaScript:**
+    * `assign-to-constant`
+    * `call-import-namespace`
+    * `commonjs-variable-in-esm`
+    * `delete-super-property`
+    * `direct-eval`
+    * `duplicate-case`
+    * `duplicate-object-key`
+    * `empty-import-meta`
+    * `equals-nan`
+    * `equals-negative-zero`
+    * `equals-new-object`
+    * `html-comment-in-js`
+    * `impossible-typeof`
+    * `private-name-will-throw`
+    * `semicolon-after-return`
+    * `suspicious-boolean-not`
+    * `this-is-undefined-in-esm`
+    * `unsupported-dynamic-import`
+    * `unsupported-jsx-comment`
+    * `unsupported-regexp`
+    * `unsupported-require-call`
+
+    **CSS:**
+    * `css-syntax-error`
+    * `invalid-@charset`
+    * `invalid-@import`
+    * `invalid-@nest`
+    * `invalid-@layer`
+    * `invalid-calc`
+    * `js-comment-in-css`
+    * `unsupported-@charset`
+    * `unsupported-@namespace`
+    * `unsupported-css-property`
+
+    **Bundler:**
+    * `different-path-case`
+    * `ignored-bare-import`
+    * `ignored-dynamic-import`
+    * `import-is-undefined`
+    * `package.json`
+    * `require-resolve-not-external`
+    * `tsconfig.json`
+
+    **Source maps:**
+    * `invalid-source-mappings`
+    * `sections-in-source-map`
+    * `missing-source-map`
+    * `unsupported-source-map-comment`
+
+    Documentation about which identifiers correspond to which log messages will be added in the future, but hasn't been written yet. Note that it's not possible to configure the log level for a build error. This is by design because changing that would cause esbuild to incorrectly proceed in the building process generate invalid build output. You can only configure the log level for non-error log messages (although you can turn non-errors into errors).
+
 ## 0.14.41
 
 * Fix a minification regression in 0.14.40 ([#2270](https://github.com/evanw/esbuild/issues/2270), [#2271](https://github.com/evanw/esbuild/issues/2271), [#2273](https://github.com/evanw/esbuild/pull/2273))
