@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+* Fix a regression in arrow function lowering ([#2302](https://github.com/evanw/esbuild/pull/2302))
+
+    This release fixes a regression with lowering arrow functions to function expressions in ES5. This feature was introduced in version 0.7.2 and regressed in version 0.14.30.
+
+    In JavaScript, regular `function` expressions treat `this` as an implicit argument that is determined by how the function is called, but arrow functions treat `this` as a variable that is captured in the closure from the surrounding lexical scope. This is emulated in esbuild by storing the value of `this` in a variable before changing the arrow function into a function expression.
+
+    However, the code that did this didn't treat `this` expressions as a usage of that generated variable. Version 0.14.30 began omitting unused generated variables, which caused the transformation of `this` to break. This regression happened due to missing test coverage. With this release, the problem has been fixed:
+
+    ```js
+    // Original code
+    function foo() {
+      return () => this
+    }
+
+    // Old output (with --target=es5)
+    function foo() {
+      return function() {
+        return _this;
+      };
+    }
+
+    // New output (with --target=es5)
+    function foo() {
+      var _this = this;
+      return function() {
+        return _this;
+      };
+    }
+    ```
+
+    This fix was contributed by [@nkeynes](https://github.com/nkeynes).
+
+## 0.14.43
+
+* Fix TypeScript parse error whe a generic function is the first type argument ([#2306](https://github.com/evanw/esbuild/issues/2306))
+
+    In TypeScript, the `<<` token may need to be split apart into two `<` tokens if it's present in a type argument context. This was already correctly handled for all type expressions and for identifier expressions such as in the following code:
+
+    ```ts
+    // These cases already worked in the previous release
+    let foo: Array<<T>() => T>;
+    bar<<T>() => T>;
+    ```
+
+    However, normal expressions of the following form were previously incorrectly treated as syntax errors:
+
+    ```ts
+    // These cases were broken but have now been fixed
+    foo.bar<<T>() => T>;
+    foo?.<<T>() => T>();
+    ```
+
+    With this release, these cases now parsed correctly.
+
 * Fix minification regression with pure IIFEs ([#2279](https://github.com/evanw/esbuild/issues/2279))
 
     An Immediately Invoked Function Expression (IIFE) is a function call to an anonymous function, and is a way of introducing a new function-level scope in JavaScript since JavaScript lacks a way to do this otherwise. And a pure function call is a function call with the special `/* @__PURE__ */` comment before it, which tells JavaScript build tools that the function call can be considered to have no side effects (and can be removed if it's unused).
