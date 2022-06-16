@@ -13,6 +13,7 @@ const (
 
 	// JavaScript
 	MsgID_JS_AssignToConstant
+	MsgID_JS_AssignToImport
 	MsgID_JS_CallImportNamespace
 	MsgID_JS_CommonJSVariableInESM
 	MsgID_JS_DeleteSuperProperty
@@ -48,6 +49,7 @@ const (
 	MsgID_CSS_UnsupportedCSSProperty
 
 	// Bundler
+	MsgID_Bundler_AmbiguousReexport
 	MsgID_Bundler_DifferentPathCase
 	MsgID_Bundler_IgnoredBareImport
 	MsgID_Bundler_IgnoredDynamicImport
@@ -87,6 +89,8 @@ func StringToMsgIDs(str string, logLevel LogLevel, overrides map[MsgID]LogLevel)
 	// JS
 	case "assign-to-constant":
 		overrides[MsgID_JS_AssignToConstant] = logLevel
+	case "assign-to-import":
+		overrides[MsgID_JS_AssignToImport] = logLevel
 	case "call-import-namespace":
 		overrides[MsgID_JS_CallImportNamespace] = logLevel
 	case "commonjs-variable-in-esm":
@@ -153,6 +157,8 @@ func StringToMsgIDs(str string, logLevel LogLevel, overrides map[MsgID]LogLevel)
 		overrides[MsgID_CSS_UnsupportedCSSProperty] = logLevel
 
 	// Bundler
+	case "ambiguous-reexport":
+		overrides[MsgID_Bundler_AmbiguousReexport] = logLevel
 	case "different-path-case":
 		overrides[MsgID_Bundler_DifferentPathCase] = logLevel
 	case "ignored-bare-import":
@@ -195,6 +201,8 @@ func MsgIDToString(id MsgID) string {
 	// JS
 	case MsgID_JS_AssignToConstant:
 		return "assign-to-constant"
+	case MsgID_JS_AssignToImport:
+		return "assign-to-import"
 	case MsgID_JS_CallImportNamespace:
 		return "call-import-namespace"
 	case MsgID_JS_CommonJSVariableInESM:
@@ -261,6 +269,8 @@ func MsgIDToString(id MsgID) string {
 		return "unsupported-css-property"
 
 	// Bundler
+	case MsgID_Bundler_AmbiguousReexport:
+		return "ambiguous-reexport"
 	case MsgID_Bundler_DifferentPathCase:
 		return "different-path-case"
 	case MsgID_Bundler_IgnoredBareImport:

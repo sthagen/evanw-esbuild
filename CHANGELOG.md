@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+* Add a log message for ambiguous re-exports ([#2322](https://github.com/evanw/esbuild/issues/2322))
+
+    In JavaScript, you can re-export symbols from another file using `export * from './another-file'`. When you do this from multiple files that export different symbols with the same name, this creates an ambiguous export which is causes that name to not be exported. This is harmless if you don't plan on using the ambiguous export name, so esbuild doesn't have a warning for this. But if you do want a warning for this (or if you want to make it an error), you can now opt-in to seeing this log message with `--log-override:ambiguous-import=warning` or `--log-override:ambiguous-import=error`. The log message looks like this:
+
+    ```
+    ▲ [WARNING] Re-export of "common" in "example.js" is ambiguous and has been removed [ambiguous-import]
+
+      One definition of "common" comes from "a.js" here:
+
+        a.js:2:11:
+          2 │ export let common = 2
+            ╵            ~~~~~~
+
+      Another definition of "common" comes from "b.js" here:
+
+        b.js:3:14:
+          3 │ export { b as common }
+            ╵               ~~~~~~
+    ```
+
+## 0.14.44
+
+* Add a `copy` loader ([#2255](https://github.com/evanw/esbuild/issues/2255))
+
+    You can configure the "loader" for a specific file extension in esbuild, which is a way of telling esbuild how it should treat that file. For example, the `text` loader means the file is imported as a string while the `binary` loader means the file is imported as a `Uint8Array`. If you want the imported file to stay a separate file, the only option was previously the `file` loader (which is intended to be similar to Webpack's [`file-loader`](https://v4.webpack.js.org/loaders/file-loader/) package). This loader copies the file to the output directory and imports the path to that output file as a string. This is useful for a web application because you can refer to resources such as `.png` images by importing them for their URL. However, it's not helpful if you need the imported file to stay a separate file but to still behave the way it normally would when the code is run without bundling.
+
+    With this release, there is now a new loader called `copy` that copies the loaded file to the output directory and then rewrites the path of the import statement or `require()` call to point to the copied file instead of the original file. This will automatically add a content hash to the output name by default (which can be configured with the `--asset-names=` setting). You can use this by specifying `copy` for a specific file extension, such as with `--loader:.png=copy`.
+
 * Fix a regression in arrow function lowering ([#2302](https://github.com/evanw/esbuild/pull/2302))
 
     This release fixes a regression with lowering arrow functions to function expressions in ES5. This feature was introduced in version 0.7.2 and regressed in version 0.14.30.
@@ -33,6 +61,74 @@
     ```
 
     This fix was contributed by [@nkeynes](https://github.com/nkeynes).
+
+* Allow entity names as define values ([#2292](https://github.com/evanw/esbuild/issues/2292))
+
+    The "define" feature allows you to replace certain expressions with certain other expressions at compile time. For example, you might want to replace the global identifier `IS_PRODUCTION` with the boolean value `true` when building for production. Previously the only expressions you could substitute in were either identifier expressions or anything that is valid JSON syntax. This limitation exists because supporting more complex expressions is more complex (for example, substituting in a `require()` call could potentially pull in additional files, which would need to be handled). With this release, you can now also now define something as a member expression chain of the form `foo.abc.xyz`.
+
+* Implement package self-references ([#2312](https://github.com/evanw/esbuild/issues/2312))
+
+    This release implements a rarely-used feature in node where a package can import itself by name instead of using relative imports. You can read more about this feature here: https://nodejs.org/api/packages.html#self-referencing-a-package-using-its-name. For example, assuming the `package.json` in a given package looks like this:
+
+    ```json
+    // package.json
+    {
+      "name": "a-package",
+      "exports": {
+        ".": "./main.mjs",
+        "./foo": "./foo.js"
+      }
+    }
+    ```
+
+    Then any module in that package can reference an export in the package itself:
+
+    ```js
+    // ./a-module.mjs
+    import { something } from 'a-package'; // Imports "something" from ./main.mjs.
+    ```
+
+    Self-referencing is also available when using `require`, both in an ES module, and in a CommonJS one. For example, this code will also work:
+
+    ```js
+    // ./a-module.js
+    const { something } = require('a-package/foo'); // Loads from ./foo.js.
+    ```
+
+* Add a warning for assigning to an import ([#2319](https://github.com/evanw/esbuild/issues/2319))
+
+    Import bindings are immutable in JavaScript, and assigning to them will throw an error. So instead of doing this:
+
+    ```js
+    import { foo } from 'foo'
+    foo++
+    ```
+
+    You need to do something like this instead:
+
+    ```js
+    import { foo, setFoo } from 'foo'
+    setFoo(foo + 1)
+    ```
+
+    This is already an error if you try to bundle this code with esbuild. However, this was previously allowed silently when bundling is disabled, which can lead to confusion for people who don't know about this aspect of how JavaScript works. So with this release, there is now a warning when you do this:
+
+    ```
+    ▲ [WARNING] This assignment will throw because "foo" is an import [assign-to-import]
+
+        example.js:2:0:
+          2 │ foo++
+            ╵ ~~~
+
+      Imports are immutable in JavaScript. To modify the value of this import, you must export a setter
+      function in the imported file (e.g. "setFoo") and then import and call that function here instead.
+    ```
+
+    This new warning can be turned off with `--log-override:assign-to-import=silent` if you don't want to see it.
+
+* Implement `alwaysStrict` in `tsconfig.json` ([#2264](https://github.com/evanw/esbuild/issues/2264))
+
+    This release adds `alwaysStrict` to the set of TypeScript `tsconfig.json` configuration values that esbuild supports. When this is enabled, esbuild will forbid syntax that isn't allowed in strict mode and will automatically insert `"use strict";` at the top of generated output files. This matches the behavior of the TypeScript compiler: https://www.typescriptlang.org/tsconfig#alwaysStrict.
 
 ## 0.14.43
 

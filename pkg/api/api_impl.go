@@ -229,30 +229,32 @@ func validateTreeShaking(value TreeShaking, bundle bool, format Format) bool {
 
 func validateLoader(value Loader) config.Loader {
 	switch value {
-	case LoaderNone:
-		return config.LoaderNone
-	case LoaderJS:
-		return config.LoaderJS
-	case LoaderJSX:
-		return config.LoaderJSX
-	case LoaderTS:
-		return config.LoaderTS
-	case LoaderTSX:
-		return config.LoaderTSX
-	case LoaderJSON:
-		return config.LoaderJSON
-	case LoaderText:
-		return config.LoaderText
 	case LoaderBase64:
 		return config.LoaderBase64
+	case LoaderBinary:
+		return config.LoaderBinary
+	case LoaderCopy:
+		return config.LoaderCopy
+	case LoaderCSS:
+		return config.LoaderCSS
 	case LoaderDataURL:
 		return config.LoaderDataURL
 	case LoaderFile:
 		return config.LoaderFile
-	case LoaderBinary:
-		return config.LoaderBinary
-	case LoaderCSS:
-		return config.LoaderCSS
+	case LoaderJS:
+		return config.LoaderJS
+	case LoaderJSON:
+		return config.LoaderJSON
+	case LoaderJSX:
+		return config.LoaderJSX
+	case LoaderNone:
+		return config.LoaderNone
+	case LoaderText:
+		return config.LoaderText
+	case LoaderTS:
+		return config.LoaderTS
+	case LoaderTSX:
+		return config.LoaderTSX
 	case LoaderDefault:
 		return config.LoaderDefault
 	default:
@@ -466,12 +468,14 @@ func validateLoaders(log logger.Log, loaders map[string]Loader) map[string]confi
 	return result
 }
 
-func validateJSXExpr(log logger.Log, text string, name string, kind js_parser.JSXExprKind) config.JSXExpr {
-	if expr, ok := js_parser.ParseJSXExpr(text, kind); ok {
-		return expr
+func validateJSXExpr(log logger.Log, text string, name string) config.DefineExpr {
+	if text != "" {
+		if expr, _ := js_parser.ParseDefineExprOrJSON(text); len(expr.Parts) > 0 || (name == "fragment" && expr.Constant != nil) {
+			return expr
+		}
+		log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid JSX %s: %q", name, text))
 	}
-	log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid JSX %s: %q", name, text))
-	return config.JSXExpr{}
+	return config.DefineExpr{}
 }
 
 func validateDefines(
@@ -499,65 +503,31 @@ func validateDefines(
 			}
 		}
 
-		// Allow substituting for an identifier
-		if js_lexer.IsIdentifier(value) {
-			if _, ok := js_lexer.Keywords[value]; !ok {
-				switch value {
-				case "undefined":
-					rawDefines[key] = config.DefineData{
-						DefineFunc: func(config.DefineArgs) js_ast.E { return js_ast.EUndefinedShared },
-					}
-				case "NaN":
-					rawDefines[key] = config.DefineData{
-						DefineFunc: func(config.DefineArgs) js_ast.E { return &js_ast.ENumber{Value: math.NaN()} },
-					}
-				case "Infinity":
-					rawDefines[key] = config.DefineData{
-						DefineFunc: func(config.DefineArgs) js_ast.E { return &js_ast.ENumber{Value: math.Inf(1)} },
-					}
-				default:
-					name := value // The closure must close over a variable inside the loop
-					rawDefines[key] = config.DefineData{
-						DefineFunc: func(args config.DefineArgs) js_ast.E {
-							return &js_ast.EIdentifier{Ref: args.FindSymbol(args.Loc, name)}
-						},
-					}
-				}
-				continue
-			}
-		}
+		// Parse the value
+		defineExpr, injectExpr := js_parser.ParseDefineExprOrJSON(value)
 
-		// Parse the value as JSON
-		source := logger.Source{Contents: value}
-		expr, ok := js_parser.ParseJSON(logger.NewDeferLog(logger.DeferLogAll, nil), source, js_parser.JSONOptions{})
-		if !ok {
-			log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid define value (must be valid JSON syntax or a single identifier): %s", value))
+		// Define simple expressions
+		if defineExpr.Constant != nil || len(defineExpr.Parts) > 0 {
+			rawDefines[key] = config.DefineData{DefineExpr: &defineExpr}
 			continue
 		}
 
-		var fn config.DefineFunc
-		switch e := expr.Data.(type) {
-		// These values are inserted inline, and can participate in constant folding
-		case *js_ast.ENull:
-			fn = func(config.DefineArgs) js_ast.E { return js_ast.ENullShared }
-		case *js_ast.EBoolean:
-			fn = func(config.DefineArgs) js_ast.E { return &js_ast.EBoolean{Value: e.Value} }
-		case *js_ast.EString:
-			fn = func(config.DefineArgs) js_ast.E { return &js_ast.EString{Value: e.Value} }
-		case *js_ast.ENumber:
-			fn = func(config.DefineArgs) js_ast.E { return &js_ast.ENumber{Value: e.Value} }
-
-		// These values are extracted into a shared symbol reference
-		case *js_ast.EArray, *js_ast.EObject:
+		// Inject complex expressions
+		if injectExpr != nil {
 			definesToInject = append(definesToInject, key)
 			if valueToInject == nil {
 				valueToInject = make(map[string]config.InjectedDefine)
 			}
-			valueToInject[key] = config.InjectedDefine{Source: source, Data: e, Name: key}
+			valueToInject[key] = config.InjectedDefine{
+				Source: logger.Source{Contents: value},
+				Data:   injectExpr,
+				Name:   key,
+			}
 			continue
 		}
 
-		rawDefines[key] = config.DefineData{DefineFunc: fn}
+		// Anything else is unsupported
+		log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid define value (must be an entity name or valid JSON syntax): %s", value))
 	}
 
 	// Sort injected defines for determinism, since the imports will be injected
@@ -567,11 +537,8 @@ func validateDefines(
 		injectedDefines = make([]config.InjectedDefine, len(definesToInject))
 		sort.Strings(definesToInject)
 		for i, key := range definesToInject {
-			index := i // Capture this for the closure below
 			injectedDefines[i] = valueToInject[key]
-			rawDefines[key] = config.DefineData{DefineFunc: func(args config.DefineArgs) js_ast.E {
-				return &js_ast.EIdentifier{Ref: args.SymbolForDefine(index)}
-			}}
+			rawDefines[key] = config.DefineData{DefineExpr: &config.DefineExpr{InjectedDefineIndex: ast.MakeIndex32(uint32(i))}}
 		}
 	}
 
@@ -591,11 +558,7 @@ func validateDefines(
 					} else {
 						value = helpers.StringToUTF16("development")
 					}
-					rawDefines["process.env.NODE_ENV"] = config.DefineData{
-						DefineFunc: func(args config.DefineArgs) js_ast.E {
-							return &js_ast.EString{Value: value}
-						},
-					}
+					rawDefines["process.env.NODE_ENV"] = config.DefineData{DefineExpr: &config.DefineExpr{Constant: &js_ast.EString{Value: value}}}
 				}
 			}
 		}
@@ -920,8 +883,8 @@ func rebuildImpl(
 		OriginalTargetEnv:      targetEnv,
 		JSX: config.JSXOptions{
 			Preserve: buildOpts.JSXMode == JSXModePreserve,
-			Factory:  validateJSXExpr(log, buildOpts.JSXFactory, "factory", js_parser.JSXFactory),
-			Fragment: validateJSXExpr(log, buildOpts.JSXFragment, "fragment", js_parser.JSXFragment),
+			Factory:  validateJSXExpr(log, buildOpts.JSXFactory, "factory"),
+			Fragment: validateJSXExpr(log, buildOpts.JSXFragment, "fragment"),
 		},
 		Defines:               defines,
 		InjectedDefines:       injectedDefines,
@@ -1022,6 +985,10 @@ func rebuildImpl(
 		for _, loader := range options.ExtensionToLoader {
 			if loader == config.LoaderFile {
 				log.AddError(nil, logger.Range{}, "Cannot use the \"file\" loader without an output path")
+				break
+			}
+			if loader == config.LoaderCopy {
+				log.AddError(nil, logger.Range{}, "Cannot use the \"copy\" loader without an output path")
 				break
 			}
 		}
@@ -1375,12 +1342,13 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 	useDefineForClassFieldsTS := config.Unspecified
 	jsx := config.JSXOptions{
 		Preserve: transformOpts.JSXMode == JSXModePreserve,
-		Factory:  validateJSXExpr(log, transformOpts.JSXFactory, "factory", js_parser.JSXFactory),
-		Fragment: validateJSXExpr(log, transformOpts.JSXFragment, "fragment", js_parser.JSXFragment),
+		Factory:  validateJSXExpr(log, transformOpts.JSXFactory, "factory"),
+		Fragment: validateJSXExpr(log, transformOpts.JSXFragment, "fragment"),
 	}
 
 	// Settings from "tsconfig.json" override those
 	var tsTarget *config.TSTarget
+	var tsAlwaysStrict *config.TSAlwaysStrict
 	caches := cache.MakeCacheSet()
 	if transformOpts.TsconfigRaw != "" {
 		source := logger.Source{
@@ -1390,10 +1358,10 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 		}
 		if result := resolver.ParseTSConfigJSON(log, source, &caches.JSONCache, nil); result != nil {
 			if len(result.JSXFactory) > 0 {
-				jsx.Factory = config.JSXExpr{Parts: result.JSXFactory}
+				jsx.Factory = config.DefineExpr{Parts: result.JSXFactory}
 			}
 			if len(result.JSXFragmentFactory) > 0 {
-				jsx.Fragment = config.JSXExpr{Parts: result.JSXFragmentFactory}
+				jsx.Fragment = config.DefineExpr{Parts: result.JSXFragmentFactory}
 			}
 			if result.UseDefineForClassFields != config.Unspecified {
 				useDefineForClassFieldsTS = result.UseDefineForClassFields
@@ -1403,6 +1371,7 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 				result.PreserveValueImports,
 			)
 			tsTarget = result.TSTarget
+			tsAlwaysStrict = result.TSAlwaysStrict
 		}
 	}
 
@@ -1424,6 +1393,7 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 		UnsupportedCSSFeatures:  cssFeatures,
 		OriginalTargetEnv:       targetEnv,
 		TSTarget:                tsTarget,
+		TSAlwaysStrict:          tsAlwaysStrict,
 		JSX:                     jsx,
 		Defines:                 defines,
 		InjectedDefines:         injectedDefines,
