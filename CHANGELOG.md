@@ -2,12 +2,31 @@
 
 ## Unreleased
 
+* Allow `define` to match optional chain expressions ([#2324](https://github.com/evanw/esbuild/issues/2324))
+
+    Previously esbuild's `define` feature only matched member expressions that did not use optional chaining. With this release, esbuild will now also match those that use optional chaining:
+
+    ```js
+    // Original code
+    console.log(a.b, a?.b)
+
+    // Old output (with --define:a.b=c)
+    console.log(c, a?.b);
+
+    // New output (with --define:a.b=c)
+    console.log(c, c);
+    ```
+
+    This is for compatibility with Webpack's [`DefinePlugin`](https://webpack.js.org/plugins/define-plugin/), which behaves the same way.
+
+## 0.14.45
+
 * Add a log message for ambiguous re-exports ([#2322](https://github.com/evanw/esbuild/issues/2322))
 
-    In JavaScript, you can re-export symbols from another file using `export * from './another-file'`. When you do this from multiple files that export different symbols with the same name, this creates an ambiguous export which is causes that name to not be exported. This is harmless if you don't plan on using the ambiguous export name, so esbuild doesn't have a warning for this. But if you do want a warning for this (or if you want to make it an error), you can now opt-in to seeing this log message with `--log-override:ambiguous-import=warning` or `--log-override:ambiguous-import=error`. The log message looks like this:
+    In JavaScript, you can re-export symbols from another file using `export * from './another-file'`. When you do this from multiple files that export different symbols with the same name, this creates an ambiguous export which is causes that name to not be exported. This is harmless if you don't plan on using the ambiguous export name, so esbuild doesn't have a warning for this. But if you do want a warning for this (or if you want to make it an error), you can now opt-in to seeing this log message with `--log-override:ambiguous-reexport=warning` or `--log-override:ambiguous-reexport=error`. The log message looks like this:
 
     ```
-    ▲ [WARNING] Re-export of "common" in "example.js" is ambiguous and has been removed [ambiguous-import]
+    ▲ [WARNING] Re-export of "common" in "example.js" is ambiguous and has been removed [ambiguous-reexport]
 
       One definition of "common" comes from "a.js" here:
 
@@ -21,6 +40,65 @@
           3 │ export { b as common }
             ╵               ~~~~~~
     ```
+
+* Optimize the output of the JSON loader ([#2161](https://github.com/evanw/esbuild/issues/2161))
+
+    The `json` loader (which is enabled by default for `.json` files) parses the file as JSON and generates a JavaScript file with the parsed expression as the `default` export. This behavior is standard and works in both node and the browser (well, as long as you use an [import assertion](https://v8.dev/features/import-assertions)). As an extension, esbuild also allows you to import additional top-level properties of the JSON object directly as a named export. This is beneficial for tree shaking. For example:
+
+    ```js
+    import { version } from 'esbuild/package.json'
+    console.log(version)
+    ```
+
+    If you bundle the above code with esbuild, you'll get something like the following:
+
+    ```js
+    // node_modules/esbuild/package.json
+    var version = "0.14.44";
+
+    // example.js
+    console.log(version);
+    ```
+
+    Most of the `package.json` file is irrelevant and has been omitted from the output due to tree shaking. The way esbuild implements this is to have the JavaScript file that's generated from the JSON look something like this with a separate exported variable for each property on the top-level object:
+
+    ```js
+    // node_modules/esbuild/package.json
+    export var name = "esbuild";
+    export var version = "0.14.44";
+    export var repository = "https://github.com/evanw/esbuild";
+    export var bin = {
+      esbuild: "bin/esbuild"
+    };
+    ...
+    export default {
+      name,
+      version,
+      repository,
+      bin,
+      ...
+    };
+    ```
+
+    However, this means that if you import the `default` export instead of a named export, you will get non-optimal output. The `default` export references all top-level properties, leading to many unnecessary variables in the output. With this release esbuild will now optimize this case to only generate additional variables for top-level object properties that are actually imported:
+
+    ```js
+    // Original code
+    import all, { bar } from 'data:application/json,{"foo":[1,2,3],"bar":[4,5,6]}'
+    console.log(all, bar)
+
+    // Old output (with --bundle --minify --format=esm)
+    var a=[1,2,3],l=[4,5,6],r={foo:a,bar:l};console.log(r,l);
+
+    // New output (with --bundle --minify --format=esm)
+    var l=[4,5,6],r={foo:[1,2,3],bar:l};console.log(r,l);
+    ```
+
+    Notice how there is no longer an unnecessary generated variable for `foo` since it's never imported. And if you only import the `default` export, esbuild will now reproduce the original JSON object in the output with all top-level properties compactly inline.
+
+* Add `id` to warnings returned from the API
+
+    With this release, warnings returned from esbuild's API now have an `id` property. This identifies which kind of log message it is, which can be used to more easily filter out certain warnings. For example, reassigning a `const` variable will generate a message with an `id` of `"assign-to-constant"`. This also gives you the identifier you need to apply a log override for that kind of message: https://esbuild.github.io/api/#log-override.
 
 ## 0.14.44
 

@@ -415,6 +415,43 @@ console.log(import_meta.y);
 ---------- /out/dead-code.js ----------
 
 ================================================================================
+TestDefineOptionalChain
+---------- /out.js ----------
+// entry.js
+console.log([
+  1,
+  1,
+  1
+], [
+  1,
+  1,
+  1
+], [
+  a[b][c],
+  a?.[b][c],
+  a[b]?.[c]
+]);
+
+================================================================================
+TestDefineOptionalChainLowered
+---------- /out.js ----------
+// entry.js
+var _a;
+console.log([
+  1,
+  1,
+  1
+], [
+  1,
+  1,
+  1
+], [
+  a[b][c],
+  a == null ? void 0 : a[b][c],
+  (_a = a[b]) == null ? void 0 : _a[c]
+]);
+
+================================================================================
 TestDefineThis
 ---------- /out.js ----------
 // entry.js
@@ -1914,15 +1951,13 @@ TestLoaderDataURLApplicationJSON
 var json_31_32_33_default = "123";
 
 // <data:application/json;base64,eyJ3b3JrcyI6dHJ1ZX0=>
-var works = true;
-var json_base64_eyJ3b3JrcyI6dHJ1ZX0_default = { works };
+var json_base64_eyJ3b3JrcyI6dHJ1ZX0_default = { works: true };
 
 // <data:application/json;charset=UTF-8,%31%32%33>
 var json_charset_UTF_8_31_32_33_default = 123;
 
 // <data:application/json;charset=UTF-8;base64,eyJ3b3JrcyI6dHJ1ZX0=>
-var works2 = true;
-var json_charset_UTF_8_base64_eyJ3b3JrcyI6dHJ1ZX0_default = { works: works2 };
+var json_charset_UTF_8_base64_eyJ3b3JrcyI6dHJ1ZX0_default = { works: true };
 
 // entry.js
 console.log([
