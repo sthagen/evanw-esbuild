@@ -31,13 +31,13 @@ const features = {
   'destructuring, assignment': { target: 'Destructuring' },
   'destructuring, parameters': { target: 'Destructuring' },
   'new.target': { target: 'NewTarget' },
-  'const': { target: 'Const' },
-  'let': { target: 'Let' },
+  'const': { target: 'ConstAndLet' },
+  'let': { target: 'ConstAndLet' },
   'arrow functions': { target: 'Arrow' },
   'class': { target: 'Class' },
   'generators': { target: 'Generator' },
   'Unicode code point escapes': { target: 'UnicodeEscapes' },
-  'RegExp "y" and "u" flags': { target: 'RegExpStickyAndUnicodeFlags' },
+  'RegExp "y" and "u" flags': { target: 'RegexpStickyAndUnicodeFlags' },
 
   // >ES6 features
   'exponentiation (**) operator': { target: 'ExponentOperator' },
@@ -45,14 +45,14 @@ const features = {
   'nested rest destructuring, parameters': { target: 'NestedRestBinding' },
   'async functions': { target: 'AsyncAwait' },
   'object rest/spread properties': { target: 'ObjectRestSpread' },
-  'RegExp Lookbehind Assertions': { target: 'RegExpLookbehindAssertions' },
-  'RegExp named capture groups': { target: 'RegExpNamedCaptureGroups' },
-  'RegExp Unicode Property Escapes': { target: 'RegExpUnicodePropertyEscapes' },
-  's (dotAll) flag for regular expressions': { target: 'RegExpDotAllFlag' },
+  'RegExp Lookbehind Assertions': { target: 'RegexpLookbehindAssertions' },
+  'RegExp named capture groups': { target: 'RegexpNamedCaptureGroups' },
+  'RegExp Unicode Property Escapes': { target: 'RegexpUnicodePropertyEscapes' },
+  's (dotAll) flag for regular expressions': { target: 'RegexpDotAllFlag' },
   'Asynchronous Iterators: async generators': { target: 'AsyncGenerator' },
   'Asynchronous Iterators: for-await-of loops': { target: 'ForAwait' },
   'optional catch binding': { target: 'OptionalCatchBinding' },
-  'BigInt: basic functionality': { target: 'BigInt' },
+  'BigInt: basic functionality': { target: 'Bigint' },
   'optional chaining operator (?.)': { target: 'OptionalChain' },
   'nullish coalescing operator (??)': { target: 'NullishCoalescing' },
   'Logical Assignment': { target: 'LogicalAssignment' },
@@ -135,16 +135,15 @@ mergeVersions('ObjectAccessors', { es5: true })
 mergeVersions('ArraySpread', { es2015: true })
 mergeVersions('Arrow', { es2015: true })
 mergeVersions('Class', { es2015: true })
-mergeVersions('Const', { es2015: true })
+mergeVersions('ConstAndLet', { es2015: true })
 mergeVersions('DefaultArgument', { es2015: true })
 mergeVersions('Destructuring', { es2015: true })
 mergeVersions('DynamicImport', { es2015: true })
 mergeVersions('ForOf', { es2015: true })
 mergeVersions('Generator', { es2015: true })
-mergeVersions('Let', { es2015: true })
 mergeVersions('NewTarget', { es2015: true })
 mergeVersions('ObjectExtensions', { es2015: true })
-mergeVersions('RegExpStickyAndUnicodeFlags', { es2015: true })
+mergeVersions('RegexpStickyAndUnicodeFlags', { es2015: true })
 mergeVersions('RestArgument', { es2015: true })
 mergeVersions('TemplateLiteral', { es2015: true })
 mergeVersions('UnicodeEscapes', { es2015: true })
@@ -156,12 +155,12 @@ mergeVersions('AsyncAwait', { es2017: true })
 mergeVersions('AsyncGenerator', { es2018: true })
 mergeVersions('ForAwait', { es2018: true })
 mergeVersions('ObjectRestSpread', { es2018: true })
-mergeVersions('RegExpDotAllFlag', { es2018: true })
-mergeVersions('RegExpLookbehindAssertions', { es2018: true })
-mergeVersions('RegExpNamedCaptureGroups', { es2018: true })
-mergeVersions('RegExpUnicodePropertyEscapes', { es2018: true })
+mergeVersions('RegexpDotAllFlag', { es2018: true })
+mergeVersions('RegexpLookbehindAssertions', { es2018: true })
+mergeVersions('RegexpNamedCaptureGroups', { es2018: true })
+mergeVersions('RegexpUnicodePropertyEscapes', { es2018: true })
 mergeVersions('OptionalCatchBinding', { es2019: true })
-mergeVersions('BigInt', { es2020: true })
+mergeVersions('Bigint', { es2020: true })
 mergeVersions('ImportMeta', { es2020: true })
 mergeVersions('NullishCoalescing', { es2020: true })
 mergeVersions('OptionalChain', { es2020: true })
@@ -179,7 +178,7 @@ mergeVersions('ClassStaticBlocks', { es2022: true })
 mergeVersions('ClassStaticField', { es2022: true })
 mergeVersions('TopLevelAwait', { es2022: true })
 mergeVersions('ArbitraryModuleNamespaceNames', { es2022: true })
-mergeVersions('RegExpMatchIndices', { es2022: true })
+mergeVersions('RegexpMatchIndices', { es2022: true })
 mergeVersions('ImportAssertions', {})
 
 // Manually copied from https://caniuse.com/?search=export%20*%20as
@@ -296,7 +295,7 @@ mergeVersions('ClassStaticBlocks', {
 })
 
 // Manually copied from https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/hasIndices
-mergeVersions('RegExpMatchIndices', {
+mergeVersions('RegexpMatchIndices', {
   chrome90: true,
   edge90: true,
   firefox88: true,
@@ -327,13 +326,6 @@ for (const test of [...es5.tests, ...es6.tests, ...stage4.tests, ...stage1to3.te
   }
 }
 
-// Work around V8-specific issues
-for (const v8 of ['chrome', 'edge', 'node']) {
-  // Always lower object rest and spread for V8-based JavaScript VMs because of
-  // a severe performance issue: https://bugs.chromium.org/p/v8/issues/detail?id=11536
-  delete versions.ObjectRestSpread[v8]
-}
-
 for (const feature in features) {
   if (!features[feature].found) {
     throw new Error(`Did not find ${feature}`)
@@ -345,7 +337,19 @@ function upper(text) {
   return text[0].toUpperCase() + text.slice(1)
 }
 
-function writeInnerMap(obj) {
+function jsFeatureString(feature) {
+  return feature.replace(/([A-Z])/g, '-$1').slice(1).toLowerCase()
+}
+
+function simpleMap(entries) {
+  let maxLength = 0
+  for (const [key] of entries) {
+    maxLength = Math.max(maxLength, key.length + 1)
+  }
+  return entries.map(([key, value]) => `\t${(key + ':').padEnd(maxLength)} ${value},`).join('\n')
+}
+
+function jsTableMap(obj) {
   const keys = Object.keys(obj).sort()
   const maxLength = keys.reduce((a, b) => Math.max(a, b.length + 1), 0)
   if (keys.length === 0) return '{}'
@@ -382,12 +386,24 @@ const (
 ${Object.keys(versions).sort().map((x, i) => `\t${x}${i ? '' : ' JSFeature = 1 << iota'}`).join('\n')}
 )
 
+var StringToJSFeature = map[string]JSFeature{
+${simpleMap(Object.keys(versions).sort().map(x => [`"${jsFeatureString(x)}"`, x]))}
+}
+
+var JSFeatureToString = map[JSFeature]string{
+${simpleMap(Object.keys(versions).sort().map(x => [x, `"${jsFeatureString(x)}"`]))}
+}
+
 func (features JSFeature) Has(feature JSFeature) bool {
 \treturn (features & feature) != 0
 }
 
+func (features JSFeature) ApplyOverrides(overrides JSFeature, mask JSFeature) JSFeature {
+\treturn (features & ^mask) | (overrides & mask)
+}
+
 var jsTable = map[JSFeature]map[Engine][]versionRange{
-${Object.keys(versions).sort().map(x => `\t${x}: ${writeInnerMap(versions[x])},`).join('\n')}
+${Object.keys(versions).sort().map(x => `\t${x}: ${jsTableMap(versions[x])},`).join('\n')}
 }
 
 // Return all features that are not available in at least one environment

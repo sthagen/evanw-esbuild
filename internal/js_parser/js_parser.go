@@ -202,6 +202,7 @@ type parser struct {
 	regExpRef                js_ast.Ref
 	runtimePublicFieldImport js_ast.Ref
 	superCtorRef             js_ast.Ref
+	jsxDevRef                js_ast.Ref
 
 	// For lowering private methods
 	weakMapRef js_ast.Ref
@@ -378,9 +379,11 @@ type Options struct {
 }
 
 type optionsThatSupportStructuralEquality struct {
-	originalTargetEnv     string
-	moduleTypeData        js_ast.ModuleTypeData
-	unsupportedJSFeatures compat.JSFeature
+	originalTargetEnv                 string
+	moduleTypeData                    js_ast.ModuleTypeData
+	unsupportedJSFeatures             compat.JSFeature
+	unsupportedJSFeatureOverrides     compat.JSFeature
+	unsupportedJSFeatureOverridesMask compat.JSFeature
 
 	// Byte-sized values go here (gathered together here to keep this object compact)
 	ts                      config.TSOptions
@@ -412,25 +415,27 @@ func OptionsFromConfig(options *config.Options) Options {
 		reserveProps:   options.ReserveProps,
 
 		optionsThatSupportStructuralEquality: optionsThatSupportStructuralEquality{
-			unsupportedJSFeatures:   options.UnsupportedJSFeatures,
-			originalTargetEnv:       options.OriginalTargetEnv,
-			ts:                      options.TS,
-			mode:                    options.Mode,
-			platform:                options.Platform,
-			outputFormat:            options.OutputFormat,
-			moduleTypeData:          options.ModuleTypeData,
-			targetFromAPI:           options.TargetFromAPI,
-			asciiOnly:               options.ASCIIOnly,
-			keepNames:               options.KeepNames,
-			minifySyntax:            options.MinifySyntax,
-			minifyIdentifiers:       options.MinifyIdentifiers,
-			omitRuntimeForTests:     options.OmitRuntimeForTests,
-			ignoreDCEAnnotations:    options.IgnoreDCEAnnotations,
-			treeShaking:             options.TreeShaking,
-			dropDebugger:            options.DropDebugger,
-			mangleQuoted:            options.MangleQuoted,
-			unusedImportFlagsTS:     options.UnusedImportFlagsTS,
-			useDefineForClassFields: options.UseDefineForClassFields,
+			unsupportedJSFeatures:             options.UnsupportedJSFeatures,
+			unsupportedJSFeatureOverrides:     options.UnsupportedJSFeatureOverrides,
+			unsupportedJSFeatureOverridesMask: options.UnsupportedJSFeatureOverridesMask,
+			originalTargetEnv:                 options.OriginalTargetEnv,
+			ts:                                options.TS,
+			mode:                              options.Mode,
+			platform:                          options.Platform,
+			outputFormat:                      options.OutputFormat,
+			moduleTypeData:                    options.ModuleTypeData,
+			targetFromAPI:                     options.TargetFromAPI,
+			asciiOnly:                         options.ASCIIOnly,
+			keepNames:                         options.KeepNames,
+			minifySyntax:                      options.MinifySyntax,
+			minifyIdentifiers:                 options.MinifyIdentifiers,
+			omitRuntimeForTests:               options.OmitRuntimeForTests,
+			ignoreDCEAnnotations:              options.IgnoreDCEAnnotations,
+			treeShaking:                       options.TreeShaking,
+			dropDebugger:                      options.DropDebugger,
+			mangleQuoted:                      options.MangleQuoted,
+			unusedImportFlagsTS:               options.UnusedImportFlagsTS,
+			useDefineForClassFields:           options.UseDefineForClassFields,
 		},
 	}
 }
@@ -635,6 +640,15 @@ type fnOnlyDataVisit struct {
 	// or a class declaration). That means the top-level module scope "this" value
 	// has been shadowed and is now inaccessible.
 	isThisNested bool
+
+	// Do not warn about "this" being undefined for code that the TypeScript
+	// compiler generates that looks like this:
+	//
+	//   var __rest = (this && this.__rest) || function (s, e) {
+	//     ...
+	//   };
+	//
+	silenceWarningAboutThisBeingUndefined bool
 }
 
 const bloomFilterSize = 251
@@ -1732,7 +1746,7 @@ func (p *parser) parseProperty(startLoc logger.Loc, kind js_ast.PropertyKind, op
 
 	case js_lexer.TBigIntegerLiteral:
 		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier.String}}
-		p.markSyntaxFeature(compat.BigInt, p.lexer.Range())
+		p.markSyntaxFeature(compat.Bigint, p.lexer.Range())
 		p.lexer.Next()
 
 	case js_lexer.TPrivateIdentifier:
@@ -2202,7 +2216,7 @@ func (p *parser) parsePropertyBinding() js_ast.PropertyBinding {
 
 	case js_lexer.TBigIntegerLiteral:
 		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier.String}}
-		p.markSyntaxFeature(compat.BigInt, p.lexer.Range())
+		p.markSyntaxFeature(compat.Bigint, p.lexer.Range())
 		p.lexer.Next()
 
 	case js_lexer.TOpenBracket:
@@ -3052,7 +3066,7 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 
 	case js_lexer.TBigIntegerLiteral:
 		value := p.lexer.Identifier
-		p.markSyntaxFeature(compat.BigInt, p.lexer.Range())
+		p.markSyntaxFeature(compat.Bigint, p.lexer.Range())
 		p.lexer.Next()
 		return js_ast.Expr{Loc: loc, Data: &js_ast.EBigInt{Value: value.String}}
 
@@ -4289,7 +4303,7 @@ func (p *parser) parseExprOrLetStmt(opts parseStmtOpts) (js_ast.Expr, js_ast.Stm
 			if opts.lexicalDecl != lexicalDeclAllowAll {
 				p.forbidLexicalDecl(letRange.Loc)
 			}
-			p.markSyntaxFeature(compat.Let, letRange)
+			p.markSyntaxFeature(compat.ConstAndLet, letRange)
 			decls := p.parseAndDeclareDecls(js_ast.SymbolOther, opts)
 			return js_ast.Expr{}, js_ast.Stmt{Loc: letRange.Loc, Data: &js_ast.SLocal{
 				Kind:     js_ast.LocalLet,
@@ -6183,7 +6197,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		if opts.lexicalDecl != lexicalDeclAllowAll {
 			p.forbidLexicalDecl(loc)
 		}
-		p.markSyntaxFeature(compat.Const, p.lexer.Range())
+		p.markSyntaxFeature(compat.ConstAndLet, p.lexer.Range())
 		p.lexer.Next()
 
 		if p.options.ts.Parse && p.lexer.Token == js_lexer.TEnum {
@@ -6432,7 +6446,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 			initOrNil = js_ast.Stmt{Loc: initLoc, Data: &js_ast.SLocal{Kind: js_ast.LocalVar, Decls: decls}}
 
 		case js_lexer.TConst:
-			p.markSyntaxFeature(compat.Const, p.lexer.Range())
+			p.markSyntaxFeature(compat.ConstAndLet, p.lexer.Range())
 			p.lexer.Next()
 			decls = p.parseAndDeclareDecls(js_ast.SymbolConst, parseStmtOpts{})
 			initOrNil = js_ast.Stmt{Loc: initLoc, Data: &js_ast.SLocal{Kind: js_ast.LocalConst, Decls: decls}}
@@ -7513,7 +7527,7 @@ func (p *parser) visitStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt {
 		// Reuse memory from "before"
 		before = before[:0]
 		kind := js_ast.LocalLet
-		if p.options.unsupportedJSFeatures.Has(compat.Let) {
+		if p.options.unsupportedJSFeatures.Has(compat.ConstAndLet) {
 			kind = js_ast.LocalVar
 		}
 		if len(letDecls) > 0 {
@@ -8986,6 +9000,16 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		if s.Items != nil {
 			for _, item := range *s.Items {
 				p.recordDeclaredSymbol(item.Name.Ref)
+			}
+
+			// Recognize code like this: "import { jsxDEV as _jsxDEV } from 'react/jsx-dev-runtime'"
+			if p.importRecords[s.ImportRecordIndex].Path.Text == "react/jsx-dev-runtime" {
+				for _, item := range *s.Items {
+					if item.Alias == "jsxDEV" {
+						p.jsxDevRef = item.Name.Ref
+						break
+					}
+				}
 			}
 		}
 
@@ -11351,7 +11375,7 @@ func (p *parser) valueForThis(
 		// Otherwise, replace top-level "this" with either "undefined" or "exports"
 		if p.isFileConsideredToHaveESMExports {
 			// Warn about "this" becoming undefined, but only once per file
-			if shouldWarn && !p.warnedThisIsUndefined {
+			if shouldWarn && !p.warnedThisIsUndefined && !p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined {
 				p.warnedThisIsUndefined = true
 
 				// Show the warning as a debug message if we're in "node_modules"
@@ -11609,17 +11633,17 @@ pattern:
 			tail := pattern[i:]
 
 			if strings.HasPrefix(tail, "?<=") || strings.HasPrefix(tail, "?<!") {
-				if p.options.unsupportedJSFeatures.Has(compat.RegExpLookbehindAssertions) {
-					feature = compat.RegExpLookbehindAssertions
+				if p.options.unsupportedJSFeatures.Has(compat.RegexpLookbehindAssertions) {
+					feature = compat.RegexpLookbehindAssertions
 					what = "Lookbehind assertions in regular expressions are not available"
 					r = logger.Range{Loc: logger.Loc{Start: loc.Start + int32(i) + 1}, Len: 3}
 					isUnsupported = true
 					break pattern
 				}
 			} else if strings.HasPrefix(tail, "?<") {
-				if p.options.unsupportedJSFeatures.Has(compat.RegExpNamedCaptureGroups) {
+				if p.options.unsupportedJSFeatures.Has(compat.RegexpNamedCaptureGroups) {
 					if end := strings.IndexByte(tail, '>'); end >= 0 {
-						feature = compat.RegExpNamedCaptureGroups
+						feature = compat.RegexpNamedCaptureGroups
 						what = "Named capture groups in regular expressions are not available"
 						r = logger.Range{Loc: logger.Loc{Start: loc.Start + int32(i) + 1}, Len: int32(end) + 1}
 						isUnsupported = true
@@ -11643,9 +11667,9 @@ pattern:
 			tail := pattern[i:]
 
 			if isUnicode && (strings.HasPrefix(tail, "p{") || strings.HasPrefix(tail, "P{")) {
-				if p.options.unsupportedJSFeatures.Has(compat.RegExpUnicodePropertyEscapes) {
+				if p.options.unsupportedJSFeatures.Has(compat.RegexpUnicodePropertyEscapes) {
 					if end := strings.IndexByte(tail, '}'); end >= 0 {
-						feature = compat.RegExpUnicodePropertyEscapes
+						feature = compat.RegexpUnicodePropertyEscapes
 						what = "Unicode property escapes in regular expressions are not available"
 						r = logger.Range{Loc: logger.Loc{Start: loc.Start + int32(i)}, Len: int32(end) + 2}
 						isUnsupported = true
@@ -11665,22 +11689,22 @@ pattern:
 				continue // These are part of ES5 and are always supported
 
 			case 's':
-				if !p.options.unsupportedJSFeatures.Has(compat.RegExpDotAllFlag) {
+				if !p.options.unsupportedJSFeatures.Has(compat.RegexpDotAllFlag) {
 					continue // This is part of ES2018
 				}
-				feature = compat.RegExpDotAllFlag
+				feature = compat.RegexpDotAllFlag
 
 			case 'y', 'u':
-				if !p.options.unsupportedJSFeatures.Has(compat.RegExpStickyAndUnicodeFlags) {
+				if !p.options.unsupportedJSFeatures.Has(compat.RegexpStickyAndUnicodeFlags) {
 					continue // These are part of ES2018
 				}
-				feature = compat.RegExpStickyAndUnicodeFlags
+				feature = compat.RegexpStickyAndUnicodeFlags
 
 			case 'd':
-				if !p.options.unsupportedJSFeatures.Has(compat.RegExpMatchIndices) {
+				if !p.options.unsupportedJSFeatures.Has(compat.RegexpMatchIndices) {
 					continue // This is part of ES2022
 				}
-				feature = compat.RegExpMatchIndices
+				feature = compat.RegexpMatchIndices
 
 			default:
 				// Unknown flags are never supported
@@ -12064,6 +12088,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		isTemplateTag := e == p.templateTag
 		isStmtExpr := e == p.stmtExprValue
 		wasAnonymousNamedExpr := p.isAnonymousNamedExpr(e.Right)
+		oldSilenceWarningAboutThisBeingUndefined := p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined
+		if _, ok := e.Left.Data.(*js_ast.EThis); ok && e.Op == js_ast.BinOpLogicalAnd {
+			p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined = true
+		}
 		e.Left, _ = p.visitExprInOut(e.Left, exprIn{
 			assignTarget:               e.Op.BinaryAssignTarget(),
 			shouldMangleStringsAsProps: e.Op == js_ast.BinOpIn,
@@ -12112,6 +12140,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		default:
 			e.Right = p.visitExpr(e.Right)
 		}
+		p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined = oldSilenceWarningAboutThisBeingUndefined
 
 		// Always put constants on the right for equality comparisons to help
 		// reduce the number of cases we have to check during pattern matching. We
@@ -13576,7 +13605,25 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 
 		// Visit the arguments
 		for i, arg := range e.Args {
-			arg = p.visitExpr(arg)
+			if i == 5 && len(e.Args) == 6 {
+				// Hack: Silence the "this is undefined" warning when running esbuild on
+				// JSX that has been specifically compiled in the style of React 17+:
+				//
+				//   import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
+				//   export var Foo = () => _jsxDEV("div", {}, void 0, false, { fileName: "Foo.tsx", lineNumber: 1, columnNumber: 23 }, this);
+				//
+				oldSilenceWarningAboutThisBeingUndefined := p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined
+				if _, ok := arg.Data.(*js_ast.EThis); ok {
+					if id, ok := e.Target.Data.(*js_ast.EImportIdentifier); ok && id.Ref == p.jsxDevRef {
+						p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined = true
+					}
+				}
+				arg = p.visitExpr(arg)
+				p.fnOnlyDataVisit.silenceWarningAboutThisBeingUndefined = oldSilenceWarningAboutThisBeingUndefined
+			} else {
+				arg = p.visitExpr(arg)
+			}
+
 			if _, ok := arg.Data.(*js_ast.ESpread); ok {
 				hasSpread = true
 			}
@@ -15165,6 +15212,7 @@ func newParser(log logger.Log, source logger.Source, lexer js_lexer.Lexer, optio
 		importMetaRef:            js_ast.InvalidRef,
 		runtimePublicFieldImport: js_ast.InvalidRef,
 		superCtorRef:             js_ast.InvalidRef,
+		jsxDevRef:                js_ast.InvalidRef,
 
 		// For lowering private methods
 		weakMapRef:     js_ast.InvalidRef,
@@ -15245,6 +15293,11 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	// TypeScript "target" setting is ignored.
 	if options.targetFromAPI == config.TargetWasUnconfigured && options.tsTarget != nil {
 		options.unsupportedJSFeatures |= options.tsTarget.UnsupportedJSFeatures
+
+		// Re-apply overrides to make sure they always win
+		options.unsupportedJSFeatures = options.unsupportedJSFeatures.ApplyOverrides(
+			options.unsupportedJSFeatureOverrides,
+			options.unsupportedJSFeatureOverridesMask)
 	}
 
 	p := newParser(log, source, js_lexer.NewLexer(log, source, options.ts), &options)
