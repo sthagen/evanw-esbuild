@@ -175,6 +175,7 @@ const (
 	tsTypeIdentifierAsserts
 	tsTypeIdentifierPrefix
 	tsTypeIdentifierPrimitive
+	tsTypeIdentifierInfer
 )
 
 // Use a map to improve lookup speed
@@ -185,7 +186,6 @@ var tsTypeIdentifierMap = map[string]tsTypeIdentifierKind{
 
 	"keyof":    tsTypeIdentifierPrefix,
 	"readonly": tsTypeIdentifierPrefix,
-	"infer":    tsTypeIdentifierPrefix,
 
 	"any":       tsTypeIdentifierPrimitive,
 	"never":     tsTypeIdentifierPrimitive,
@@ -197,9 +197,12 @@ var tsTypeIdentifierMap = map[string]tsTypeIdentifierKind{
 	"boolean":   tsTypeIdentifierPrimitive,
 	"bigint":    tsTypeIdentifierPrimitive,
 	"symbol":    tsTypeIdentifierPrimitive,
+
+	"infer": tsTypeIdentifierInfer,
 }
 
 func (p *parser) skipTypeScriptTypeWithOpts(level js_ast.L, opts skipTypeOpts) {
+loop:
 	for {
 		switch p.lexer.Token {
 		case js_lexer.TNumericLiteral, js_lexer.TBigIntegerLiteral, js_lexer.TStringLiteral,
@@ -291,8 +294,10 @@ func (p *parser) skipTypeScriptTypeWithOpts(level js_ast.L, opts skipTypeOpts) {
 
 		case js_lexer.TIdentifier:
 			kind := tsTypeIdentifierMap[p.lexer.Identifier.String]
+			checkTypeParameters := true
 
-			if kind == tsTypeIdentifierPrefix {
+			switch kind {
+			case tsTypeIdentifierPrefix:
 				p.lexer.Next()
 
 				// Valid:
@@ -305,27 +310,40 @@ func (p *parser) skipTypeScriptTypeWithOpts(level js_ast.L, opts skipTypeOpts) {
 				if p.lexer.Token != js_lexer.TColon || (!opts.isIndexSignature && !opts.allowTupleLabels) {
 					p.skipTypeScriptType(js_ast.LPrefix)
 				}
-				break
-			}
+				break loop
 
-			checkTypeParameters := true
+			case tsTypeIdentifierInfer:
+				p.lexer.Next()
 
-			if kind == tsTypeIdentifierUnique {
+				// "type Foo = Bar extends [infer T] ? T : null"
+				// "type Foo = Bar extends [infer T extends string] ? T : null"
+				if p.lexer.Token != js_lexer.TColon || (!opts.isIndexSignature && !opts.allowTupleLabels) {
+					p.lexer.Expect(js_lexer.TIdentifier)
+					if p.lexer.Token == js_lexer.TExtends {
+						p.lexer.Next()
+						p.skipTypeScriptType(js_ast.LPrefix)
+					}
+				}
+				break loop
+
+			case tsTypeIdentifierUnique:
 				p.lexer.Next()
 
 				// "let foo: unique symbol"
 				if p.lexer.IsContextualKeyword("symbol") {
 					p.lexer.Next()
-					break
+					break loop
 				}
-			} else if kind == tsTypeIdentifierAbstract {
+
+			case tsTypeIdentifierAbstract:
 				p.lexer.Next()
 
 				// "let foo: abstract new () => {}" added in TypeScript 4.2
 				if p.lexer.Token == js_lexer.TNew {
 					continue
 				}
-			} else if kind == tsTypeIdentifierAsserts {
+
+			case tsTypeIdentifierAsserts:
 				p.lexer.Next()
 
 				// "function assert(x: boolean): asserts x"
@@ -333,10 +351,12 @@ func (p *parser) skipTypeScriptTypeWithOpts(level js_ast.L, opts skipTypeOpts) {
 				if opts.isReturnType && !p.lexer.HasNewlineBefore && (p.lexer.Token == js_lexer.TIdentifier || p.lexer.Token == js_lexer.TThis) {
 					p.lexer.Next()
 				}
-			} else if kind == tsTypeIdentifierPrimitive {
+
+			case tsTypeIdentifierPrimitive:
 				p.lexer.Next()
 				checkTypeParameters = false
-			} else {
+
+			default:
 				p.lexer.Next()
 			}
 

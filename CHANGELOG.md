@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.46
 
 * Add the ability to override support for individual syntax features ([#2060](https://github.com/evanw/esbuild/issues/2060), [#2290](https://github.com/evanw/esbuild/issues/2290), [#2308](https://github.com/evanw/esbuild/issues/2308))
 
@@ -81,6 +81,19 @@
     Since you can now specify `--supported:object-rest-spread=false` yourself to work around the V8 performance issue mentioned above, esbuild will no longer automatically transform all instances of object spread when targeting a V8-based JavaScript runtime going forward.
 
     _Note that JavaScript feature transformation is very complex and allowing full customization of the set of supported syntax features could cause bugs in esbuild due to new interactions between multiple features that were never possible before. Consider this to be an experimental feature._
+
+* Implement `extends` constraints on `infer` type variables ([#2330](https://github.com/evanw/esbuild/issues/2330))
+
+    TypeScript 4.7 introduced the ability to write an `extends` constraint after an `infer` type variable, which looks like this:
+
+    ```ts
+    type FirstIfString<T> =
+      T extends [infer S extends string, ...unknown[]]
+        ? S
+        : never;
+    ```
+
+    You can read the blog post for more details: https://devblogs.microsoft.com/typescript/announcing-typescript-4-7/#extends-constraints-on-infer-type-variables. Previously this was a syntax error in esbuild but with this release, esbuild can now parse this syntax correctly.
 
 * Allow `define` to match optional chain expressions ([#2324](https://github.com/evanw/esbuild/issues/2324))
 
