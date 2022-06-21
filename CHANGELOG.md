@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.47
 
 * Make global names more compact when `||=` is available ([#2331](https://github.com/evanw/esbuild/issues/2331))
 
@@ -33,6 +33,24 @@
     ```
 
     Notice how the property `foo` is always used unquoted but the property `bar` is always used quoted, so `foo` should be consistently mangled while `bar` should be consistently not mangled.
+
+* Fix a minification bug regarding `this` and property initializers
+
+    When minification is enabled, esbuild attempts to inline the initializers of variables that have only been used once into the start of the following expression to reduce code size. However, there was a bug where this transformation could change the value of `this` when the initializer is a property access and the start of the following expression is a call expression. This release fixes the bug:
+
+    ```js
+    // Original code
+    function foo(obj) {
+      let fn = obj.prop;
+      fn();
+    }
+
+    // Old output (with --minify)
+    function foo(f){f.prop()}
+
+    // New output (with --minify)
+    function foo(o){let f=o.prop;f()}
+    ```
 
 ## 0.14.46
 
