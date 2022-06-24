@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+* Add support for font file MIME types ([#2337](https://github.com/evanw/esbuild/issues/2337))
+
+    This release adds support for font file MIME types to esbuild, which means they are now recognized by the built-in local web server and they are now used when a font file is loaded using the `dataurl` loader. The full set of newly-added file extension MIME type mappings is as follows:
+
+    * `.eot` => `application/vnd.ms-fontobject`
+    * `.otf` => `font/otf`
+    * `.sfnt` => `font/sfnt`
+    * `.ttf` => `font/ttf`
+    * `.woff` => `font/woff`
+    * `.woff2` => `font/woff2`
+
+* Remove `"use strict";` when targeting ESM ([#2347](https://github.com/evanw/esbuild/issues/2347))
+
+    All ES module code is automatically in strict mode, so a `"use strict";` directive is unnecessary. With this release, esbuild will now remove the `"use strict";` directive if the output format is ESM. This change makes the generated output file a few bytes smaller:
+
+    ```js
+    // Original code
+    'use strict'
+    export let foo = 123
+
+    // Old output (with --format=esm --minify)
+    "use strict";let t=123;export{t as foo};
+
+    // New output (with --format=esm --minify)
+    let t=123;export{t as foo};
+    ```
+
 ## 0.14.47
 
 * Make global names more compact when `||=` is available ([#2331](https://github.com/evanw/esbuild/issues/2331))
