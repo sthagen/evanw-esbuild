@@ -1,5 +1,69 @@
 # Changelog
 
+## Unreleased
+
+* Fix generated TypeScript `enum` comments containing `*/` ([#2369](https://github.com/evanw/esbuild/issues/2369), [#2371](https://github.com/evanw/esbuild/pull/2371))
+
+    TypeScript `enum` values that are equal to a number or string literal are inlined (references to the enum are replaced with the literal value) and have a `/* ... */` comment after them with the original enum name to improve readability. However, this comment is omitted if the enum name contains the character sequence `*/` because that would end the comment early and cause a syntax error:
+
+    ```ts
+    // Original TypeScript
+    enum Foo { '/*' = 1, '*/' = 2 }
+    console.log(Foo['/*'], Foo['*/'])
+
+    // Generated JavaScript
+    console.log(1 /* /* */, 2);
+    ```
+
+    This was originally handled correctly when TypeScript `enum` inlining was initially implemented since it was only supported within a single file. However, when esbuild was later extended to support TypeScript `enum` inlining across files, this special case where the enum name contains `*/` was not handled in that new code. Starting with this release, esbuild will now handle enums with names containing `*/` correctly when they are inlined across files:
+
+    ```ts
+    // foo.ts
+    export enum Foo { '/*' = 1, '*/' = 2 }
+
+    // bar.ts
+    import { Foo } from './foo'
+    console.log(Foo['/*'], Foo['*/'])
+
+    // Old output (with --bundle --format=esm)
+    console.log(1 /* /* */, 2 /* */ */);
+
+    // New output (with --bundle --format=esm)
+    console.log(1 /* /* */, 2);
+    ```
+
+    This fix was contributed by [@magic-akari](https://github.com/magic-akari).
+
+* Fix a bug in esbuild's feature compatibility table generator ([#2365](https://github.com/evanw/esbuild/issues/2365))
+
+    Passing specific JavaScript engines to esbuild's `--target` flag restricts esbuild to only using JavaScript features that are supported on those engines in the output files that esbuild generates. The data for this feature is automatically derived from this compatibility table with a script: https://kangax.github.io/compat-table/.
+
+    However, the script had a bug that could incorrectly consider a JavaScript syntax feature to be supported in a given engine even when it doesn't actually work in that engine. Specifically this bug happened when a certain aspect of JavaScript syntax has always worked incorrectly in that engine and the bug in that engine has never been fixed. This situation hasn't really come up before because previously esbuild pretty much only targeted JavaScript engines that always fix their bugs, but the two new JavaScript engines that were added in the previous release ([Hermes](https://hermesengine.dev/) and [Rhino](https://github.com/mozilla/rhino)) have many aspects of the JavaScript specification that have never been implemented, and may never be implemented. For example, the `let` and `const` keywords are not implemented correctly in those engines.
+
+    With this release, esbuild's compatibility table generator script has been fixed and as a result, esbuild will now correctly consider a JavaScript syntax feature to be unsupported in a given engine if there is some aspect of that syntax that is broken in all known versions of that engine. This means that the following JavaScript syntax features are no longer considered to be supported by these engines (represented using esbuild's internal names for these syntax features):
+
+    Hermes:
+    - `arrow`
+    - `const-and-let`
+    - `default-argument`
+    - `generator`
+    - `optional-catch-binding`
+    - `optional-chain`
+    - `rest-argument`
+    - `template-literal`
+
+    Rhino:
+    - `arrow`
+    - `const-and-let`
+    - `destructuring`
+    - `for-of`
+    - `generator`
+    - `object-extensions`
+    - `template-literal`
+
+    IE:
+    - `const-and-let`
+
 ## 0.14.48
 
 * Enable using esbuild in Deno via WebAssembly ([#2323](https://github.com/evanw/esbuild/issues/2323))
