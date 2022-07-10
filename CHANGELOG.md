@@ -1,6 +1,47 @@
 # Changelog
 
-## Unreleased
+## 0.14.49
+
+* Keep inlined constants when direct `eval` is present ([#2361](https://github.com/evanw/esbuild/issues/2361))
+
+    Version 0.14.19 of esbuild added inlining of certain `const` variables during minification, which replaces all references to the variable with the initializer and then removes the variable declaration. However, this could generate incorrect code when direct `eval` is present because the direct `eval` could reference the constant by name. This release fixes the problem by preserving the `const` variable declaration in this case:
+
+    ```js
+    // Original code
+    console.log((() => { const x = 123; return x + eval('x') }))
+
+    // Old output (with --minify)
+    console.log(()=>123+eval("x"));
+
+    // New output (with --minify)
+    console.log(()=>{const x=123;return 123+eval("x")});
+    ```
+
+* Fix an incorrect error in TypeScript when targeting ES5 ([#2375](https://github.com/evanw/esbuild/issues/2375))
+
+    Previously when compiling TypeScript code to ES5, esbuild could incorrectly consider the following syntax forms as a transformation error:
+
+    ```ts
+    0 ? ([]) : 1 ? ({}) : 2;
+    ```
+
+    The error messages looked like this:
+
+    ```
+    ✘ [ERROR] Transforming destructuring to the configured target environment ("es5") is not supported yet
+
+        example.ts:1:5:
+          1 │ 0 ? ([]) : 1 ? ({}) : 2;
+            ╵      ^
+
+    ✘ [ERROR] Transforming destructuring to the configured target environment ("es5") is not supported yet
+
+        example.ts:1:16:
+          1 │ 0 ? ([]) : 1 ? ({}) : 2;
+            ╵                 ^
+    ```
+
+    These parenthesized literals followed by a colon look like the start of an arrow function expression followed by a TypeScript return type (e.g. `([]) : 1` could be the start of the TypeScript arrow function `([]): 1 => 1`). Unlike in JavaScript, parsing arrow functions in TypeScript requires backtracking. In this case esbuild correctly determined that this expression wasn't an arrow function after all but the check for destructuring was incorrectly not covered under the backtracking process. With this release, the error message is now only reported if the parser successfully parses an arrow function without backtracking.
 
 * Fix generated TypeScript `enum` comments containing `*/` ([#2369](https://github.com/evanw/esbuild/issues/2369), [#2371](https://github.com/evanw/esbuild/pull/2371))
 
@@ -33,6 +74,33 @@
     ```
 
     This fix was contributed by [@magic-akari](https://github.com/magic-akari).
+
+* Allow `declare` class fields to be initialized ([#2380](https://github.com/evanw/esbuild/issues/2380))
+
+    This release fixes an oversight in the TypeScript parser that disallowed initializers for `declare` class fields. TypeScript actually allows the following limited initializer expressions for `readonly` fields:
+
+    ```ts
+    declare const enum a { b = 0 }
+
+    class Foo {
+      // These are allowed by TypeScript
+      declare readonly a = 0
+      declare readonly b = -0
+      declare readonly c = 0n
+      declare readonly d = -0n
+      declare readonly e = 'x'
+      declare readonly f = `x`
+      declare readonly g = a.b
+      declare readonly h = a['b']
+
+      // These are not allowed by TypeScript
+      declare readonly x = (0)
+      declare readonly y = null
+      declare readonly z = -a.b
+    }
+    ```
+
+    So with this release, esbuild now allows initializers for `declare` class fields too. To future-proof this in case TypeScript allows more expressions as initializers in the future (such as `null`), esbuild will allow any expression as an initializer and will leave the specifics of TypeScript's special-casing here to the TypeScript type checker.
 
 * Fix a bug in esbuild's feature compatibility table generator ([#2365](https://github.com/evanw/esbuild/issues/2365))
 

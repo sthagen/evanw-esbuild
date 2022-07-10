@@ -1984,10 +1984,6 @@ func (p *parser) parseProperty(startLoc logger.Loc, kind js_ast.PropertyKind, op
 		}
 
 		if p.lexer.Token == js_lexer.TEquals {
-			if opts.tsDeclareRange.Len != 0 {
-				p.log.AddError(&p.tracker, p.lexer.Range(), "Class fields that use \"declare\" cannot be initialized")
-			}
-
 			p.lexer.Next()
 
 			// "this" and "super" property access is allowed in field initializers
@@ -2808,7 +2804,8 @@ func (p *parser) convertExprToBinding(expr js_ast.Expr, invalidLog invalidLog) (
 		if e.CommaAfterSpread.Start != 0 {
 			invalidLog.invalidTokens = append(invalidLog.invalidTokens, logger.Range{Loc: e.CommaAfterSpread, Len: 1})
 		}
-		p.markSyntaxFeature(compat.Destructuring, p.source.RangeOfOperatorAfter(expr.Loc, "["))
+		invalidLog.syntaxFeatures = append(invalidLog.syntaxFeatures,
+			syntaxFeature{feature: compat.Destructuring, token: p.source.RangeOfOperatorAfter(expr.Loc, "[")})
 		items := []js_ast.ArrayBinding{}
 		isSpread := false
 		for _, item := range e.Items {
@@ -2833,7 +2830,8 @@ func (p *parser) convertExprToBinding(expr js_ast.Expr, invalidLog invalidLog) (
 		if e.CommaAfterSpread.Start != 0 {
 			invalidLog.invalidTokens = append(invalidLog.invalidTokens, logger.Range{Loc: e.CommaAfterSpread, Len: 1})
 		}
-		p.markSyntaxFeature(compat.Destructuring, p.source.RangeOfOperatorAfter(expr.Loc, "{"))
+		invalidLog.syntaxFeatures = append(invalidLog.syntaxFeatures,
+			syntaxFeature{feature: compat.Destructuring, token: p.source.RangeOfOperatorAfter(expr.Loc, "{")})
 		properties := []js_ast.PropertyBinding{}
 		for _, item := range e.Properties {
 			if item.Flags.Has(js_ast.PropertyIsMethod) || item.Kind == js_ast.PropertyGet || item.Kind == js_ast.PropertySet {
@@ -5827,7 +5825,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 	switch p.lexer.Token {
 	case js_lexer.TSemicolon:
 		p.lexer.Next()
-		return js_ast.Stmt{Loc: loc, Data: &js_ast.SEmpty{}}
+		return js_ast.Stmt{Loc: loc, Data: js_ast.SEmptyShared}
 
 	case js_lexer.TExport:
 		previousExportKeyword := p.esmExportKeyword
@@ -6807,7 +6805,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 	case js_lexer.TDebugger:
 		p.lexer.Next()
 		p.lexer.ExpectOrInsertSemicolon()
-		return js_ast.Stmt{Loc: loc, Data: &js_ast.SDebugger{}}
+		return js_ast.Stmt{Loc: loc, Data: js_ast.SDebuggerShared}
 
 	case js_lexer.TOpenBrace:
 		p.pushScopeForParsePass(js_ast.ScopeBlock, loc)
@@ -7608,6 +7606,41 @@ func isDirectiveSupported(s *js_ast.SDirective) bool {
 }
 
 func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt {
+	// Remove inlined constants now that we know whether any of these statements
+	// contained a direct eval() or not. This can't be done earlier when we
+	// encounter the constant because we haven't encountered the eval() yet.
+	// Inlined constants are not removed if they are in a top-level scope or
+	// if they are exported (which could be in a nested TypeScript namespace).
+	if p.currentScope.Parent != nil && !p.currentScope.ContainsDirectEval {
+		for i, stmt := range stmts {
+			switch s := stmt.Data.(type) {
+			case *js_ast.SEmpty, *js_ast.SComment, *js_ast.SDirective, *js_ast.SDebugger, *js_ast.STypeScript:
+				continue
+
+			case *js_ast.SLocal:
+				if !s.IsExport {
+					end := 0
+					for _, d := range s.Decls {
+						if id, ok := d.Binding.Data.(*js_ast.BIdentifier); ok {
+							if _, ok := p.constValues[id.Ref]; ok {
+								continue
+							}
+						}
+						s.Decls[end] = d
+						end++
+					}
+					if end == 0 {
+						stmts[i].Data = js_ast.SEmptyShared
+					} else {
+						s.Decls = s.Decls[:end]
+					}
+				}
+				continue
+			}
+			break
+		}
+	}
+
 	// Merge adjacent statements during mangling
 	result := make([]js_ast.Stmt, 0, len(stmts))
 	isControlFlowDead := false
@@ -8404,7 +8437,7 @@ func (p *parser) visitSingleStmt(stmt js_ast.Stmt, kind stmtsKind) js_ast.Stmt {
 // One statement could potentially expand to several statements
 func stmtsToSingleStmt(loc logger.Loc, stmts []js_ast.Stmt) js_ast.Stmt {
 	if len(stmts) == 0 {
-		return js_ast.Stmt{Loc: loc, Data: &js_ast.SEmpty{}}
+		return js_ast.Stmt{Loc: loc, Data: js_ast.SEmptyShared}
 	}
 	if len(stmts) == 1 {
 		// "let" and "const" must be put in a block when in a single-statement context
@@ -8549,7 +8582,7 @@ func dropFirstStatement(body js_ast.Stmt, replaceOrNil js_ast.Stmt) js_ast.Stmt 
 	if replaceOrNil.Data != nil {
 		return replaceOrNil
 	}
-	return js_ast.Stmt{Loc: body.Loc, Data: &js_ast.SEmpty{}}
+	return js_ast.Stmt{Loc: body.Loc, Data: js_ast.SEmptyShared}
 }
 
 func mangleFor(s *js_ast.SFor) {
@@ -9254,9 +9287,8 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		// Local statements do not end the const local prefix
 		p.currentScope.IsAfterConstLocalPrefix = wasAfterAfterConstLocalPrefix
 
-		end := 0
 		for i := range s.Decls {
-			d := s.Decls[i]
+			d := &s.Decls[i]
 			p.visitBinding(d.Binding, bindingOpts{})
 
 			// Visit the initializer
@@ -9308,13 +9340,6 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 								p.constValues = make(map[js_ast.Ref]js_ast.ConstValue)
 							}
 							p.constValues[id.Ref] = value
-
-							// Only keep this declaration if it's top-level or exported (which
-							// could be in a nested TypeScript namespace), otherwise erase it
-							if p.currentScope.Parent == nil || s.IsExport {
-								s.Decls[end] = d
-								end++
-							}
 							continue
 						}
 					}
@@ -9327,19 +9352,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 					p.currentScope.IsAfterConstLocalPrefix = true
 				}
 			}
-
-			// Keep the declaration if we didn't continue the loop above
-			s.Decls[end] = d
-			end++
 		}
-
-		// Remove this declaration entirely if all symbols are inlined constants
-		if end == 0 {
-			return stmts
-		}
-
-		// Trim the removed declarations
-		s.Decls = s.Decls[:end]
 
 		// Handle being exported inside a namespace
 		if s.IsExport && p.enclosingNamespaceArgRef != nil {
@@ -9446,7 +9459,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 				stmt = s.Stmts[0]
 			} else if len(s.Stmts) == 0 {
 				// Trim empty blocks
-				stmt = js_ast.Stmt{Loc: stmt.Loc, Data: &js_ast.SEmpty{}}
+				stmt = js_ast.Stmt{Loc: stmt.Loc, Data: js_ast.SEmptyShared}
 			}
 		}
 
