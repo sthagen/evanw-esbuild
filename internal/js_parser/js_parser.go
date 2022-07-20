@@ -2821,9 +2821,10 @@ func (p *parser) convertExprToBinding(expr js_ast.Expr, invalidLog invalidLog) (
 			items = append(items, js_ast.ArrayBinding{Binding: binding, DefaultValueOrNil: initializerOrNil})
 		}
 		return js_ast.Binding{Loc: expr.Loc, Data: &js_ast.BArray{
-			Items:        items,
-			HasSpread:    isSpread,
-			IsSingleLine: e.IsSingleLine,
+			Items:           items,
+			HasSpread:       isSpread,
+			IsSingleLine:    e.IsSingleLine,
+			CloseBracketLoc: e.CloseBracketLoc,
 		}}, invalidLog
 
 	case *js_ast.EObject:
@@ -2852,8 +2853,9 @@ func (p *parser) convertExprToBinding(expr js_ast.Expr, invalidLog invalidLog) (
 			})
 		}
 		return js_ast.Binding{Loc: expr.Loc, Data: &js_ast.BObject{
-			Properties:   properties,
-			IsSingleLine: e.IsSingleLine,
+			Properties:    properties,
+			IsSingleLine:  e.IsSingleLine,
+			CloseBraceLoc: e.CloseBraceLoc,
 		}}, invalidLog
 
 	default:
@@ -3208,12 +3210,18 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		target := p.parseExprWithFlags(js_ast.LMember, flags)
 		args := []js_ast.Expr{}
 		var closeParenLoc logger.Loc
+		var isMultiLine bool
 
 		if p.lexer.Token == js_lexer.TOpenParen {
-			args, closeParenLoc = p.parseCallArgs()
+			args, closeParenLoc, isMultiLine = p.parseCallArgs()
 		}
 
-		return js_ast.Expr{Loc: loc, Data: &js_ast.ENew{Target: target, Args: args, CloseParenLoc: closeParenLoc}}
+		return js_ast.Expr{Loc: loc, Data: &js_ast.ENew{
+			Target:        target,
+			Args:          args,
+			CloseParenLoc: closeParenLoc,
+			IsMultiLine:   isMultiLine,
+		}}
 
 	case js_lexer.TOpenBracket:
 		p.lexer.Next()
@@ -3697,12 +3705,13 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 				if level >= js_ast.LCall {
 					return left
 				}
-				args, closeParenLoc := p.parseCallArgs()
+				args, closeParenLoc, isMultiLine := p.parseCallArgs()
 				left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.ECall{
 					Target:        left,
 					Args:          args,
 					CloseParenLoc: closeParenLoc,
 					OptionalChain: optionalStart,
+					IsMultiLine:   isMultiLine,
 				}}
 
 			case js_lexer.TLessThan, js_lexer.TLessThanLessThan:
@@ -3718,12 +3727,13 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 				if level >= js_ast.LCall {
 					return left
 				}
-				args, closeParenLoc := p.parseCallArgs()
+				args, closeParenLoc, isMultiLine := p.parseCallArgs()
 				left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.ECall{
 					Target:        left,
 					Args:          args,
 					CloseParenLoc: closeParenLoc,
 					OptionalChain: optionalStart,
+					IsMultiLine:   isMultiLine,
 				}}
 
 			default:
@@ -3819,12 +3829,13 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 			if level >= js_ast.LCall {
 				return left
 			}
-			args, closeParenLoc := p.parseCallArgs()
+			args, closeParenLoc, isMultiLine := p.parseCallArgs()
 			left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.ECall{
 				Target:        left,
 				Args:          args,
 				CloseParenLoc: closeParenLoc,
 				OptionalChain: oldOptionalChain,
+				IsMultiLine:   isMultiLine,
 			}}
 			optionalChain = oldOptionalChain
 
@@ -4329,7 +4340,7 @@ func (p *parser) parseExprOrLetStmt(opts parseStmtOpts) (js_ast.Expr, js_ast.Stm
 	return p.parseSuffix(expr, js_ast.LLowest, nil, 0), js_ast.Stmt{}, nil
 }
 
-func (p *parser) parseCallArgs() (args []js_ast.Expr, closeParenLoc logger.Loc) {
+func (p *parser) parseCallArgs() (args []js_ast.Expr, closeParenLoc logger.Loc, isMultiLine bool) {
 	// Allow "in" inside call arguments
 	oldAllowIn := p.allowIn
 	p.allowIn = true
@@ -4337,6 +4348,9 @@ func (p *parser) parseCallArgs() (args []js_ast.Expr, closeParenLoc logger.Loc) 
 	p.lexer.Expect(js_lexer.TOpenParen)
 
 	for p.lexer.Token != js_lexer.TCloseParen {
+		if p.lexer.HasNewlineBefore {
+			isMultiLine = true
+		}
 		loc := p.lexer.Loc()
 		isSpread := p.lexer.Token == js_lexer.TDotDotDot
 		if isSpread {
@@ -4351,9 +4365,15 @@ func (p *parser) parseCallArgs() (args []js_ast.Expr, closeParenLoc logger.Loc) 
 		if p.lexer.Token != js_lexer.TComma {
 			break
 		}
+		if p.lexer.HasNewlineBefore {
+			isMultiLine = true
+		}
 		p.lexer.Next()
 	}
 
+	if p.lexer.HasNewlineBefore {
+		isMultiLine = true
+	}
 	closeParenLoc = p.lexer.Loc()
 	p.lexer.Expect(js_lexer.TCloseParen)
 	p.allowIn = oldAllowIn
@@ -5131,11 +5151,13 @@ func (p *parser) parseBinding() js_ast.Binding {
 		if p.lexer.HasNewlineBefore {
 			isSingleLine = false
 		}
+		closeBracketLoc := p.lexer.Loc()
 		p.lexer.Expect(js_lexer.TCloseBracket)
 		return js_ast.Binding{Loc: loc, Data: &js_ast.BArray{
-			Items:        items,
-			HasSpread:    hasSpread,
-			IsSingleLine: isSingleLine,
+			Items:           items,
+			HasSpread:       hasSpread,
+			IsSingleLine:    isSingleLine,
+			CloseBracketLoc: closeBracketLoc,
 		}}
 
 	case js_lexer.TOpenBrace:
@@ -5175,10 +5197,12 @@ func (p *parser) parseBinding() js_ast.Binding {
 		if p.lexer.HasNewlineBefore {
 			isSingleLine = false
 		}
+		closeBraceLoc := p.lexer.Loc()
 		p.lexer.Expect(js_lexer.TCloseBrace)
 		return js_ast.Binding{Loc: loc, Data: &js_ast.BObject{
-			Properties:   properties,
-			IsSingleLine: isSingleLine,
+			Properties:    properties,
+			IsSingleLine:  isSingleLine,
+			CloseBraceLoc: closeBraceLoc,
 		}}
 	}
 
