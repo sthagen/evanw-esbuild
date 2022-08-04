@@ -1,7 +1,7 @@
 {
-  "name": "esbuild-linux-32",
+  "name": "@esbuild/linux-loong64",
   "version": "0.14.53",
-  "description": "The Linux 32-bit binary for esbuild, a JavaScript bundler.",
+  "description": "The Linux LoongArch 64-bit binary for esbuild, a JavaScript bundler.",
   "repository": "https://github.com/evanw/esbuild",
   "license": "MIT",
   "preferUnplugged": false,
@@ -12,6 +12,6 @@
     "linux"
   ],
   "cpu": [
-    "ia32"
+    "loong64"
   ]
 }

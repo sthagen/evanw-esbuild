@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.14.53
+
+This release fixes a minor issue with the previous release: I had to rename the package `esbuild-linux-loong64` to `@esbuild/linux-loong64` in the contributed PR because someone registered the package name before I could claim it, and I missed a spot. Hopefully everything is working after this release. I plan to change all platform-specific package names to use the `@esbuild/` scope at some point to avoid this problem in the future.
+
+## 0.14.52
 
 * Allow binary data as input to the JS `transform` and `build` APIs ([#2424](https://github.com/evanw/esbuild/issues/2424))
 
@@ -34,6 +38,10 @@
     Output files in build results returned from esbuild's JavaScript API have both a `contents` and a `text` property to return the contents of the output file. The `contents` property is a binary UTF-8 Uint8Array and the `text` property is a JavaScript UTF-16 string. The `text` property is a getter that does the UTF-8 to UTF-16 conversion only if it's needed for better performance.
 
     Previously if you mutate the build results object, you had to overwrite both `contents` and `text` since the value returned from the `text` getter is the original text returned by esbuild. Some people find this confusing so with this release, the getter for `text` has been updated to do the UTF-8 to UTF-16 conversion on the current value of the `contents` property instead of the original value.
+
+* Publish builds for Linux LoongArch 64-bit ([#1804](https://github.com/evanw/esbuild/issues/1804), [#2373](https://github.com/evanw/esbuild/pull/2373))
+
+    This release upgrades to [Go 1.19](https://go.dev/doc/go1.19), which now includes support for LoongArch 64-bit processors. LoongArch 64-bit builds of esbuild will now be published to npm, which means that in theory they can now be installed with `npm install esbuild`. This was contributed by [@beyond-1234](https://github.com/beyond-1234).
 
 ## 0.14.51
 
