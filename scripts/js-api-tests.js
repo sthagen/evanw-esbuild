@@ -2644,6 +2644,613 @@ require("/assets/file.png");
     assert.strictEqual(await tryTargetESM('node14.18'), `// <stdin>\nvar import_node_fs = __toESM(require("node:fs"));\nimport("node:fs");\n(0, import_node_fs.default)();\n`)
     assert.strictEqual(await tryTargetESM('node14.17'), `// <stdin>\nvar import_node_fs = __toESM(require("fs"));\nimport("fs");\n(0, import_node_fs.default)();\n`)
   },
+
+  async zipFile({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const zip = path.join(testDir, 'test.zip')
+
+    await writeFileAsync(entry, `
+      import foo from './test.zip/foo.js'
+      import bar from './test.zip/bar/bar.js'
+
+      import __virtual__1 from './test.zip/__virtual__/ignored/0/foo.js'
+      import __virtual__2 from './test.zip/ignored/__virtual__/ignored/1/foo.js'
+      import __virtual__3 from './test.zip/__virtual__/ignored/1/test.zip/foo.js'
+
+      import $$virtual1 from './test.zip/$$virtual/ignored/0/foo.js'
+      import $$virtual2 from './test.zip/ignored/$$virtual/ignored/1/foo.js'
+      import $$virtual3 from './test.zip/$$virtual/ignored/1/test.zip/foo.js'
+
+      console.log({
+        foo,
+        bar,
+
+        __virtual__1,
+        __virtual__2,
+        __virtual__3,
+
+        $$virtual1,
+        $$virtual2,
+        $$virtual3,
+      })
+    `)
+
+    // This uses the real file system instead of the mock file system so that
+    // we can check that everything works as expected on Windows, which is not
+    // a POSIX environment.
+    await writeFileAsync(zip, Buffer.from(
+      `UEsDBAoAAgAAAG1qCFUSAXosFQAAABUAAAAGABwAZm9vLmpzVVQJAAOeRfFioEXxYnV4C` +
+      `wABBPUBAAAEFAAAAGV4cG9ydCBkZWZhdWx0ICdmb28nClBLAwQKAAIAAABzaghVwuDbLR` +
+      `UAAAAVAAAACgAcAGJhci9iYXIuanNVVAkAA6lF8WKrRfFidXgLAAEE9QEAAAQUAAAAZXh` +
+      `wb3J0IGRlZmF1bHQgJ2JhcicKUEsBAh4DCgACAAAAbWoIVRIBeiwVAAAAFQAAAAYAGAAA` +
+      `AAAAAQAAAKSBAAAAAGZvby5qc1VUBQADnkXxYnV4CwABBPUBAAAEFAAAAFBLAQIeAwoAA` +
+      `gAAAHNqCFXC4NstFQAAABUAAAAKABgAAAAAAAEAAACkgVUAAABiYXIvYmFyLmpzVVQFAA` +
+      `OpRfFidXgLAAEE9QEAAAQUAAAAUEsFBgAAAAACAAIAnAAAAK4AAAAAAA==`, 'base64'))
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/zipFile/test.zip/foo.js
+  var foo_default = "foo";
+
+  // scripts/.js-api-tests/zipFile/test.zip/bar/bar.js
+  var bar_default = "bar";
+
+  // scripts/.js-api-tests/zipFile/test.zip/__virtual__/ignored/0/foo.js
+  var foo_default2 = "foo";
+
+  // scripts/.js-api-tests/zipFile/test.zip/ignored/__virtual__/ignored/1/foo.js
+  var foo_default3 = "foo";
+
+  // scripts/.js-api-tests/zipFile/test.zip/__virtual__/ignored/1/test.zip/foo.js
+  var foo_default4 = "foo";
+
+  // scripts/.js-api-tests/zipFile/test.zip/$$virtual/ignored/0/foo.js
+  var foo_default5 = "foo";
+
+  // scripts/.js-api-tests/zipFile/test.zip/ignored/$$virtual/ignored/1/foo.js
+  var foo_default6 = "foo";
+
+  // scripts/.js-api-tests/zipFile/test.zip/$$virtual/ignored/1/test.zip/foo.js
+  var foo_default7 = "foo";
+
+  // scripts/.js-api-tests/zipFile/entry.js
+  console.log({
+    foo: foo_default,
+    bar: bar_default,
+    __virtual__1: foo_default2,
+    __virtual__2: foo_default3,
+    __virtual__3: foo_default4,
+    $$virtual1: foo_default5,
+    $$virtual2: foo_default6,
+    $$virtual3: foo_default7
+  });
+})();
+`)
+  },
+
+  async yarnPnP_pnp_data_json({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const manifest = path.join(testDir, '.pnp.data.json')
+    const leftPad = path.join(testDir, '.yarn', 'cache', 'left-pad', 'index.js')
+
+    await writeFileAsync(entry, `
+      import leftPad from 'left-pad'
+      console.log(leftPad())
+    `)
+
+    await writeFileAsync(manifest, `{
+      "packageRegistryData": [
+        [null, [
+          [null, {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["left-pad", "npm:1.3.0"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["left-pad", [
+          ["npm:1.3.0", {
+            "packageLocation": "./.yarn/cache/left-pad/",
+            "packageDependencies": [
+              ["left-pad", "npm:1.3.0"]
+            ],
+            "linkType": "HARD"
+          }]
+        ]]
+      ]
+    }`)
+
+    await mkdirAsync(path.dirname(leftPad), { recursive: true })
+    await writeFileAsync(leftPad, `export default function() {}`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_pnp_data_json/.yarn/cache/left-pad/index.js
+  function left_pad_default() {
+  }
+
+  // scripts/.js-api-tests/yarnPnP_pnp_data_json/entry.js
+  console.log(left_pad_default());
+})();
+`)
+  },
+
+  async yarnPnP_pnp_js_object_literal({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const manifest = path.join(testDir, '.pnp.js')
+    const leftPad = path.join(testDir, '.yarn', 'cache', 'left-pad', 'index.js')
+
+    await writeFileAsync(entry, `
+      import leftPad from 'left-pad'
+      console.log(leftPad())
+    `)
+
+    await writeFileAsync(manifest, `#!/usr/bin/env node
+      /* eslint-disable */
+
+      try {
+        Object.freeze({}).detectStrictMode = true;
+      } catch (error) {
+        throw new Error();
+      }
+
+      function $$SETUP_STATE(hydrateRuntimeState, basePath) {
+        return hydrateRuntimeState({
+          "packageRegistryData": [
+            [null, [
+              [null, {
+                "packageLocation": "./",
+                "packageDependencies": [
+                  ["left-pad", "npm:1.3.0"]
+                ],
+                "linkType": "SOFT"
+              }]
+            ]],
+            ["left-pad", [
+              ["npm:1.3.0", {
+                "packageLocation": "./.yarn/cache/left-pad/",
+                "packageDependencies": [
+                  ["left-pad", "npm:1.3.0"]
+                ],
+                "linkType": "HARD"
+              }]
+            ]]
+          ]
+        })
+      }
+    `)
+
+    await mkdirAsync(path.dirname(leftPad), { recursive: true })
+    await writeFileAsync(leftPad, `export default function() {}`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_pnp_js_object_literal/.yarn/cache/left-pad/index.js
+  function left_pad_default() {
+  }
+
+  // scripts/.js-api-tests/yarnPnP_pnp_js_object_literal/entry.js
+  console.log(left_pad_default());
+})();
+`)
+  },
+
+  async yarnPnP_pnp_cjs_JSON_parse_string_literal({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const manifest = path.join(testDir, '.pnp.cjs')
+    const leftPad = path.join(testDir, '.yarn', 'cache', 'left-pad', 'index.js')
+
+    await writeFileAsync(entry, `
+      import leftPad from 'left-pad'
+      console.log(leftPad())
+    `)
+
+    await writeFileAsync(manifest, `#!/usr/bin/env node
+      /* eslint-disable */
+
+      try {
+        Object.freeze({}).detectStrictMode = true;
+      } catch (error) {
+        throw new Error();
+      }
+
+      function $$SETUP_STATE(hydrateRuntimeState, basePath) {
+        return hydrateRuntimeState(JSON.parse('{\\
+          "packageRegistryData": [\\
+            [null, [\\
+              [null, {\\
+                "packageLocation": "./",\\
+                "packageDependencies": [\\
+                  ["left-pad", "npm:1.3.0"]\\
+                ],\\
+                "linkType": "SOFT"\\
+              }]\\
+            ]],\\
+            ["left-pad", [\\
+              ["npm:1.3.0", {\\
+                "packageLocation": "./.yarn/cache/left-pad/",\\
+                "packageDependencies": [\\
+                  ["left-pad", "npm:1.3.0"]\\
+                ],\\
+                "linkType": "HARD"\\
+              }]\\
+            ]]\\
+          ]\\
+        }'))
+      }
+    `)
+
+    await mkdirAsync(path.dirname(leftPad), { recursive: true })
+    await writeFileAsync(leftPad, `export default function() {}`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_pnp_cjs_JSON_parse_string_literal/.yarn/cache/left-pad/index.js
+  function left_pad_default() {
+  }
+
+  // scripts/.js-api-tests/yarnPnP_pnp_cjs_JSON_parse_string_literal/entry.js
+  console.log(left_pad_default());
+})();
+`)
+  },
+
+  async yarnPnP_pnp_cjs_JSON_parse_identifier({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const manifest = path.join(testDir, '.pnp.cjs')
+    const leftPad = path.join(testDir, '.yarn', 'cache', 'left-pad', 'index.js')
+
+    await writeFileAsync(entry, `
+      import leftPad from 'left-pad'
+      console.log(leftPad())
+    `)
+
+    await writeFileAsync(manifest, `#!/usr/bin/env node
+      /* eslint-disable */
+
+      try {
+        Object.freeze({}).detectStrictMode = true;
+      } catch (error) {
+        throw new Error();
+      }
+
+      const RAW_RUNTIME_STATE = '{\\
+        "packageRegistryData": [\\
+          [null, [\\
+            [null, {\\
+              "packageLocation": "./",\\
+              "packageDependencies": [\\
+                ["left-pad", "npm:1.3.0"]\\
+              ],\\
+              "linkType": "SOFT"\\
+            }]\\
+          ]],\\
+          ["left-pad", [\\
+            ["npm:1.3.0", {\\
+              "packageLocation": "./.yarn/cache/left-pad/",\\
+              "packageDependencies": [\\
+                ["left-pad", "npm:1.3.0"]\\
+              ],\\
+              "linkType": "HARD"\\
+            }]\\
+          ]]\\
+        ]\\
+      }'
+
+      function $$SETUP_STATE(hydrateRuntimeState, basePath) {
+        return hydrateRuntimeState(JSON.parse(RAW_RUNTIME_STATE))
+      }
+    `)
+
+    await mkdirAsync(path.dirname(leftPad), { recursive: true })
+    await writeFileAsync(leftPad, `export default function() {}`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_pnp_cjs_JSON_parse_identifier/.yarn/cache/left-pad/index.js
+  function left_pad_default() {
+  }
+
+  // scripts/.js-api-tests/yarnPnP_pnp_cjs_JSON_parse_identifier/entry.js
+  console.log(left_pad_default());
+})();
+`)
+  },
+
+  async yarnPnP_ignoreNestedManifests({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const foo = path.join(testDir, 'foo', 'index.js')
+    const bar = path.join(testDir, 'bar', 'index.js')
+    const manifest = path.join(testDir, '.pnp.data.json')
+
+    await writeFileAsync(entry, `
+      import foo from 'foo'
+      console.log(foo)
+    `)
+
+    await mkdirAsync(path.dirname(foo), { recursive: true })
+    await writeFileAsync(foo, `
+      import bar from 'bar'
+      export default 'foo' + bar
+    `)
+
+    await mkdirAsync(path.dirname(bar), { recursive: true })
+    await writeFileAsync(bar, `
+      export default 'bar'
+    `)
+
+    await writeFileAsync(manifest, `{
+      "packageRegistryData": [
+        [null, [
+          [null, {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["foo", "npm:1.0.0"],
+              ["bar", "npm:1.0.0"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["foo", [
+          ["npm:1.0.0", {
+            "packageLocation": "./__virtual__/whatever/0/foo/",
+            "packageDependencies": [
+              ["bar", "npm:1.0.0"]
+            ],
+            "linkType": "HARD"
+          }]
+        ]],
+        ["bar", [
+          ["npm:1.0.0", {
+            "packageLocation": "./__virtual__/whatever/0/bar/",
+            "packageDependencies": [],
+            "linkType": "HARD"
+          }]
+        ]]
+      ]
+    }`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_ignoreNestedManifests/__virtual__/whatever/0/bar/index.js
+  var bar_default = "bar";
+
+  // scripts/.js-api-tests/yarnPnP_ignoreNestedManifests/__virtual__/whatever/0/foo/index.js
+  var foo_default = "foo" + bar_default;
+
+  // scripts/.js-api-tests/yarnPnP_ignoreNestedManifests/entry.js
+  console.log(foo_default);
+})();
+`)
+  },
+
+  async yarnPnP_tsconfig({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const tsconfigExtends = path.join(testDir, 'tsconfig.json')
+    const tsconfigBase = path.join(testDir, 'foo', 'tsconfig.json')
+    const manifest = path.join(testDir, '.pnp.data.json')
+
+    await writeFileAsync(entry, `
+      x **= 2
+    `)
+
+    await writeFileAsync(tsconfigExtends, `{
+      "extends": "@scope/base/tsconfig.json",
+    }`)
+
+    await mkdirAsync(path.dirname(tsconfigBase), { recursive: true })
+    await writeFileAsync(tsconfigBase, `{
+      "compilerOptions": {
+        "target": "ES5"
+      }
+    }`)
+
+    await writeFileAsync(manifest, `{
+      "packageRegistryData": [
+        [null, [
+          [null, {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["@scope/base", "npm:1.0.0"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["@scope/base", [
+          ["npm:1.0.0", {
+            "packageLocation": "./foo/",
+            "packageDependencies": [],
+            "linkType": "HARD"
+          }]
+        ]]
+      ]
+    }`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  var __pow = Math.pow;
+
+  // scripts/.js-api-tests/yarnPnP_tsconfig/entry.js
+  x = __pow(x, 2);
+})();
+`)
+  },
+
+  async yarnPnP_indexJs({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const fooIndex = path.join(testDir, 'foo', 'index.js')
+    const fooFoo = path.join(testDir, 'foo', 'foo.js')
+    const manifest = path.join(testDir, '.pnp.data.json')
+
+    await writeFileAsync(entry, `
+      import x from '@some/pkg'
+      x()
+    `)
+
+    await mkdirAsync(path.dirname(fooIndex), { recursive: true })
+    await writeFileAsync(fooIndex, `export default success`)
+
+    await mkdirAsync(path.dirname(fooFoo), { recursive: true })
+    await writeFileAsync(fooFoo, `failure!`)
+
+    await writeFileAsync(manifest, `{
+      "packageRegistryData": [
+        [null, [
+          [null, {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["@some/pkg", "npm:1.0.0"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["@some/pkg", [
+          ["npm:1.0.0", {
+            "packageLocation": "./foo/",
+            "packageDependencies": [],
+            "linkType": "HARD"
+          }]
+        ]]
+      ]
+    }`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_indexJs/foo/index.js
+  var foo_default = success;
+
+  // scripts/.js-api-tests/yarnPnP_indexJs/entry.js
+  foo_default();
+})();
+`)
+  },
+
+  async yarnPnP_depOfVirtual({ esbuild, testDir }) {
+    const entry = path.join(testDir, 'entry.js')
+    const pkg = path.join(testDir, '.yarn', 'cache', 'pkg', 'index.js')
+    const dep = path.join(testDir, '.yarn', 'cache', 'dep', 'index.js')
+    const manifest = path.join(testDir, '.pnp.data.json')
+
+    await writeFileAsync(entry, `import 'pkg'`)
+
+    await mkdirAsync(path.dirname(pkg), { recursive: true })
+    await writeFileAsync(pkg, `import 'dep'`)
+
+    await mkdirAsync(path.dirname(dep), { recursive: true })
+    await writeFileAsync(dep, `success()`)
+
+    await writeFileAsync(manifest, `{
+      "packageRegistryData": [
+        [null, [
+          [null, {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["pkg", "virtual:some-path"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["demo", [
+          ["workspace:.", {
+            "packageLocation": "./",
+            "packageDependencies": [
+              ["demo", "workspace:."],
+              ["pkg", "virtual:some-path"]
+            ],
+            "linkType": "SOFT"
+          }]
+        ]],
+        ["pkg", [
+          ["npm:1.0.0", {
+            "packageLocation": "./.yarn/cache/pkg/",
+            "packageDependencies": [
+              ["pkg", "npm:1.0.0"]
+            ],
+            "linkType": "SOFT"
+          }],
+          ["virtual:some-path", {
+            "packageLocation": "./.yarn/__virtual__/pkg-virtual/0/cache/pkg/",
+            "packageDependencies": [
+              ["pkg", "virtual:some-path"],
+              ["dep", "npm:1.0.0"]
+            ],
+            "linkType": "HARD"
+          }]
+        ]],
+        ["dep", [
+          ["npm:1.0.0", {
+            "packageLocation": "./.yarn/cache/dep/",
+            "packageDependencies": [
+              ["dep", "npm:1.0.0"]
+            ],
+            "linkType": "HARD"
+          }]
+        ]]
+      ]
+    }`)
+
+    const value = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+
+    assert.strictEqual(value.outputFiles.length, 1)
+    assert.strictEqual(value.outputFiles[0].text, `(() => {
+  // scripts/.js-api-tests/yarnPnP_depOfVirtual/.yarn/cache/dep/index.js
+  success();
+})();
+`)
+  },
 }
 
 function fetch(host, port, path, headers) {

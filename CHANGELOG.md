@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased
+
+* Fix Yarn PnP resolution failures due to backslashes in paths on Windows ([#2462](https://github.com/evanw/esbuild/issues/2462))
+
+    Previously dependencies of a Yarn PnP virtual dependency failed to resolve on Windows. This was because Windows uses `\` instead of `/` as a path separator, and the path manipulation algorithms used for Yarn PnP expected `/`. This release converts `\` into `/` in Windows paths, which fixes this issue.
+
+## 0.15.2
+
+* Fix Yarn PnP issue with packages containing `index.js` ([#2455](https://github.com/evanw/esbuild/issues/2455), [#2461](https://github.com/evanw/esbuild/issues/2461))
+
+    Yarn PnP's tests require the resolved paths to end in `/`. That's not how the rest of esbuild's internals work, however, and doing this messed up esbuild's node module path resolution regarding automatically-detected `index.js` files. Previously packages that relied on implicit `index.js` resolution rules didn't work with esbuild under Yarn PnP. Removing this slash has fixed esbuild's path resolution behavior regarding `index.js`, which should now the same both with and without Yarn PnP.
+
+* Fix Yarn PnP support for `extends` in `tsconfig.json` ([#2456](https://github.com/evanw/esbuild/issues/2456))
+
+    Previously using `extends` in `tsconfig.json` with a path in a Yarn PnP package didn't work. This is because the process of setting up package path resolution rules requires parsing `tsconfig.json` files (due to the `baseUrl` and `paths` features) and resolving `extends` to a package path requires package path resolution rules to already be set up, which is a circular dependency. This cycle is broken by using special rules for `extends` in `tsconfig.json` that bypasses esbuild's normal package path resolution process. This is why using `extends` with a Yarn PnP package didn't automatically work. With this release, these special rules have been modified to check for a Yarn PnP manifest so this case should work now.
+
+* Fix Yarn PnP support in `esbuild-wasm` ([#2458](https://github.com/evanw/esbuild/issues/2458))
+
+    When running esbuild via WebAssembly, Yarn PnP support previously failed because Go's file system internals return `EINVAL` when trying to read a `.zip` file as a directory when run with WebAssembly. This was unexpected because Go's file system internals return `ENOTDIR` for this case on native. This release updates esbuild to treat `EINVAL` like `ENOTDIR` in this case, which fixes using `esbuild-wasm` to bundle a Yarn PnP project.
+
+    Note that to be able to use `esbuild-wasm` for Yarn PnP successfully, you currently have to run it using `node` instead of `yarn node`. This is because the file system shim that Yarn overwrites node's native file system API with currently generates invalid file descriptors with negative values when inside a `.zip` file. This prevents esbuild from working correctly because Go's file system internals don't expect syscalls that succeed without an error to return an invalid file descriptor. Yarn is working on fixing their use of invalid file descriptors.
+
+## 0.15.1
+
+* Update esbuild's Yarn Plug'n'Play implementation to match the latest specification changes ([#2452](https://github.com/evanw/esbuild/issues/2452), [#2453](https://github.com/evanw/esbuild/pull/2453))
+
+    This release updates esbuild's implementation of Yarn Plug'n'Play to match some changes to Yarn's specification that just landed. The changes are as follows:
+
+    * Check for platform-specific absolute paths instead of always for the `/` prefix
+
+        The specification previously said that Yarn Plug'n'Play path resolution rules should not apply for paths that start with `/`. The intent was to avoid accidentally processing absolute paths. However, absolute paths on Windows such as `C:\project` start with drive letters instead of with `/`. So the specification was changed to instead explicitly avoid processing absolute paths.
+
+    * Make `$$virtual` an alias for `__virtual__`
+
+        Supporting Yarn-style path resolution requires implementing a custom Yarn-specific path traversal scheme where certain path segments are considered no-ops. Specifically any path containing segments of the form `__virtual__/<whatever>/<n>` where `<n>` is an integer must be treated as if they were `n` times the `..` operator instead (the `<whatever>` path segment is ignored). So `/path/to/project/__virtual__/xyz/2/foo.js` maps to the underlying file `/path/to/project/../../foo.js`. This scheme makes it possible for Yarn to get node (and esbuild) to load the same file multiple times (which is sometimes required for correctness) without actually duplicating the file on the file system.
+
+        However, old versions of Yarn used to use `$$virtual` instead of `__virtual__`. This was changed because `$$virtual` was error-prone due to the use of the `$` character, which can cause bugs when it's not correctly escaped within regular expressions. Now that esbuild makes `$$virtual` an alias for `__virtual__`, esbuild should now work with manifests from these old Yarn versions.
+
+    * Ignore PnP manifests in virtual directories
+
+        The specification describes the algorithm for how to find the Plug'n'Play manifest when starting from a certain point in the file system: search through all parent directories in reverse order until the manifest is found. However, this interacts poorly with virtual paths since it can end up finding a virtual copy of the manifest instead of the original. To avoid this, esbuild now ignores manifests in virtual directories so that the search for the manifest will continue and find the original manifest in another parent directory later on.
+
+    These fixes mean that esbuild's implementation of Plug'n'Play now matches Yarn's implementation more closely, and esbuild can now correctly build more projects that use Plug'n'Play.
+
+## 0.15.0
+
+**This release contains backwards-incompatible changes.** Since esbuild is before version 1.0.0, these changes have been released as a new minor version to reflect this (as [recommended by npm](https://docs.npmjs.com/cli/v6/using-npm/semver/)). You should either be pinning the exact version of `esbuild` in your `package.json` file or be using a version range syntax that only accepts patch upgrades such as `~0.14.0`. See the documentation about [semver](https://docs.npmjs.com/cli/v6/using-npm/semver/) for more information.
+
+* Implement the Yarn Plug'n'Play module resolution algorithm ([#154](https://github.com/evanw/esbuild/issues/154), [#237](https://github.com/evanw/esbuild/issues/237), [#1263](https://github.com/evanw/esbuild/issues/1263), [#2451](https://github.com/evanw/esbuild/pull/2451))
+
+    [Node](https://nodejs.org/) comes with a package manager called [npm](https://www.npmjs.com/), which installs packages into a `node_modules` folder. Node and esbuild both come with built-in rules for resolving import paths to packages within `node_modules`, so packages installed via npm work automatically without any configuration. However, many people use an alternative package manager called [Yarn](https://yarnpkg.com/). While Yarn can install packages using `node_modules`, it also offers a different package installation strategy called [Plug'n'Play](https://yarnpkg.com/features/pnp/), which is often shortened to "PnP" (not to be confused with [pnpm](https://pnpm.io/), which is an entirely different unrelated package manager).
+
+    Plug'n'Play installs packages as `.zip` files on your file system. The packages are never actually unzipped. Since Node doesn't know anything about Yarn's package installation strategy, this means you can no longer run your code with Node as it won't be able to find your packages. Instead, you need to run your code with Yarn, which applies patches to Node's file system APIs before running your code. These patches attempt to make zip files seem like normal directories. When running under Yarn, using Node's file system API to read `./some.zip/lib/file.js` actually automatically extracts `lib/file.js` from `./some.zip` at run-time as if it was a normal file. Other file system APIs behave similarly. However, these patches don't work with esbuild because esbuild is not written in JavaScript; it's a native binary executable that interacts with the file system directly through the operating system.
+
+    Previously the workaround for using esbuild with Plug'n'Play was to use the [`@yarnpkg/esbuild-plugin-pnp`](https://www.npmjs.com/package/@yarnpkg/esbuild-plugin-pnp) plugin with esbuild's JavaScript API. However, this wasn't great because the plugin needed to potentially intercept every single import path and file load to check whether it was a Plug'n'Play package, which has an unusually high performance cost. It also meant that certain subtleties of path resolution rules within a `.zip` file could differ slightly from the way esbuild normally works since path resolution inside `.zip` files was implemented by Yarn, not by esbuild (which is due to a limitation of esbuild's plugin API).
+
+    With this release, esbuild now contains an independent implementation of Yarn's Plug'n'Play algorithm (which is used when esbuild finds a `.pnp.js`, `.pnp.cjs`, or `.pnp.data.json` file in the directory tree). Creating additional implementations of this algorithm recently became possible because Yarn's package manifest format was recently documented: https://yarnpkg.com/advanced/pnp-spec/. This should mean that you can now use esbuild to bundle Plug'n'Play projects without any additional configuration (so you shouldn't need `@yarnpkg/esbuild-plugin-pnp` anymore). Bundling these projects should now happen much faster as Yarn no longer even needs to be run at all. Bundling the Yarn codebase itself with esbuild before and after this change seems to demonstrate over a 10x speedup (3.4s to 0.24s). And path resolution rules within Yarn packages should now be consistent with how esbuild handles regular Node packages. For example, fields such as `module` and `browser` in `package.json` files within `.zip` files should now be respected.
+
+    Keep in mind that this is brand new code and there may be some initial issues to work through before esbuild's implementation is solid. Yarn's Plug'n'Play specification is also brand new and may need some follow-up edits to guide new implementations to match Yarn's exact behavior. If you try this out, make sure to test it before committing to using it, and let me know if anything isn't working as expected. Should you need to debug esbuild's path resolution, you may find `--log-level=verbose` helpful.
+
 ## 0.14.54
 
 * Fix optimizations for calls containing spread arguments ([#2445](https://github.com/evanw/esbuild/issues/2445))
