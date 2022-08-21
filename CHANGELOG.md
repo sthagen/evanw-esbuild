@@ -1,10 +1,77 @@
 # Changelog
 
-## Unreleased
+## 0.15.5
+
+* Fix issues with Yarn PnP and Yarn's workspaces feature ([#2476](https://github.com/evanw/esbuild/issues/2476))
+
+    This release makes sure esbuild works with a Yarn feature called [workspaces](https://yarnpkg.com/features/workspaces/). Previously esbuild wasn't tested in this scenario, but this scenario now has test coverage. Getting this to work involved further tweaks to esbuild's custom code for what happens after Yarn PnP's path resolution algorithm runs, which is not currently covered by Yarn's PnP specification. These tweaks also fix `exports` map resolution with Yarn PnP for non-empty subpaths, which wasn't previously working.
+
+## 0.15.4
+
+* Consider TypeScript import assignments to be side-effect free ([#2468](https://github.com/evanw/esbuild/issues/2468))
+
+    TypeScript has a [legacy import syntax](https://www.typescriptlang.org/docs/handbook/namespaces.html#aliases) for working with TypeScript namespaces that looks like this:
+
+    ```ts
+    import { someNamespace } from './some-file'
+    import bar = someNamespace.foo;
+
+    // some-file.ts
+    export namespace someNamespace {
+      export let foo = 123
+    }
+    ```
+
+    Since esbuild converts TypeScript into JavaScript one file at a time, it doesn't know if `bar` is supposed to be a value or a type (or both, which TypeScript actually allows in this case). This is problematic because values are supposed to be kept during the conversion but types are supposed to be removed during the conversion. Currently esbuild keeps `bar` in the output, which is done because `someNamespace.foo` is a property access and property accesses run code that could potentially have a side effect (although there is no side effect in this case).
+
+    With this release, esbuild will now consider `someNamespace.foo` to have no side effects. This means `bar` will now be removed when bundling and when tree shaking is enabled. Note that it will still not be removed when tree shaking is disabled. This is because in this mode, esbuild supports adding additional code to the end of the generated output that's in the same scope as the module. That code could potentially make use of `bar`, so it would be incorrect to remove it. If you want `bar` to be removed, you'll have to enable tree shaking (which tells esbuild that nothing else depends on the unexported top-level symbols in the generated output).
+
+* Change the order of the banner and the `"use strict"` directive ([#2467](https://github.com/evanw/esbuild/issues/2467))
+
+    Previously the top of the file contained the following things in order:
+
+    1. The hashbang comment (see below) from the source code, if present
+    2. The `"use strict"` directive from the source code, if present
+    3. The content of esbuild's `banner` API option, if specified
+
+    This was problematic for people that used the `banner` API option to insert the hashbang comment instead of using esbuild's hashbang comment preservation feature. So with this release, the order has now been changed to:
+
+    1. The hashbang comment (see below) from the source code, if present
+    2. The content of esbuild's `banner` API option, if specified
+    3. The `"use strict"` directive from the source code, if present
+
+    I'm considering this change to be a bug fix instead of a breaking change because esbuild's documentation states that the `banner` API option can be used to "insert an arbitrary string at the beginning of generated JavaScript files". While this isn't technically true because esbuild may still insert the original hashbang comment before the banner, it's at least more correct now because the banner will now come before the `"use strict"` directive.
+
+    For context: JavaScript files recently allowed using a [hashbang comment](https://github.com/tc39/proposal-hashbang), which starts with `#!` and which must start at the very first character of the file. It allows Unix systems to execute the file directly as a script without needing to prefix it by the `node` command. This comment typically has the value `#!/usr/bin/env node`. Hashbang comments will be a part of ES2023 when it's released next year.
+
+* Fix `exports` maps with Yarn PnP path resolution ([#2473](https://github.com/evanw/esbuild/issues/2473))
+
+    The Yarn PnP specification says that to resolve a package path, you first resolve it to the absolute path of a directory, and then you run node's module resolution algorithm on it. Previously esbuild followed this part of the specification. However, doing this means that `exports` in `package.json` is not respected because node's module resolution algorithm doesn't interpret `exports` for absolute paths. So with this release, esbuild will now use a modified algorithm that deviates from both specifications but that should hopefully behave more similar to what Yarn actually does: node's module resolution algorithm is run with the original import path but starting from the directory returned by Yarn PnP.
+
+## 0.15.3
+
+* Change the Yarn PnP manifest to a singleton ([#2463](https://github.com/evanw/esbuild/issues/2463))
+
+    Previously esbuild searched for the Yarn PnP manifest in the parent directories of each file. But with Yarn's `enableGlobalCache` setting it's possible to configure Yarn PnP's implementation to reach outside of the directory subtree containing the Yarn PnP manifest. This was causing esbuild to fail to bundle projects with the `enableGlobalCache` setting enabled.
+
+    To handle this case, *esbuild will now only search for the Yarn PnP manifest in the current working directory of the esbuild process*. If you're using esbuild's CLI, this means you will now have to `cd` into the appropriate directory first. If you're using esbuild's API, you can override esbuild's value for the current working directory with the `absWorkingDir` API option.
 
 * Fix Yarn PnP resolution failures due to backslashes in paths on Windows ([#2462](https://github.com/evanw/esbuild/issues/2462))
 
     Previously dependencies of a Yarn PnP virtual dependency failed to resolve on Windows. This was because Windows uses `\` instead of `/` as a path separator, and the path manipulation algorithms used for Yarn PnP expected `/`. This release converts `\` into `/` in Windows paths, which fixes this issue.
+
+* Fix `sideEffects` patterns containing slashes on Windows ([#2465](https://github.com/evanw/esbuild/issues/2465))
+
+    The `sideEffects` field in `package.json` lets you specify an array of patterns to mark which files have side effects (which causes all other files to be considered to not have side effects by exclusion). That looks like this:
+
+    ```json
+    "sideEffects": [
+      "**/index.js",
+      "**/index.prod.js"
+    ]
+    ```
+
+    However, the presence of the `/` character in the pattern meant that the pattern failed to match Windows-style paths, which broke `sideEffects` on Windows in this case. This release fixes this problem by adding additional code to handle Windows-style paths.
 
 ## 0.15.2
 

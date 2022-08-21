@@ -510,7 +510,11 @@ func ResolveFailureErrorTextSuggestionNotes(
 	}
 
 	if platform != config.PlatformNode {
-		if _, ok := resolver.BuiltInNodeModules[path]; ok {
+		pkg := path
+		if strings.HasPrefix(pkg, "node:") {
+			pkg = pkg[5:]
+		}
+		if resolver.BuiltInNodeModules[pkg] {
 			var how string
 			switch logger.API {
 			case logger.CLIAPI:
@@ -1632,6 +1636,11 @@ func lowestCommonAncestorDirectory(fs fs.FS, entryPoints []graph.EntryPoint) str
 					lastSlash = a
 				}
 			} else if boundaryA != boundaryB || unicode.ToLower(runeA) != unicode.ToLower(runeB) {
+				// If we're at the top-level directory, then keep the slash
+				if lastSlash < len(absDir) && !strings.ContainsAny(absDir[:lastSlash], "\\/") {
+					lastSlash++
+				}
+
 				// If both paths are different at this point, stop and set the lowest so
 				// far to the common parent directory. Compare using a case-insensitive
 				// comparison to handle paths on Windows.

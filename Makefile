@@ -17,7 +17,7 @@ test-common: test-go vet-go no-filepath verify-source-map end-to-end-tests js-ap
 
 # These tests are for release (the extra tests are not included in "test" because they are pretty slow)
 test-all:
-	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck
+	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
 	@go version | grep ' go1\.19 ' || (echo 'Please install Go version 1.19' && false)
@@ -200,6 +200,9 @@ test-e2e-yarn-berry:
 
 	# Clean up
 	rm -fr e2e-yb
+
+test-yarnpnp:
+	node scripts/test-yarnpnp.js
 
 # Note: This used to only be rebuilt when "version.txt" was newer than
 # "cmd/esbuild/version.go", but that caused the publishing script to publish
@@ -575,6 +578,7 @@ clean:
 	rm -rf require/*/bench/
 	rm -rf require/*/demo/
 	rm -rf require/*/node_modules/
+	rm -rf require/yarnpnp/.pnp* require/yarnpnp/.yarn* require/yarnpnp/out*.js
 	go clean -testcache ./internal/...
 
 # This also cleans directories containing cached code from other projects

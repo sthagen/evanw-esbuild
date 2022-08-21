@@ -133,6 +133,9 @@ jobs:
         if: matrix.os != 'ubuntu-latest'
         run: node scripts/wasm-tests.js
 
+      - name: Yarn PnP tests
+        run: make test-yarnpnp
+
       - name: Sucrase Tests
         if: matrix.os == 'ubuntu-latest'
         run: make test-sucrase

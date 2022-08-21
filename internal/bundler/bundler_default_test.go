@@ -1394,6 +1394,24 @@ func TestHashbangNoBundle(t *testing.T) {
 	})
 }
 
+func TestHashbangBannerUseStrictOrder(t *testing.T) {
+	default_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `#! in file
+				'use strict'
+				foo()
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+			JSBanner:      "#! from banner",
+			OutputFormat:  config.FormatIIFE,
+		},
+	})
+}
+
 func TestRequireFSBrowser(t *testing.T) {
 	default_suite.expectBundled(t, bundled{
 		files: map[string]string{
@@ -2416,10 +2434,27 @@ func TestImportAbsPathAsFile(t *testing.T) {
 }
 
 func TestImportAbsPathAsDir(t *testing.T) {
-	default_suite.expectBundled(t, bundled{
+	default_suite.expectBundledUnix(t, bundled{
 		files: map[string]string{
 			"/Users/user/project/entry.js": `
 				import pkg from '/Users/user/project/node_modules/pkg'
+				console.log(pkg)
+			`,
+			"/Users/user/project/node_modules/pkg/index.js": `
+				export default 123
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/entry.js"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+		},
+	})
+
+	default_suite.expectBundledWindows(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/entry.js": `
+				import pkg from 'C:\\Users\\user\\project\\node_modules\\pkg'
 				console.log(pkg)
 			`,
 			"/Users/user/project/node_modules/pkg/index.js": `
@@ -3898,7 +3933,7 @@ func TestMinifyArguments(t *testing.T) {
 }
 
 func TestWarningsInsideNodeModules(t *testing.T) {
-	default_suite.expectBundled(t, bundled{
+	default_suite.expectBundledUnix(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
 				import "./dup-case.js";        import "./node_modules/dup-case.js";        import "@plugin/dup-case.js"
@@ -3984,7 +4019,7 @@ delete-super.js: WARNING: Attempting to delete a property of "super" will throw 
 dup-case.js: WARNING: This case clause will never be evaluated because it duplicates an earlier case clause
 dup-case.js: NOTE: The earlier case clause is here:
 equals-nan.js: WARNING: Comparison with NaN using the "===" operator here is always false
-NOTE: Floating-point equality is defined such that NaN is never equal to anything, so "x === NaN" always returns false. You need to use "isNaN(x)" instead to test for NaN.
+NOTE: Floating-point equality is defined such that NaN is never equal to anything, so "x === NaN" always returns false. You need to use "Number.isNaN(x)" instead to test for NaN.
 equals-neg-zero.js: WARNING: Comparison with -0 using the "===" operator will also match 0
 NOTE: Floating-point equality is defined such that 0 and -0 are equal, so "x === -0" returns true for both 0 and -0. You need to use "Object.is(x, -0)" instead to test for -0.
 equals-object.js: WARNING: Comparison using the "===" operator here is always false
@@ -4055,7 +4090,7 @@ entry.js: WARNING: "@scope/missing-pkg" should be marked as external for use wit
 }
 
 func TestInjectMissing(t *testing.T) {
-	default_suite.expectBundled(t, bundled{
+	default_suite.expectBundledUnix(t, bundled{
 		files: map[string]string{
 			"/entry.js": ``,
 		},
@@ -4067,8 +4102,22 @@ func TestInjectMissing(t *testing.T) {
 				"/inject.js",
 			},
 		},
-		expectedScanLog: `ERROR: Could not read from file: /inject.js
-`,
+		expectedScanLog: "ERROR: Could not read from file: /inject.js\n",
+	})
+
+	default_suite.expectBundledWindows(t, bundled{
+		files: map[string]string{
+			"/entry.js": ``,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+			InjectAbsPaths: []string{
+				"/inject.js",
+			},
+		},
+		expectedScanLog: "ERROR: Could not read from file: C:\\inject.js\n",
 	})
 }
 
