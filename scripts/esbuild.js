@@ -49,6 +49,7 @@ const buildNeutralLib = (esbuildPath) => {
     '--outfile=' + path.join(binDir, 'esbuild'),
     '--bundle',
     '--target=' + nodeTarget,
+    '--define:ESBUILD_VERSION=' + JSON.stringify(version),
     '--external:esbuild',
     '--platform=node',
     '--log-level=warning',
@@ -304,8 +305,19 @@ exports.removeRecursiveSync = path => {
 const updateVersionPackageJSON = pathToPackageJSON => {
   const version = fs.readFileSync(path.join(path.dirname(__dirname), 'version.txt'), 'utf8').trim()
   const json = JSON.parse(fs.readFileSync(pathToPackageJSON, 'utf8'))
+  let changed = false
+
   if (json.version !== version) {
     json.version = version
+    changed = true
+  }
+
+  if ('dependencies' in json && 'esbuild-wasm' in json.dependencies && json.dependencies['esbuild-wasm'] !== version) {
+    json.dependencies['esbuild-wasm'] = version
+    changed = true
+  }
+
+  if (changed) {
     fs.writeFileSync(pathToPackageJSON, JSON.stringify(json, null, 2) + '\n')
   }
 }
@@ -328,7 +340,7 @@ exports.installForTests = () => {
   fs.mkdirSync(installDir)
   fs.writeFileSync(path.join(installDir, 'package.json'), '{}')
   childProcess.execSync(`npm pack --silent "${npmDir}"`, { cwd: installDir, stdio: 'inherit' })
-  childProcess.execSync(`npm install --silent --no-audit --progress=false esbuild-${version}.tgz`, { cwd: installDir, env, stdio: 'inherit' })
+  childProcess.execSync(`npm install --silent --no-audit --no-optional --progress=false esbuild-${version}.tgz`, { cwd: installDir, env, stdio: 'inherit' })
 
   // Evaluate the code
   const ESBUILD_PACKAGE_PATH = path.join(installDir, 'node_modules', 'esbuild')

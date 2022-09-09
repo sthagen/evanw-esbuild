@@ -1456,7 +1456,8 @@ func TestPackageJsonExportsErrorUnsupportedDirectoryImport(t *testing.T) {
 Users/user/project/node_modules/pkg1/package.json: NOTE: The module "./foo" was not found on the file system:
 NOTE: You can mark the path "pkg1" as external to exclude it from the bundle, which will remove this error.
 Users/user/project/src/entry.js: ERROR: Could not resolve "pkg2"
-Users/user/project/node_modules/pkg2/package.json: NOTE: Importing the directory "./foo" is not supported:
+Users/user/project/node_modules/pkg2/package.json: NOTE: Importing the directory "./foo" is forbidden by this package:
+Users/user/project/node_modules/pkg2/package.json: NOTE: The presence of "exports" here makes importing a directory forbidden:
 NOTE: You can mark the path "pkg2" as external to exclude it from the bundle, which will remove this error.
 `,
 	})
@@ -1936,6 +1937,7 @@ func TestPackageJsonExportsNotExactMissingExtensionPattern(t *testing.T) {
 		},
 		expectedScanLog: `Users/user/project/src/entry.js: ERROR: Could not resolve "pkg1/foo/bar"
 Users/user/project/node_modules/pkg1/package.json: NOTE: The module "./dir/bar" was not found on the file system:
+Users/user/project/src/entry.js: NOTE: Import from "pkg1/foo/bar.js" to get the file "Users/user/project/node_modules/pkg1/dir/bar.js":
 NOTE: You can mark the path "pkg1/foo/bar" as external to exclude it from the bundle, which will remove this error.
 `,
 	})

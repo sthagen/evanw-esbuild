@@ -44,6 +44,13 @@ func expectParseErrorTarget(t *testing.T, esVersion int, contents string, expect
 	})
 }
 
+func expectParseErrorWithUnsupportedFeatures(t *testing.T, unsupportedJSFeatures compat.JSFeature, contents string, expected string) {
+	t.Helper()
+	expectParseErrorCommon(t, contents, expected, config.Options{
+		UnsupportedJSFeatures: unsupportedJSFeatures,
+	})
+}
+
 func expectPrintedCommon(t *testing.T, contents string, expected string, options config.Options) {
 	t.Helper()
 	t.Run(contents, func(t *testing.T) {
@@ -576,6 +583,20 @@ func TestAwait(t *testing.T) {
 	expectPrinted(t, "await typeof x", "await typeof x;\n")
 	expectPrinted(t, "await (x * y)", "await (x * y);\n")
 	expectPrinted(t, "await (x ** y)", "await (x ** y);\n")
+
+	expectParseError(t, "var { await } = {}", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "async function f() { var { await } = {} }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "async function* f() { var { await } = {} }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "class C { async f() { var { await } = {} } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "class C { async* f() { var { await } = {} } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "class C { static { var { await } = {} } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+
+	expectParseError(t, "var {} = { await }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "async function f() { var {} = { await } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "async function* f() { var {} = { await } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "class C { async f() { var {} = { await } } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "class C { async* f() { var {} = { await } } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
+	expectParseError(t, "class C { static { var {} = { await } } }", "<stdin>: ERROR: Cannot use \"await\" as an identifier here:\n")
 
 	expectParseError(t, "await delete x",
 		`<stdin>: ERROR: Delete of a bare identifier cannot be used in an ECMAScript module
@@ -2024,6 +2045,13 @@ func TestLabels(t *testing.T) {
 	expectPrinted(t, "x: ({ f() { x: 1; } }).f()", "x:\n  ({ f() {\n    x:\n      1;\n  } }).f();\n")
 	expectPrinted(t, "x: (function() { x: 1; })()", "x:\n  (function() {\n    x:\n      1;\n  })();\n")
 	expectParseError(t, "x: y: x: 1", "<stdin>: ERROR: Duplicate label \"x\"\n<stdin>: NOTE: The original label \"x\" is here:\n")
+
+	expectPrinted(t, "x: break x", "x:\n  break x;\n")
+	expectPrinted(t, "x: { break x; foo() }", "x: {\n  break x;\n  foo();\n}\n")
+	expectPrintedMangle(t, "x: break x", "")
+	expectPrintedMangle(t, "x: { break x; foo() }", "")
+	expectPrintedMangle(t, "y: while (foo()) x: { break x; foo() }", "y:\n  for (; foo(); )\n    ;\n")
+	expectPrintedMangle(t, "y: while (foo()) x: { break y; foo() }", "y:\n  for (; foo(); )\n    x:\n      break y;\n")
 }
 
 func TestArrow(t *testing.T) {
@@ -5216,6 +5244,8 @@ func TestES5(t *testing.T) {
 	expectParseErrorTarget(t, 5, "function* gen() {}",
 		"<stdin>: ERROR: Transforming generator functions to the configured target environment is not supported yet\n")
 	expectParseErrorTarget(t, 5, "(function* () {});",
+		"<stdin>: ERROR: Transforming generator functions to the configured target environment is not supported yet\n")
+	expectParseErrorTarget(t, 5, "({ *foo() {} });",
 		"<stdin>: ERROR: Transforming generator functions to the configured target environment is not supported yet\n")
 }
 

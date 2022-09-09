@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.19 ' || (echo 'Please install Go version 1.19' && false)
+	@go version | grep ' go1\.19\.1 ' || (echo 'Please install Go version 1.19.1' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -66,6 +66,9 @@ test-wasm-browser: platform-wasm | scripts/browser/node_modules
 
 test-deno: esbuild platform-deno
 	ESBUILD_BINARY_PATH="$(shell pwd)/esbuild" deno test --allow-run --allow-env --allow-net --allow-read --allow-write --no-check scripts/deno-tests.js
+
+test-deno-windows: esbuild platform-deno
+	ESBUILD_BINARY_PATH=./esbuild.exe deno test --allow-run --allow-env --allow-net --allow-read --allow-write --no-check scripts/deno-tests.js
 
 register-test: version-go | scripts/node_modules
 	node scripts/esbuild.js npm/esbuild/package.json --version
@@ -179,7 +182,7 @@ test-e2e-yarn-berry:
 	cd e2e-yb && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
 
 	# Test install without scripts
-	rm -fr e2e-yb && mkdir e2e-yb && cd e2e-yb && echo {} > package.json && echo 'enableScripts: false' > yarn.lock && yarn set version berry && yarn add esbuild
+	rm -fr e2e-yb && mkdir e2e-yb && cd e2e-yb && echo {} > package.json && touch yarn.lock && echo 'enableScripts: false' > .yarnrc.yml && yarn set version berry && yarn add esbuild
 	cd e2e-yb && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
 	# Test CI reinstall
 	cd e2e-yb && yarn install --immutable
@@ -252,6 +255,7 @@ wasm-napi-exit0-windows:
 platform-all:
 	@$(MAKE) --no-print-directory -j4 \
 		platform-android \
+		platform-android-arm \
 		platform-android-arm64 \
 		platform-darwin \
 		platform-darwin-arm64 \
@@ -297,6 +301,9 @@ platform-unixlike: version-go
 
 platform-android: platform-wasm
 	node scripts/esbuild.js npm/esbuild-android-64/package.json --version
+
+platform-android-arm:
+	node scripts/esbuild.js npm/@esbuild/android-arm/package.json --version
 
 platform-android-arm64:
 	@$(MAKE) --no-print-directory GOOS=android GOARCH=arm64 NPMDIR=npm/esbuild-android-arm64 platform-unixlike
@@ -399,6 +406,7 @@ publish-all: check-go-version
 	@echo Enter one-time password:
 	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
 		publish-android \
+		publish-android-arm \
 		publish-android-arm64 \
 		publish-darwin \
 		publish-darwin-arm64
@@ -438,6 +446,9 @@ publish-windows-arm64: platform-windows-arm64
 
 publish-android: platform-android
 	test -n "$(OTP)" && cd npm/esbuild-android-64 && npm publish --otp="$(OTP)"
+
+publish-android-arm: platform-android-arm
+	test -n "$(OTP)" && cd npm/@esbuild/android-arm && npm publish --otp="$(OTP)"
 
 publish-android-arm64: platform-android-arm64
 	test -n "$(OTP)" && cd npm/esbuild-android-arm64 && npm publish --otp="$(OTP)"
