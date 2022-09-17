@@ -445,6 +445,9 @@ func (rr *resolver) Resolve(sourceDir string, importPath string, kind ast.Import
 						r.pnpManifest = compileYarnPnPData(absPath, r.fs.Dir(absPath), json)
 					}
 				}
+				if r.debugLogs != nil && r.pnpManifest != nil && r.pnpManifest.invalidIgnorePatternData != "" {
+					r.debugLogs.addNote("  Invalid Go regular expression for \"ignorePatternData\": " + r.pnpManifest.invalidIgnorePatternData)
+				}
 				break
 			}
 		}
@@ -678,12 +681,7 @@ func (r resolverQuery) finalizeResolve(result *ResolveResult) {
 							dirInfo.enclosingTSConfigJSON.PreserveValueImports,
 						)
 						result.TSTarget = dirInfo.enclosingTSConfigJSON.TSTarget
-						if tsAlwaysStrict := dirInfo.enclosingTSConfigJSON.TSAlwaysStrict; tsAlwaysStrict != nil {
-							result.TSAlwaysStrict = tsAlwaysStrict
-						} else {
-							// If "alwaysStrict" is absent, it defaults to "strict" instead
-							result.TSAlwaysStrict = dirInfo.enclosingTSConfigJSON.TSStrict
-						}
+						result.TSAlwaysStrict = dirInfo.enclosingTSConfigJSON.TSAlwaysStrictOrStrict()
 
 						if r.debugLogs != nil {
 							r.debugLogs.addNote(fmt.Sprintf("This import is under the effect of %q",

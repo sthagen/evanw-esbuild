@@ -1305,10 +1305,30 @@ func (p *parser) declareSymbol(kind js_ast.SymbolKind, loc logger.Loc, name stri
 
 }
 
+// This type is just so we can use Go's native sort function
+type scopeMemberArray []js_ast.ScopeMember
+
+func (a scopeMemberArray) Len() int          { return len(a) }
+func (a scopeMemberArray) Swap(i int, j int) { a[i], a[j] = a[j], a[i] }
+
+func (a scopeMemberArray) Less(i int, j int) bool {
+	ai := a[i].Ref
+	bj := a[j].Ref
+	return ai.InnerIndex < bj.InnerIndex || (ai.InnerIndex == bj.InnerIndex && ai.SourceIndex < bj.SourceIndex)
+}
+
 func (p *parser) hoistSymbols(scope *js_ast.Scope) {
 	if !scope.Kind.StopsHoisting() {
-	nextMember:
+		// We create new symbols in the loop below, so the iteration order of the
+		// loop must be deterministic to avoid generating different minified names
+		sortedMembers := make(scopeMemberArray, 0, len(scope.Members))
 		for _, member := range scope.Members {
+			sortedMembers = append(sortedMembers, member)
+		}
+		sort.Sort(sortedMembers)
+
+	nextMember:
+		for _, member := range sortedMembers {
 			symbol := &p.symbols[member.Ref.InnerIndex]
 
 			// Handle non-hoisted collisions between catch bindings and the catch body.
@@ -6479,6 +6499,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		for p.lexer.Token != js_lexer.TCloseBrace {
 			var value js_ast.Expr
 			body := []js_ast.Stmt{}
+			caseLoc := p.lexer.Loc()
 
 			if p.lexer.Token == js_lexer.TDefault {
 				if foundDefault {
@@ -6505,14 +6526,16 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 				}
 			}
 
-			cases = append(cases, js_ast.Case{ValueOrNil: value, Body: body})
+			cases = append(cases, js_ast.Case{ValueOrNil: value, Body: body, Loc: caseLoc})
 		}
 
+		closeBraceLoc := p.lexer.Loc()
 		p.lexer.Expect(js_lexer.TCloseBrace)
 		return js_ast.Stmt{Loc: loc, Data: &js_ast.SSwitch{
-			Test:    test,
-			BodyLoc: bodyLoc,
-			Cases:   cases,
+			Test:          test,
+			Cases:         cases,
+			BodyLoc:       bodyLoc,
+			CloseBraceLoc: closeBraceLoc,
 		}}
 
 	case js_lexer.TTry:
