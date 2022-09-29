@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+* Add support for node's "pattern trailers" syntax ([#2569](https://github.com/evanw/esbuild/issues/2569))
+
+    After esbuild implemented node's `exports` feature in `package.json`, node changed the feature to also allow text after `*` wildcards in patterns. Previously the `*` was required to be at the end of the pattern. It lets you do something like this:
+
+    ```json
+    {
+      "exports": {
+        "./features/*": "./features/*.js",
+        "./features/*.js": "./features/*.js"
+      }
+    }
+    ```
+
+    With this release, esbuild now supports these types of patterns too.
+
+* Fix subpath imports with Yarn PnP ([#2545](https://github.com/evanw/esbuild/issues/2545))
+
+    Node has a little-used feature called [subpath imports](https://nodejs.org/api/packages.html#subpath-imports) which are package-internal imports that start with `#` and that go through the `imports` map in `package.json`. Previously esbuild had a bug that caused esbuild to not handle these correctly in packages installed via Yarn's "Plug'n'Play" installation strategy. The problem was that subpath imports were being checked after Yarn PnP instead of before. This release reorders these checks, which should allow subpath imports to work in this case.
+
+* Link from JS to CSS in the metafile ([#1861](https://github.com/evanw/esbuild/issues/1861), [#2565](https://github.com/evanw/esbuild/issues/2565))
+
+    When you import CSS into a bundled JS file, esbuild creates a parallel CSS bundle next to your JS bundle. So if `app.ts` imports some CSS files and you bundle it, esbuild will give you `app.js` and `app.css`. You would then add both `<script src="app.js"></script>` and `<link href="app.css" rel="stylesheet">` to your HTML to include everything in the page. This approach is more efficient than having esbuild insert additional JavaScript into `app.js` that downloads and includes `app.css` because it means the browser can download and parse both the CSS and the JS in parallel (and potentially apply the CSS before the JS has even finished downloading).
+
+    However, sometimes it's difficult to generate the `<link>` tag. One case is when you've added `[hash]` to the [entry names](https://esbuild.github.io/api/#entry-names) setting to include a content hash in the file name. Then the file name will look something like `app-GX7G2SBE.css` and may change across subsequent builds. You can tell esbuild to generate build metadata using the `metafile` API option but the metadata only tells you which generated JS bundle corresponds to a JS entry point (via the `entryPoint` property), not which file corresponds to the associated CSS bundle. Working around this was hacky and involved string manipulation.
+
+    This release adds the `cssBundle` property to the metafile to make this easier. It's present on the metadata for the generated JS bundle and points to the associated CSS bundle. So to generate the HTML tags for a given JS entry point, you first find the output file with the `entryPoint` you are looking for (and put that in a `<script>` tag), then check for the `cssBundle` property to find the associated CSS bundle (and put that in a `<link>` tag).
+
+    One thing to note is that there is deliberately no `jsBundle` property mapping the other way because it's not a 1:1 relationship. Two JS bundles can share the same CSS bundle in the case where the associated CSS bundles have the same name and content. In that case there would be no one value for a hypothetical `jsBundle` property to have.
+
+## 0.15.9
+
+* Fix an obscure npm package installation issue with `--omit=optional` ([#2558](https://github.com/evanw/esbuild/issues/2558))
+
+    The previous release introduced a regression with `npm install esbuild --omit=optional` where the file `node_modules/.bin/esbuild` would no longer be present after installation. That could cause any package scripts which used the `esbuild` command to no longer work. This release fixes the regression so `node_modules/.bin/esbuild` should now be present again after installation. This regression only affected people installing esbuild using `npm` with either the `--omit=optional` or `--no-optional` flag, which is a somewhat unusual situation.
+
+    **More details:**
+
+    The reason for this regression is due to some obscure npm implementation details. Since the Go compiler doesn't support trivial cross-compiling on certain Android platforms, esbuild's installer installs a WebAssembly shim on those platforms instead. In the previous release I attempted to simplify esbuild's WebAssembly shims to depend on the `esbuild-wasm` package instead of including another whole copy of the WebAssembly binary (to make publishing faster and to save on file system space after installation). However, both the `esbuild` package and the `esbuild-wasm` package provide a binary called `esbuild` and it turns out that adding `esbuild-wasm` as a nested dependency of the `esbuild` package (specifically `esbuild` optionally depends on `@esbuild/android-arm` which depends on `esbuild-wasm`) caused npm to be confused about what `node_modules/.bin/esbuild` is supposed to be.
+
+    It's pretty strange and unexpected that disabling the installation of optional dependencies altogether would suddenly cause an optional dependency's dependency to conflict with the top-level package. What happens under the hood is that if `--omit=optional` is present, npm attempts to uninstall the `esbuild-wasm` nested dependency at the end of `npm install` (even though the `esbuild-wasm` package was never installed due to `--omit=optional`). This uninstallation causes `node_modules/.bin/esbuild` to be deleted.
+
+    After doing a full investigation, I discovered that npm's handling of the `.bin` directory is deliberately very brittle. When multiple packages in the dependency tree put something in `.bin` with the same name, the end result is non-deterministic/random. What you get in `.bin` might be from one package, from the other package, or might be missing entirely. The workaround suggested by npm is to just avoid having two packages that put something in `.bin` with the same name. So this was fixed by making the `@esbuild/android-arm` and `esbuild-android-64` packages each include another whole copy of the WebAssembly binary, which works because these packages don't put anything in `.bin`.
+
+## 0.15.8
+
 * Fix JSX name collision edge case ([#2534](https://github.com/evanw/esbuild/issues/2534))
 
     Code generated by esbuild could have a name collision in the following edge case:
@@ -92,6 +137,18 @@
     ```
 
     However, the compilation had a subtle bug where the automatically-generated function-level symbols for multible hoisted block-level function declarations in the same block a sloppy-mode context were generated in a random order if the output was in strict mode, which could be the case if TypeScript's `alwaysStrict` setting was set to true. This lead to non-determinism in the output as the minifier would randomly exchange the generated names for these symbols on different runs. This bug has been fixed by sorting the keys of the unordered map before iterating over them.
+
+* Fix parsing of `@keyframes` with string identifiers ([#2555](https://github.com/evanw/esbuild/issues/2555))
+
+    Firefox supports `@keyframes` with string identifier names. Previously this was treated as a syntax error by esbuild as it doesn't work in any other browser. The specification allows for this however, so it's technically not a syntax error (even though it would be unwise to use this feature at the moment). There was also a bug where esbuild would remove the identifier name in this case as the syntax wasn't recognized.
+
+    This release changes esbuild's parsing of `@keyframes` to now consider this case to be an unrecognized CSS rule. That means it will be passed through unmodified (so you can now use esbuild to bundle this Firefox-specific CSS) but the CSS will not be pretty-printed or minified. I don't think it makes sense for esbuild to have special code to handle this Firefox-specific syntax at this time. This decision can be revisited in the future if other browsers add support for this feature.
+
+* Add the `--jsx-side-effects` API option ([#2539](https://github.com/evanw/esbuild/issues/2539), [#2546](https://github.com/evanw/esbuild/pull/2546))
+
+    By default esbuild assumes that JSX expressions are side-effect free, which means they are annoated with `/* @__PURE__ */` comments and are removed during bundling when they are unused. This follows the common use of JSX for virtual DOM and applies to the vast majority of JSX libraries. However, some people have written JSX libraries that don't have this property. JSX expressions can have arbitrary side effects and can't be removed. If you are using such a library, you can now pass `--jsx-side-effects` to tell esbuild that JSX expressions have side effects so it won't remove them when they are unused.
+
+    This feature was contributed by [@rtsao](https://github.com/rtsao).
 
 ## 0.15.7
 
