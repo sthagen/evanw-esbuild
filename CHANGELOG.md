@@ -1,12 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.15.13
+
+* Add support for the TypeScript 4.9 `satisfies` operator ([#2509](https://github.com/evanw/esbuild/pull/2509))
+
+    TypeScript 4.9 introduces a new operator called `satisfies` that lets you check that a given value satisfies a less specific type without casting it to that less specific type and without generating any additional code at run-time. It looks like this:
+
+    ```ts
+    const value = { foo: 1, bar: false } satisfies Record<string, number | boolean>
+    console.log(value.foo.toFixed(1)) // TypeScript knows that "foo" is a number here
+    ```
+
+    Before this existed, you could use a cast with `as` to check that a value satisfies a less specific type, but that removes any additional knowledge that TypeScript has about that specific value:
+
+    ```ts
+    const value = { foo: 1, bar: false } as Record<string, number | boolean>
+    console.log(value.foo.toFixed(1)) // TypeScript no longer knows that "foo" is a number
+    ```
+
+    You can read more about this feature in [TypeScript's blog post for 4.9](https://devblogs.microsoft.com/typescript/announcing-typescript-4-9-rc/#the-satisfies-operator) as well as [the associated TypeScript issue for this feature](https://github.com/microsoft/TypeScript/issues/47920).
+
+    This feature was implemented in esbuild by [@magic-akari](https://github.com/magic-akari).
 
 * Fix watch mode constantly rebuilding if the parent directory is inaccessible ([#2640](https://github.com/evanw/esbuild/issues/2640))
 
     Android is unusual in that it has an inaccessible directory in the path to the root, which esbuild was not originally built to handle. To handle cases like this, the path resolution layer in esbuild has a hack where it treats inaccessible directories as empty. However, esbuild's watch implementation currently triggers a rebuild if a directory previously encountered an error but the directory now exists. The assumption is that the previous error was caused by the directory not existing. Although that's usually the case, it's not the case for this particular parent directory on Android. Instead the error is that the directory previously existed but was inaccessible.
 
     This discrepancy between esbuild's path resolution layer and its watch mode was causing watch mode to rebuild continuously on Android. With this release, esbuild's watch mode instead checks for an error status change in the `readdir` file system call, so watch mode should no longer rebuild continuously on Android.
+
+* Apply a fix for a rare deadlock with the JavaScript API ([#1842](https://github.com/evanw/esbuild/issues/1842), [#2485](https://github.com/evanw/esbuild/issues/2485))
+
+    There have been reports of esbuild sometimes exiting with an "all goroutines are asleep" deadlock message from the Go language runtime. This issue hasn't made much progress until recently, where a possible cause was discovered (thanks to [@jfirebaugh](https://github.com/jfirebaugh) for the investigation). This release contains a possible fix for that possible cause, so this deadlock may have been fixed. The fix cannot be easily verified because the deadlock is non-deterministic and rare. If this was indeed the cause, then this issue only affected the JavaScript API in situations where esbuild was already in the process of exiting.
+
+    In detail: The underlying cause is that Go's [`sync.WaitGroup`](https://pkg.go.dev/sync#WaitGroup) API for waiting for a set of goroutines to finish is not fully thread-safe. Specifically it's not safe to call `Add()` concurrently with `Wait()` when the wait group counter is zero due to a data race. This situation could come up with esbuild's JavaScript API when the host JavaScript process closes the child process's stdin and the child process (with no active tasks) calls `Wait()` to check that there are no active tasks, at the same time as esbuild's watchdog timer calls `Add()` to add an active task (that pings the host to see if it's still there). The fix in this release is to avoid calling `Add()` once we learn that stdin has been closed but before we call `Wait()`.
 
 ## 0.15.12
 
