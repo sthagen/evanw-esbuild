@@ -2,6 +2,92 @@
 
 ## Unreleased
 
+* Fix crash when pretty-printing minified JSX with object spread of object literal with computed property ([#2697](https://github.com/evanw/esbuild/issues/2697))
+
+    JSX elements are translated to JavaScript function calls and JSX element attributes are translated to properties on a JavaScript object literal. These properties are always either strings (e.g. in `<x y />`, `y` is a string) or an object spread (e.g. in `<x {...y} />`, `y` is an object spread) because JSX doesn't provide syntax for directly passing a computed property as a JSX attribute. However, esbuild's minifier has a rule that tries to inline object spread with an inline object literal in JavaScript. For example, `x = { ...{ y } }` is minified to `x={y}` when minification is enabled. This means that there is a way to generate a non-string non-spread JSX attribute in esbuild's internal representation. One example is with `<x {...{ [y]: z }} />`. When minification is enabled, esbuild's internal representation of this is something like `<x [y]={z} />` due to object spread inlining, which is not valid JSX syntax. If this internal representation is then pretty-printed as JSX using `--minify --jsx=preserve`, esbuild previously crashed when trying to print this invalid syntax. With this release, esbuild will now print `<x {...{[y]:z}}/>` in this scenario instead of crashing.
+
+## 0.15.15
+
+* Remove duplicate CSS rules across files ([#2688](https://github.com/evanw/esbuild/issues/2688))
+
+    When two or more CSS rules are exactly the same (even if they are not adjacent), all but the last one can safely be removed:
+
+    ```css
+    /* Before */
+    a { color: red; }
+    span { font-weight: bold; }
+    a { color: red; }
+
+    /* After */
+    span { font-weight: bold; }
+    a { color: red; }
+    ```
+
+    Previously esbuild only did this transformation within a single source file. But with this release, esbuild will now do this transformation across source files, which may lead to smaller CSS output if the same rules are repeated across multiple CSS source files in the same bundle. This transformation is only enabled when minifying (specifically when syntax minification is enabled).
+
+* Add `deno` as a valid value for `target` ([#2686](https://github.com/evanw/esbuild/issues/2686))
+
+    The `target` setting in esbuild allows you to enable or disable JavaScript syntax features for a given version of a set of target JavaScript VMs. Previously [Deno](https://deno.land/) was not one of the JavaScript VMs that esbuild supported with `target`, but it will now be supported starting from this release. For example, versions of Deno older than v1.2 don't support the new `||=` operator, so adding e.g. `--target=deno1.0` to esbuild now lets you tell esbuild to transpile `||=` to older JavaScript.
+
+* Fix the `esbuild-wasm` package in Node v19 ([#2683](https://github.com/evanw/esbuild/issues/2683))
+
+    A recent change to Node v19 added a non-writable `crypto` property to the global object: https://github.com/nodejs/node/pull/44897. This conflicts with Go's WebAssembly shim code, which overwrites the global `crypto` property. As a result, all Go-based WebAssembly code that uses the built-in shim (including esbuild) is now broken on Node v19. This release of esbuild fixes the issue by reconfiguring the global `crypto` property to be writable before invoking Go's WebAssembly shim code.
+
+* Fix CSS dimension printing exponent confusion edge case ([#2677](https://github.com/evanw/esbuild/issues/2677))
+
+    In CSS, a dimension token has a numeric "value" part and an identifier "unit" part. For example, the dimension token `32px` has a value of `32` and a unit of `px`. The unit can be any valid CSS identifier. The value can be any number in floating-point format including an optional exponent (e.g. `-3.14e-0` has an exponent of `e-0`). The full details of this syntax are here: https://www.w3.org/TR/css-syntax-3/.
+
+    To maintain the integrity of the dimension token through the printing process, esbuild must handle the edge case where the unit looks like an exponent. One such case is the dimension `1e\32` which has the value `1` and the unit `e2`. It would be bad if this dimension token was printed such that a CSS parser would parse it as a number token with the value `1e2` instead of a dimension token. The way esbuild currently does this is to escape the leading `e` in the dimension unit, so esbuild would parse `1e\32` but print `1\65 2` (both `1e\32` and `1\65 2` represent a dimension token with a value of `1` and a unit of `e2`).
+
+    However, there is an even narrower edge case regarding this edge case. If the value part of the dimension token itself has an `e`, then it's not necessary to escape the `e` in the dimension unit because a CSS parser won't confuse the unit with the exponent even though it looks like one (since a number can only have at most one exponent). This came up because the grammar for the CSS `unicode-range` property uses a hack that lets you specify a hexadecimal range without quotes even though CSS has no token for a hexadecimal range. The hack is to allow the hexadecimal range to be parsed as a dimension token and optionally also a number token. Here is the grammar for `unicode-range`:
+
+    ```
+    unicode-range =
+      <urange>#
+
+    <urange> =
+      u '+' <ident-token> '?'*            |
+      u <dimension-token> '?'*            |
+      u <number-token> '?'*               |
+      u <number-token> <dimension-token>  |
+      u <number-token> <number-token>     |
+      u '+' '?'+
+    ```
+
+    and here is an example `unicode-range` declaration that was problematic for esbuild:
+
+    ```css
+    @font-face {
+      unicode-range: U+0e2e-0e2f;
+    }
+    ```
+
+    This is parsed as a dimension with a value of `+0e2` and a unit of `e-0e2f`. This was problematic for esbuild because the unit starts with `e-0` which could be confused with an exponent when appended after a number, so esbuild was escaping the `e` character in the unit. However, this escaping is unnecessary because in this case the dimension value already has an exponent in it. With this release, esbuild will no longer unnecessarily escape the `e` in the dimension unit in these cases, which should fix the printing of `unicode-range` declarations.
+
+    An aside: You may be wondering why esbuild is trying to escape the `e` at all and why it doesn't just pass through the original source code unmodified. The reason why esbuild does this is that, for robustness, esbuild's AST generally tries to omit semantically-unrelated information and esbuild's code printers always try to preserve the semantics of the underlying AST. That way the rest of esbuild's internals can just deal with semantics instead of presentation. They don't have to think about how the AST will be printed when changing the AST. This is the same reason that esbuild's JavaScript AST doesn't have a "parentheses" node (e.g. `a * (b + c)` is represented by the AST `multiply(a, add(b, c))` instead of `multiply(a, parentheses(add(b, c)))`). Instead, the printer automatically inserts parentheses as necessary to maintain the semantics of the AST, which means all of the optimizations that run over the AST don't have to worry about keeping the parentheses up to date. Similarly, the CSS AST for the dimension token stores the actual unit and the printer makes sure the unit is properly escaped depending on what value it's placed after. All of the other code operating on CSS ASTs doesn't have to worry about parsing escapes to compare units or about keeping escapes up to date when the AST is modified. Hopefully that makes sense.
+
+* Attempt to avoid creating the `node_modules/.cache` directory for people that use Yarn 2+ in Plug'n'Play mode ([#2685](https://github.com/evanw/esbuild/issues/2685))
+
+    When Yarn's PnP mode is enabled, packages installed by Yarn may or may not be put inside `.zip` files. The specific heuristics for when this happens change over time in between Yarn versions. This is problematic for esbuild because esbuild's JavaScript package needs to execute a binary file inside the package. Yarn makes extensive modifications to Node's file system APIs at run time to pretend that `.zip` files are normal directories and to make it hard to tell whether a file is real or not (since in theory it doesn't matter). But they haven't modified Node's `child_process.execFileSync` API so attempting to execute a file inside a zip file fails. To get around this, esbuild previously used Node's file system APIs to copy the binary executable to another location before invoking `execFileSync`. Under the hood this caused Yarn to extract the file from the zip file into a real file that can then be run.
+
+    However, esbuild copied its executable into `node_modules/.cache/esbuild`. This is the [official recommendation from the Yarn team](https://yarnpkg.com/advanced/rulebook/#packages-should-never-write-inside-their-own-folder-outside-of-postinstall) for where packages are supposed to put these types of files when Yarn PnP is being used. However, users of Yarn PnP with esbuild find this really annoying because they don't like looking at the `node_modules` directory. With this release, esbuild now sets `"preferUnplugged": true` in its `package.json` files, which tells newer versions of Yarn to not put esbuild's packages in a zip file. There may exist older versions of Yarn that don't support `preferUnplugged`. In that case esbuild should still copy the executable to a cache directory, so it should still run (hopefully, since I haven't tested this myself). Note that esbuild setting `"preferUnplugged": true` may have the side effect of esbuild taking up more space on the file system in the event that multiple platforms are installed simultaneously, or that you're using an older version of Yarn that always installs packages for all platforms. In that case you may want to update to a newer version of Yarn since Yarn has recently changed to only install packages for the current platform.
+
+## 0.15.14
+
+* Fix parsing of TypeScript `infer` inside a conditional `extends` ([#2675](https://github.com/evanw/esbuild/issues/2675))
+
+    Unlike JavaScript, parsing TypeScript sometimes requires backtracking. The `infer A` type operator can take an optional constraint of the form `infer A extends B`. However, this syntax conflicts with the similar conditional type operator `A extends B ? C : D` in cases where the syntax is combined, such as `infer A extends B ? C : D`. This is supposed to be parsed as `(infer A) extends B ? C : D`. Previously esbuild incorrectly parsed this as `(infer A extends B) ? C : D` instead, which is a parse error since the `?:` conditional operator requires the `extends` keyword as part of the conditional type. TypeScript disambiguates by speculatively parsing the `extends` after the `infer`, but backtracking if a `?` token is encountered afterward. With this release, esbuild should now do the same thing, so esbuild should now correctly parse these types. Here's a real-world example of such a type:
+
+    ```ts
+    type Normalized<T> = T extends Array<infer A extends object ? infer A : never>
+      ? Dictionary<Normalized<A>>
+      : {
+          [P in keyof T]: T[P] extends Array<infer A extends object ? infer A : never>
+            ? Dictionary<Normalized<A>>
+            : Normalized<T[P]>
+        }
+    ```
+
 * Avoid unnecessary watch mode rebuilds when debug logging is enabled ([#2661](https://github.com/evanw/esbuild/issues/2661))
 
     When debug-level logs are enabled (such as with `--log-level=debug`), esbuild's path resolution subsystem generates debug log messages that say something like "Read 20 entries for directory /home/user" to help you debug what esbuild's path resolution is doing. This caused esbuild's watch mode subsystem to add a dependency on the full list of entries in that directory since if that changes, the generated log message would also have to be updated. However, meant that on systems where a parent directory undergoes constant directory entry churn, esbuild's watch mode would continue to rebuild if `--log-level=debug` was passed.

@@ -643,9 +643,7 @@ let Foo = {
     console.log("Fragment", ...args);
   }
 };
-export default /* @__PURE__ */ Foo.a(Foo.b, {
-  c: Foo.e
-});
+export default /* @__PURE__ */ Foo.a(Foo.b, { c: Foo.e });
 
 ================================================================================
 TestManglePropsJSXTransformNamespace
@@ -653,9 +651,7 @@ TestManglePropsJSXTransformNamespace
 export default [
   /* @__PURE__ */ React.createElement(KEEP_THIS_, null),
   /* @__PURE__ */ React.createElement("KEEP:THIS_", null),
-  /* @__PURE__ */ React.createElement("foo", {
-    "KEEP:THIS_": true
-  })
+  /* @__PURE__ */ React.createElement("foo", { "KEEP:THIS_": true })
 ];
 
 ================================================================================
@@ -925,6 +921,29 @@ x.a, x?.a, x[y ? "a" : z], x?.[y ? "a" : z], x[y ? z : "a"], x?.[y ? z : "a"], x
 };
 var { a: x } = y, { ["a"]: x } = y, { [(z, "a")]: x } = y;
 "a" in x, (y ? "a" : z) in x, (y ? z : "a") in x, y, "a" in x;
+
+================================================================================
+TestMinifiedJSXPreserveWithObjectSpread
+---------- /out.js ----------
+// entry.jsx
+var obj = {
+  before,
+  [key]: value,
+  key: value,
+  after
+};
+<Foo
+  before
+  {...{ [key]: value }}
+  key={value}
+  after
+/>;
+<Bar
+  a={a}
+  {...{ [b]: c }}
+  {...d}
+  e={e}
+/>;
 
 ================================================================================
 TestMinifyIdentifiersImportPathFrequencyAnalysis
