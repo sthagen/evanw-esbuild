@@ -440,7 +440,7 @@ func parseFile(args parseArgs) {
 					// fallback.
 					if !didLogError && !record.Flags.Has(ast.HandlesImportErrors) {
 						text, suggestion, notes := ResolveFailureErrorTextSuggestionNotes(args.res, record.Path.Text, record.Kind,
-							pluginName, args.fs, absResolveDir, args.options.Platform, source.PrettyPath)
+							pluginName, args.fs, absResolveDir, args.options.Platform, source.PrettyPath, debug.ModifiedImportPath)
 						debug.LogErrorMsg(args.log, &source, record.Range, text, suggestion, notes)
 					} else if !didLogError && record.Flags.Has(ast.HandlesImportErrors) {
 						args.log.AddIDWithNotes(logger.MsgID_Bundler_IgnoredDynamicImport, logger.Debug, &tracker, record.Range,
@@ -465,19 +465,22 @@ func parseFile(args parseArgs) {
 		case *graph.CSSRepr:
 			sourceMapComment = repr.AST.SourceMapComment
 		}
+
 		if sourceMapComment.Text != "" {
 			tracker := logger.MakeLineColumnTracker(&source)
+
 			if path, contents := extractSourceMapFromComment(args.log, args.fs, &args.caches.FSCache,
 				args.res, &source, &tracker, sourceMapComment, absResolveDir); contents != nil {
 				prettyPath := args.res.PrettyPath(path)
 				log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug, args.log.Overrides)
-				result.file.inputFile.InputSourceMap = js_parser.ParseSourceMap(log, logger.Source{
+
+				sourceMap := js_parser.ParseSourceMap(log, logger.Source{
 					KeyPath:    path,
 					PrettyPath: prettyPath,
 					Contents:   *contents,
 				})
-				msgs := log.Done()
-				if len(msgs) > 0 {
+
+				if msgs := log.Done(); len(msgs) > 0 {
 					var text string
 					if path.Namespace == "file" {
 						text = fmt.Sprintf("The source map %q was referenced by the file %q here:", prettyPath, args.prettyPath)
@@ -490,6 +493,28 @@ func parseFile(args parseArgs) {
 						args.log.AddMsg(msg)
 					}
 				}
+
+				// If "sourcesContent" isn't present, try filling it in using the file system
+				if sourceMap != nil && sourceMap.SourcesContent == nil && !args.options.ExcludeSourcesContent {
+					for _, source := range sourceMap.Sources {
+						var absPath string
+						if args.fs.IsAbs(source) {
+							absPath = source
+						} else if path.Namespace == "file" {
+							absPath = args.fs.Join(args.fs.Dir(path.Text), source)
+						} else {
+							sourceMap.SourcesContent = append(sourceMap.SourcesContent, sourcemap.SourceContent{})
+							continue
+						}
+						var sourceContent sourcemap.SourceContent
+						if contents, err, _ := args.caches.FSCache.ReadFile(args.fs, absPath); err == nil {
+							sourceContent.Value = helpers.StringToUTF16(contents)
+						}
+						sourceMap.SourcesContent = append(sourceMap.SourcesContent, sourceContent)
+					}
+				}
+
+				result.file.inputFile.InputSourceMap = sourceMap
 			}
 		}
 	}
@@ -506,8 +531,18 @@ func ResolveFailureErrorTextSuggestionNotes(
 	absResolveDir string,
 	platform config.Platform,
 	originatingFilePath string,
+	modifiedImportPath string,
 ) (text string, suggestion string, notes []logger.MsgData) {
-	text = fmt.Sprintf("Could not resolve %q", path)
+	if modifiedImportPath != "" {
+		text = fmt.Sprintf("Could not resolve %q (originally %q)", modifiedImportPath, path)
+		notes = append(notes, logger.MsgData{Text: fmt.Sprintf(
+			"The path %q was remapped to %q using the alias feature, which then couldn't be resolved. "+
+				"Keep in mind that import path aliases are resolved in the current working directory.",
+			path, modifiedImportPath)})
+		path = modifiedImportPath
+	} else {
+		text = fmt.Sprintf("Could not resolve %q", path)
+	}
 	hint := ""
 
 	if resolver.IsPackagePath(path) {
@@ -557,6 +592,13 @@ func ResolveFailureErrorTextSuggestionNotes(
 	}
 
 	if hint != "" {
+		if modifiedImportPath != "" {
+			// Add a newline if there's already a paragraph of text
+			notes = append(notes, logger.MsgData{})
+
+			// Don't add a suggestion if the path was rewritten using an alias
+			suggestion = ""
+		}
 		notes = append(notes, logger.MsgData{Text: hint})
 	}
 	return
@@ -2409,14 +2451,16 @@ func (b *Bundle) computeDataForSourceMapsInParallel(options *config.Options, rea
 							// Missing contents become a "null" literal
 							quotedContents := nullContents
 							if i < len(sm.SourcesContent) {
-								if value := sm.SourcesContent[i]; value.Quoted != "" {
-									if options.ASCIIOnly && !isASCIIOnly(value.Quoted) {
-										// Re-quote non-ASCII values if output is ASCII-only
-										quotedContents = helpers.QuoteForJSON(helpers.UTF16ToString(value.Value), options.ASCIIOnly)
-									} else {
-										// Otherwise just use the value directly from the input file
-										quotedContents = []byte(value.Quoted)
-									}
+								if value := sm.SourcesContent[i]; value.Quoted != "" && (!options.ASCIIOnly || !isASCIIOnly(value.Quoted)) {
+									// Just use the value directly from the input file
+									quotedContents = []byte(value.Quoted)
+								} else if value.Value != nil {
+									// Re-quote non-ASCII values if output is ASCII-only.
+									// Also quote values that haven't been quoted yet
+									// (happens when the entire "sourcesContent" array is
+									// absent and the source has been found on the file
+									// system using the "sources" array).
+									quotedContents = helpers.QuoteForJSON(helpers.UTF16ToString(value.Value), options.ASCIIOnly)
 								}
 							}
 							result.quotedContents[i] = quotedContents

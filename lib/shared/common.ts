@@ -59,6 +59,9 @@ let mustBeStringOrArray = (value: string | string[] | undefined): string | null 
 let mustBeStringOrUint8Array = (value: string | Uint8Array | undefined): string | null =>
   typeof value === 'string' || value instanceof Uint8Array ? null : 'a string or a Uint8Array';
 
+let mustBeStringOrURL = (value: string | URL | undefined): string | null =>
+  typeof value === 'string' || value instanceof URL ? null : 'a string or a URL';
+
 type OptionKeys = { [key: string]: boolean };
 
 function getFlag<T, K extends (keyof T & string)>(object: T, keys: OptionKeys, key: K, mustBeFn: (value: T[K]) => string | null): T[K] | undefined {
@@ -80,7 +83,7 @@ function checkForInvalidFlags(object: Object, keys: OptionKeys, where: string): 
 
 export function validateInitializeOptions(options: types.InitializeOptions): types.InitializeOptions {
   let keys: OptionKeys = Object.create(null);
-  let wasmURL = getFlag(options, keys, 'wasmURL', mustBeString);
+  let wasmURL = getFlag(options, keys, 'wasmURL', mustBeStringOrURL);
   let wasmModule = getFlag(options, keys, 'wasmModule', mustBeWebAssemblyModule);
   let worker = getFlag(options, keys, 'worker', mustBeBoolean);
   checkForInvalidFlags(options, keys, 'in initialize() call');
@@ -247,6 +250,7 @@ function flagsForBuildOptions(
   let mainFields = getFlag(options, keys, 'mainFields', mustBeArray);
   let conditions = getFlag(options, keys, 'conditions', mustBeArray);
   let external = getFlag(options, keys, 'external', mustBeArray);
+  let alias = getFlag(options, keys, 'alias', mustBeObject);
   let loader = getFlag(options, keys, 'loader', mustBeObject);
   let outExtension = getFlag(options, keys, 'outExtension', mustBeObject);
   let publicPath = getFlag(options, keys, 'publicPath', mustBeString);
@@ -319,6 +323,12 @@ function flagsForBuildOptions(
     flags.push(`--conditions=${values.join(',')}`);
   }
   if (external) for (let name of external) flags.push(`--external:${name}`);
+  if (alias) {
+    for (let old in alias) {
+      if (old.indexOf('=') >= 0) throw new Error(`Invalid package name in alias: ${old}`);
+      flags.push(`--alias:${old}=${alias[old]}`);
+    }
+  }
   if (banner) {
     for (let type in banner) {
       if (type.indexOf('=') >= 0) throw new Error(`Invalid banner file type: ${type}`);

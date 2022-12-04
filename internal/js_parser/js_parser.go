@@ -3341,19 +3341,21 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		}
 
 		target := p.parseExprWithFlags(js_ast.LMember, flags)
+		var webpackComments []js_ast.Comment
 		args := []js_ast.Expr{}
 		var closeParenLoc logger.Loc
 		var isMultiLine bool
 
 		if p.lexer.Token == js_lexer.TOpenParen {
-			args, closeParenLoc, isMultiLine = p.parseCallArgs()
+			webpackComments, args, closeParenLoc, isMultiLine = p.parseCallArgs()
 		}
 
 		return js_ast.Expr{Loc: loc, Data: &js_ast.ENew{
-			Target:        target,
-			Args:          args,
-			CloseParenLoc: closeParenLoc,
-			IsMultiLine:   isMultiLine,
+			Target:          target,
+			Args:            args,
+			WebpackComments: webpackComments,
+			CloseParenLoc:   closeParenLoc,
+			IsMultiLine:     isMultiLine,
 		}}
 
 	case js_lexer.TOpenBracket:
@@ -3673,10 +3675,10 @@ func (p *parser) parseImportExpr(loc logger.Loc, level js_ast.L) js_ast.Expr {
 	oldAllowIn := p.allowIn
 	p.allowIn = true
 
-	p.lexer.PreserveAllCommentsBefore = true
+	var webpackComments []js_ast.Comment
+	oldWebpackComments := p.lexer.WebpackComments
+	p.lexer.WebpackComments = &webpackComments
 	p.lexer.Expect(js_lexer.TOpenParen)
-	comments := p.lexer.CommentsToPreserveBefore
-	p.lexer.PreserveAllCommentsBefore = false
 
 	value := p.parseExpr(js_ast.LComma)
 	var optionsOrNil js_ast.Expr
@@ -3696,13 +3698,14 @@ func (p *parser) parseImportExpr(loc logger.Loc, level js_ast.L) js_ast.Expr {
 		}
 	}
 
+	p.lexer.WebpackComments = oldWebpackComments
 	p.lexer.Expect(js_lexer.TCloseParen)
 
 	p.allowIn = oldAllowIn
 	return js_ast.Expr{Loc: loc, Data: &js_ast.EImportCall{
-		Expr:                    value,
-		OptionsOrNil:            optionsOrNil,
-		LeadingInteriorComments: comments,
+		Expr:            value,
+		OptionsOrNil:    optionsOrNil,
+		WebpackComments: webpackComments,
 	}}
 }
 
@@ -3838,7 +3841,7 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 				if level >= js_ast.LCall {
 					return left
 				}
-				args, closeParenLoc, isMultiLine := p.parseCallArgs()
+				_, args, closeParenLoc, isMultiLine := p.parseCallArgs()
 				left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.ECall{
 					Target:        left,
 					Args:          args,
@@ -3860,7 +3863,7 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 				if level >= js_ast.LCall {
 					return left
 				}
-				args, closeParenLoc, isMultiLine := p.parseCallArgs()
+				_, args, closeParenLoc, isMultiLine := p.parseCallArgs()
 				left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.ECall{
 					Target:        left,
 					Args:          args,
@@ -3962,7 +3965,7 @@ func (p *parser) parseSuffix(left js_ast.Expr, level js_ast.L, errors *deferredE
 			if level >= js_ast.LCall {
 				return left
 			}
-			args, closeParenLoc, isMultiLine := p.parseCallArgs()
+			_, args, closeParenLoc, isMultiLine := p.parseCallArgs()
 			left = js_ast.Expr{Loc: left.Loc, Data: &js_ast.ECall{
 				Target:        left,
 				Args:          args,
@@ -4473,11 +4476,13 @@ func (p *parser) parseExprOrLetStmt(opts parseStmtOpts) (js_ast.Expr, js_ast.Stm
 	return p.parseSuffix(expr, js_ast.LLowest, nil, 0), js_ast.Stmt{}, nil
 }
 
-func (p *parser) parseCallArgs() (args []js_ast.Expr, closeParenLoc logger.Loc, isMultiLine bool) {
+func (p *parser) parseCallArgs() (webpackComments []js_ast.Comment, args []js_ast.Expr, closeParenLoc logger.Loc, isMultiLine bool) {
 	// Allow "in" inside call arguments
 	oldAllowIn := p.allowIn
 	p.allowIn = true
 
+	oldWebpackComments := p.lexer.WebpackComments
+	p.lexer.WebpackComments = &webpackComments
 	p.lexer.Expect(js_lexer.TOpenParen)
 
 	for p.lexer.Token != js_lexer.TCloseParen {
@@ -4508,6 +4513,7 @@ func (p *parser) parseCallArgs() (args []js_ast.Expr, closeParenLoc logger.Loc, 
 		isMultiLine = true
 	}
 	closeParenLoc = p.lexer.Loc()
+	p.lexer.WebpackComments = oldWebpackComments
 	p.lexer.Expect(js_lexer.TCloseParen)
 	p.allowIn = oldAllowIn
 	return
@@ -7256,7 +7262,7 @@ func (p *parser) parseStmtsUpTo(end js_lexer.T, opts parseStmtOpts) []js_ast.Stm
 
 	for {
 		// Preserve some statement-level comments
-		comments := p.lexer.CommentsToPreserveBefore
+		comments := p.lexer.LegalCommentsBeforeToken
 		if len(comments) > 0 {
 			for _, comment := range comments {
 				stmts = append(stmts, js_ast.Stmt{
@@ -14054,8 +14060,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 				p.importRecordsForCurrentPart = append(p.importRecordsForCurrentPart, importRecordIndex)
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EImportString{
-					ImportRecordIndex:       importRecordIndex,
-					LeadingInteriorComments: e.LeadingInteriorComments,
+					ImportRecordIndex: importRecordIndex,
+					WebpackComments:   e.WebpackComments,
 				}}
 			}
 
@@ -14108,9 +14114,9 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 			return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EImportCall{
-				Expr:                    arg,
-				OptionsOrNil:            e.OptionsOrNil,
-				LeadingInteriorComments: e.LeadingInteriorComments,
+				Expr:            arg,
+				OptionsOrNil:    e.OptionsOrNil,
+				WebpackComments: e.WebpackComments,
 			}}
 		}), exprOut{}
 
@@ -16383,8 +16389,8 @@ func (p *parser) computeCharacterFrequency() *js_ast.CharFreq {
 	charFreq.Scan(p.source.Contents, 1)
 
 	// Subtract out all comments
-	for _, comment := range p.lexer.AllOriginalComments {
-		charFreq.Scan(comment.Text, -1)
+	for _, commentRange := range p.lexer.AllOriginalComments {
+		charFreq.Scan(p.source.TextForRange(commentRange), -1)
 	}
 
 	// Subtract out all import paths

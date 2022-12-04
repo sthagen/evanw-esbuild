@@ -319,6 +319,20 @@ func TestNew(t *testing.T) {
 	expectPrintedMinify(t, "new x().y", "new x().y;")
 	expectPrintedMinify(t, "new x() + y", "new x+y;")
 	expectPrintedMinify(t, "new x() ** 2", "new x**2;")
+
+	// Test preservation of Webpack-specific comments
+	expectPrinted(t, "new Worker(// webpackFoo: 1\n // webpackBar: 2\n 'path');", "new Worker(\n  // webpackFoo: 1\n  // webpackBar: 2\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(/* webpackFoo: 1 */ /* webpackBar: 2 */ 'path');", "new Worker(\n  /* webpackFoo: 1 */\n  /* webpackBar: 2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(\n    /* multi\n     * line\n     * webpackBar: */ 'path');", "new Worker(\n  /* multi\n   * line\n   * webpackBar: */\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(/* webpackFoo: 1 */ 'path' /* webpackBar:2 */);", "new Worker(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(/* webpackFoo: 1 */ 'path' /* webpackBar:2 */ ,);", "new Worker(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(/* webpackFoo: 1 */ 'path', /* webpackBar:2 */ );", "new Worker(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(new URL('path', /* webpackFoo: these can go anywhere */ import.meta.url))",
+		"new Worker(new URL(\n  /* webpackFoo: these can go anywhere */\n  \"path\",\n  import.meta.url\n));\n")
+
+	// Other comments should not be preserved
+	expectPrinted(t, "new Worker(// comment 1\n // comment 2\n 'path');", "new Worker(\n  \"path\"\n);\n")
+	expectPrinted(t, "new Worker(/* comment 1 */ /* comment 2 */ 'path');", "new Worker(\"path\");\n")
 }
 
 func TestCall(t *testing.T) {
@@ -667,11 +681,24 @@ func TestPrivateIdentifiers(t *testing.T) {
 func TestImport(t *testing.T) {
 	expectPrinted(t, "import('path');", "import(\"path\");\n") // The semicolon must not be a separate statement
 
-	// Test preservation of leading interior comments
-	expectPrinted(t, "import(// comment 1\n // comment 2\n 'path');", "import(\n  // comment 1\n  // comment 2\n  \"path\"\n);\n")
-	expectPrinted(t, "import(/* comment 1 */ /* comment 2 */ 'path');", "import(\n  /* comment 1 */\n  /* comment 2 */\n  \"path\"\n);\n")
-	expectPrinted(t, "import(\n    /* multi\n     * line\n     * comment */ 'path');", "import(\n  /* multi\n   * line\n   * comment */\n  \"path\"\n);\n")
-	expectPrinted(t, "import(/* comment 1 */ 'path' /* comment 2 */);", "import(\n  /* comment 1 */\n  \"path\"\n);\n")
+	// Test preservation of Webpack-specific comments
+	expectPrinted(t, "import(// webpackFoo: 1\n // webpackBar: 2\n 'path');", "import(\n  // webpackFoo: 1\n  // webpackBar: 2\n  \"path\"\n);\n")
+	expectPrinted(t, "import(// webpackFoo: 1\n // webpackBar: 2\n 'path', {type: 'module'});", "import(\n  // webpackFoo: 1\n  // webpackBar: 2\n  \"path\",\n  { type: \"module\" }\n);\n")
+	expectPrinted(t, "import(/* webpackFoo: 1 */ /* webpackBar: 2 */ 'path');", "import(\n  /* webpackFoo: 1 */\n  /* webpackBar: 2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "import(/* webpackFoo: 1 */ /* webpackBar: 2 */ 'path', {type: 'module'});", "import(\n  /* webpackFoo: 1 */\n  /* webpackBar: 2 */\n  \"path\",\n  { type: \"module\" }\n);\n")
+	expectPrinted(t, "import(\n    /* multi\n     * line\n     * webpackBar: */ 'path');", "import(\n  /* multi\n   * line\n   * webpackBar: */\n  \"path\"\n);\n")
+	expectPrinted(t, "import(/* webpackFoo: 1 */ 'path' /* webpackBar:2 */);", "import(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "import(/* webpackFoo: 1 */ 'path' /* webpackBar:2 */ ,);", "import(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "import(/* webpackFoo: 1 */ 'path', /* webpackBar:2 */ );", "import(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\"\n);\n")
+	expectPrinted(t, "import(/* webpackFoo: 1 */ 'path', { type: 'module' } /* webpackBar:2 */ );", "import(\n  /* webpackFoo: 1 */\n  /* webpackBar:2 */\n  \"path\",\n  { type: \"module\" }\n);\n")
+	expectPrinted(t, "import(new URL('path', /* webpackFoo: these can go anywhere */ import.meta.url))",
+		"import(new URL(\n  /* webpackFoo: these can go anywhere */\n  \"path\",\n  import.meta.url\n));\n")
+
+	// Other comments should not be preserved
+	expectPrinted(t, "import(// comment 1\n // comment 2\n 'path');", "import(\"path\");\n")
+	expectPrinted(t, "import(// comment 1\n // comment 2\n 'path', {type: 'module'});", "import(\"path\", { type: \"module\" });\n")
+	expectPrinted(t, "import(/* comment 1 */ /* comment 2 */ 'path');", "import(\"path\");\n")
+	expectPrinted(t, "import(/* comment 1 */ /* comment 2 */ 'path', {type: 'module'});", "import(\"path\", { type: \"module\" });\n")
 }
 
 func TestExportDefault(t *testing.T) {

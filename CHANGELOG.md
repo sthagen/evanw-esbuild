@@ -1,6 +1,41 @@
 # Changelog
 
-## Unreleased
+## 0.15.17
+
+* Search for missing source map code on the file system ([#2711](https://github.com/evanw/esbuild/issues/2711))
+
+    [Source maps](https://sourcemaps.info/spec.html) are JSON files that map from compiled code back to the original code. They provide the original source code using two arrays: `sources` (required) and `sourcesContent` (optional). When bundling is enabled, esbuild is able to bundle code with source maps that was compiled by other tools (e.g. with Webpack) and emit source maps that map all the way back to the original code (e.g. before Webpack compiled it).
+
+    Previously if the input source maps omitted the optional `sourcesContent` array, esbuild would use `null` for the source content in the source map that it generates (since the source content isn't available). However, sometimes the original source code is actually still present on the file system. With this release, esbuild will now try to find the original source code using the path in the `sources` array and will use that instead of `null` if it was found.
+
+* Fix parsing bug with TypeScript `infer` and `extends` ([#2712](https://github.com/evanw/esbuild/issues/2712))
+
+    This release fixes a bug where esbuild incorrectly failed to parse valid TypeScript code that nests `extends` inside `infer` inside `extends`, such as in the example below:
+
+    ```ts
+    type A<T> = {};
+    type B = {} extends infer T extends {} ? A<T> : never;
+    ```
+
+    TypeScript code that does this should now be parsed correctly.
+
+* Use `WebAssembly.instantiateStreaming` if available ([#1036](https://github.com/evanw/esbuild/pull/1036), [#1900](https://github.com/evanw/esbuild/pull/1900))
+
+    Currently the WebAssembly version of esbuild uses `fetch` to download `esbuild.wasm` and then `WebAssembly.instantiate` to compile it. There is a newer API called `WebAssembly.instantiateStreaming` that both downloads and compiles at the same time, which can be a performance improvement if both downloading and compiling are slow. With this release, esbuild now attempts to use `WebAssembly.instantiateStreaming` and falls back to the original approach if that fails.
+
+    The implementation for this builds on a PR by [@lbwa](https://github.com/lbwa).
+
+* Preserve Webpack comments inside constructor calls ([#2439](https://github.com/evanw/esbuild/issues/2439))
+
+    This improves the use of esbuild as a faster TypeScript-to-JavaScript frontend for Webpack, which has special [magic comments](https://webpack.js.org/api/module-methods/#magic-comments) inside `new Worker()` expressions that affect Webpack's behavior.
+
+## 0.15.16
+
+* Add a package alias feature ([#2191](https://github.com/evanw/esbuild/issues/2191))
+
+    With this release, you can now easily substitute one package for another at build time with the new `alias` feature. For example, `--alias:oldpkg=newpkg` replaces all imports of `oldpkg` with `newpkg`. One use case for this is easily replacing a node-only package with a browser-friendly package in 3rd-party code that you don't control. These new substitutions happen first before all of esbuild's existing path resolution logic.
+
+    Note that when an import path is substituted using an alias, the resulting import path is resolved in the working directory instead of in the directory containing the source file with the import path. If needed, the working directory can be set with the `cd` command when using the CLI or with the `absWorkingDir` setting when using the JS or Go APIs.
 
 * Fix crash when pretty-printing minified JSX with object spread of object literal with computed property ([#2697](https://github.com/evanw/esbuild/issues/2697))
 
