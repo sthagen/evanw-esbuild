@@ -547,10 +547,10 @@ func parseOptionsImpl(
 						"to specify the file type that the output extension applies to .",
 				)
 			}
-			if buildOpts.OutExtensions == nil {
-				buildOpts.OutExtensions = make(map[string]string)
+			if buildOpts.OutExtension == nil {
+				buildOpts.OutExtension = make(map[string]string)
 			}
-			buildOpts.OutExtensions[value[:equals]] = value[equals+1:]
+			buildOpts.OutExtension[value[:equals]] = value[equals+1:]
 
 		case strings.HasPrefix(arg, "--platform="):
 			value := arg[len("--platform="):]
@@ -596,6 +596,19 @@ func parseOptionsImpl(
 				transformOpts.Format = format
 			}
 
+		case strings.HasPrefix(arg, "--packages=") && buildOpts != nil:
+			value := arg[len("--packages="):]
+			var packages api.Packages
+			if value == "external" {
+				packages = api.PackagesExternal
+			} else {
+				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
+					fmt.Sprintf("Invalid value %q in %q", value, arg),
+					"The only valid value is \"external\".",
+				)
+			}
+			buildOpts.Packages = packages
+
 		case strings.HasPrefix(arg, "--external:") && buildOpts != nil:
 			buildOpts.External = append(buildOpts.External, arg[len("--external:"):])
 
@@ -619,14 +632,14 @@ func parseOptionsImpl(
 
 		case strings.HasPrefix(arg, "--jsx="):
 			value := arg[len("--jsx="):]
-			var mode api.JSXMode
+			var mode api.JSX
 			switch value {
 			case "transform":
-				mode = api.JSXModeTransform
+				mode = api.JSXTransform
 			case "preserve":
-				mode = api.JSXModePreserve
+				mode = api.JSXPreserve
 			case "automatic":
-				mode = api.JSXModeAutomatic
+				mode = api.JSXAutomatic
 			default:
 				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
 					fmt.Sprintf("Invalid value %q in %q", value, arg),
@@ -634,9 +647,9 @@ func parseOptionsImpl(
 				)
 			}
 			if buildOpts != nil {
-				buildOpts.JSXMode = mode
+				buildOpts.JSX = mode
 			} else {
-				transformOpts.JSXMode = mode
+				transformOpts.JSX = mode
 			}
 
 		case strings.HasPrefix(arg, "--jsx-factory="):
@@ -825,6 +838,7 @@ func parseOptionsImpl(
 				"outbase":            true,
 				"outdir":             true,
 				"outfile":            true,
+				"packages":           true,
 				"platform":           true,
 				"preserve-symlinks":  true,
 				"public-path":        true,

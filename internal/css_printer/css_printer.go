@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/evanw/esbuild/internal/ast"
+	"github.com/evanw/esbuild/internal/compat"
 	"github.com/evanw/esbuild/internal/config"
 	"github.com/evanw/esbuild/internal/css_ast"
 	"github.com/evanw/esbuild/internal/css_lexer"
@@ -20,6 +21,7 @@ type printer struct {
 	importRecords          []ast.ImportRecord
 	css                    []byte
 	extractedLegalComments map[string]bool
+	jsonMetadataImports    []string
 	builder                sourcemap.ChunkBuilder
 }
 
@@ -32,16 +34,24 @@ type Options struct {
 	// us do binary search on to figure out what line a given AST node came from
 	LineOffsetTables []sourcemap.LineOffsetTable
 
-	MinifyWhitespace  bool
-	ASCIIOnly         bool
-	AddSourceMappings bool
-	LegalComments     config.LegalComments
+	UnsupportedFeatures compat.CSSFeature
+	MinifyWhitespace    bool
+	ASCIIOnly           bool
+	SourceMap           config.SourceMap
+	AddSourceMappings   bool
+	LegalComments       config.LegalComments
+	NeedsMetafile       bool
 }
 
 type PrintResult struct {
 	CSS                    []byte
 	ExtractedLegalComments map[string]bool
-	SourceMapChunk         sourcemap.Chunk
+	JSONMetadataImports    []string
+
+	// This source map chunk just contains the VLQ-encoded offsets for the "CSS"
+	// field above. It's not a full source map. The bundler will be joining many
+	// source map chunks together to form the final source map.
+	SourceMapChunk sourcemap.Chunk
 }
 
 func Print(tree css_ast.AST, options Options) PrintResult {
@@ -53,10 +63,31 @@ func Print(tree css_ast.AST, options Options) PrintResult {
 	for _, rule := range tree.Rules {
 		p.printRule(rule, 0, false)
 	}
-	return PrintResult{
+	result := PrintResult{
 		CSS:                    p.css,
 		ExtractedLegalComments: p.extractedLegalComments,
-		SourceMapChunk:         p.builder.GenerateChunk(p.css),
+		JSONMetadataImports:    p.jsonMetadataImports,
+	}
+	if options.SourceMap != config.SourceMapNone {
+		// This is expensive. Only do this if it's necessary. For example, skipping
+		// this if it's not needed sped up end-to-end parsing and printing of a
+		// large CSS file from 66ms to 52ms (around 25% faster).
+		result.SourceMapChunk = p.builder.GenerateChunk(p.css)
+	}
+	return result
+}
+
+func (p *printer) recordImportPathForMetafile(importRecordIndex uint32) {
+	if p.options.NeedsMetafile {
+		record := p.importRecords[importRecordIndex]
+		external := ""
+		if (record.Flags & ast.ShouldNotBeExternalInMetafile) == 0 {
+			external = ",\n          \"external\": true"
+		}
+		p.jsonMetadataImports = append(p.jsonMetadataImports, fmt.Sprintf("\n        {\n          \"path\": %s,\n          \"kind\": %s%s\n        }",
+			helpers.QuoteForJSON(record.Path.Text, p.options.ASCIIOnly),
+			helpers.QuoteForJSON(record.Kind.StringForMetafile(), p.options.ASCIIOnly),
+			external))
 	}
 }
 
@@ -101,6 +132,7 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 			p.print("@import ")
 		}
 		p.printQuoted(p.importRecords[r.ImportRecordIndex].Path.Text)
+		p.recordImportPathForMetafile(r.ImportRecordIndex)
 		p.printTokens(r.ImportConditions, printTokensOpts{})
 		p.print(";")
 
@@ -261,7 +293,9 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 
 func (p *printer) printIndentedComment(indent int32, text string) {
 	// Avoid generating a comment containing the character sequence "</style"
-	text = helpers.EscapeClosingTag(text, "/style")
+	if !p.options.UnsupportedFeatures.Has(compat.InlineStyle) {
+		text = helpers.EscapeClosingTag(text, "/style")
+	}
 
 	// Re-indent multi-line comments
 	for {
@@ -543,12 +577,18 @@ func (p *printer) printWithEscape(c rune, escape escapeKind, remainingText strin
 	}
 }
 
+// Note: This function is hot in profiles
 func (p *printer) printQuotedWithQuote(text string, quote byte) {
 	if quote != quoteForURL {
 		p.css = append(p.css, quote)
 	}
 
-	for i, c := range text {
+	n := len(text)
+	i := 0
+	runStart := 0
+
+	for i < n {
+		c, width := utf8.DecodeRuneInString(text[i:])
 		escape := escapeNone
 
 		switch c {
@@ -567,7 +607,7 @@ func (p *printer) printQuotedWithQuote(text string, quote byte) {
 
 		case '/':
 			// Avoid generating the sequence "</style" in CSS code
-			if i >= 1 && text[i-1] == '<' && i+6 <= len(text) && strings.EqualFold(text[i+1:i+6], "style") {
+			if !p.options.UnsupportedFeatures.Has(compat.InlineStyle) && i >= 1 && text[i-1] == '<' && i+6 <= len(text) && strings.EqualFold(text[i+1:i+6], "style") {
 				escape = escapeBackslash
 			}
 
@@ -577,7 +617,18 @@ func (p *printer) printQuotedWithQuote(text string, quote byte) {
 			}
 		}
 
-		p.printWithEscape(c, escape, text[i:], false)
+		if escape != escapeNone {
+			if runStart < i {
+				p.css = append(p.css, text[runStart:i]...)
+			}
+			p.printWithEscape(c, escape, text[i:], false)
+			runStart = i + width
+		}
+		i += width
+	}
+
+	if runStart < n {
+		p.css = append(p.css, text[runStart:]...)
 	}
 
 	if quote != quoteForURL {
@@ -601,7 +652,52 @@ const (
 	canDiscardWhitespaceAfter
 )
 
+// Note: This function is hot in profiles
 func (p *printer) printIdent(text string, mode identMode, whitespace trailingWhitespace) {
+	n := len(text)
+
+	// Special escape behavior for the first character
+	initialEscape := escapeNone
+	switch mode {
+	case identNormal:
+		if !css_lexer.WouldStartIdentifierWithoutEscapes(text) {
+			initialEscape = escapeBackslash
+		}
+	case identDimensionUnit, identDimensionUnitAfterExponent:
+		if !css_lexer.WouldStartIdentifierWithoutEscapes(text) {
+			initialEscape = escapeBackslash
+		} else if n > 0 {
+			if c := text[0]; c >= '0' && c <= '9' {
+				// Unit: "2x"
+				initialEscape = escapeHex
+			} else if (c == 'e' || c == 'E') && mode != identDimensionUnitAfterExponent {
+				if n >= 2 && text[1] >= '0' && text[1] <= '9' {
+					// Unit: "e2x"
+					initialEscape = escapeHex
+				} else if n >= 3 && text[1] == '-' && text[2] >= '0' && text[2] <= '9' {
+					// Unit: "e-2x"
+					initialEscape = escapeHex
+				}
+			}
+		}
+	}
+
+	// Fast path: the identifier does not need to be escaped. This fast path is
+	// important for performance. For example, doing this sped up end-to-end
+	// parsing and printing of a large CSS file from 84ms to 66ms (around 25%
+	// faster).
+	if initialEscape == escapeNone {
+		for i := 0; i < n; i++ {
+			if c := text[i]; c >= 0x80 || !css_lexer.IsNameContinue(rune(c)) {
+				goto slowPath
+			}
+		}
+		p.css = append(p.css, text...)
+		return
+	slowPath:
+	}
+
+	// Slow path: the identifier needs to be escaped
 	for i, c := range text {
 		escape := escapeNone
 
@@ -617,36 +713,15 @@ func (p *printer) printIdent(text string, mode identMode, whitespace trailingWhi
 			}
 
 			// Special escape behavior for the first character
-			if i == 0 {
-				switch mode {
-				case identNormal:
-					if !css_lexer.WouldStartIdentifierWithoutEscapes(text) {
-						escape = escapeBackslash
-					}
-
-				case identDimensionUnit, identDimensionUnitAfterExponent:
-					if !css_lexer.WouldStartIdentifierWithoutEscapes(text) {
-						escape = escapeBackslash
-					} else if c >= '0' && c <= '9' {
-						// Unit: "2x"
-						escape = escapeHex
-					} else if (c == 'e' || c == 'E') && mode != identDimensionUnitAfterExponent {
-						if len(text) >= 2 && text[1] >= '0' && text[1] <= '9' {
-							// Unit: "e2x"
-							escape = escapeHex
-						} else if len(text) >= 3 && text[1] == '-' && text[2] >= '0' && text[2] <= '9' {
-							// Unit: "e-2x"
-							escape = escapeHex
-						}
-					}
-				}
+			if i == 0 && initialEscape != escapeNone {
+				escape = initialEscape
 			}
 		}
 
 		// If the last character is a hexadecimal escape, print a space afterwards
 		// for the escape sequence to consume. That way we're sure it won't
 		// accidentally consume a semantically significant space afterward.
-		mayNeedWhitespaceAfter := whitespace == mayNeedWhitespaceAfter && escape != escapeNone && i+utf8.RuneLen(c) == len(text)
+		mayNeedWhitespaceAfter := whitespace == mayNeedWhitespaceAfter && escape != escapeNone && i+utf8.RuneLen(c) == n
 		p.printWithEscape(c, escape, text[i:], mayNeedWhitespaceAfter)
 	}
 }
@@ -731,6 +806,7 @@ func (p *printer) printTokens(tokens []css_ast.Token, opts printTokensOpts) bool
 			p.print("url(")
 			p.printQuotedWithQuote(text, bestQuoteCharForString(text, true))
 			p.print(")")
+			p.recordImportPathForMetafile(t.ImportRecordIndex)
 
 		default:
 			p.print(t.Text)

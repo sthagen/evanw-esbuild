@@ -96,6 +96,7 @@ const (
 	LoaderCSS
 	LoaderDataURL
 	LoaderDefault
+	LoaderEmpty
 	LoaderFile
 	LoaderJS
 	LoaderJSON
@@ -105,6 +106,25 @@ const (
 	LoaderTSNoAmbiguousLessThan // Used with ".mts" and ".cts"
 	LoaderTSX
 )
+
+var LoaderToString = []string{
+	"none",
+	"base64",
+	"binary",
+	"copy",
+	"css",
+	"dataurl",
+	"default",
+	"empty",
+	"file",
+	"js",
+	"json",
+	"jsx",
+	"text",
+	"ts",
+	"ts",
+	"tsx",
+}
 
 func (loader Loader) IsTypeScript() bool {
 	switch loader {
@@ -253,6 +273,7 @@ type Options struct {
 	Conditions       []string
 	AbsNodePaths     []string // The "NODE_PATH" variable from Node.js
 	ExternalSettings ExternalSettings
+	ExternalPackages bool
 	PackageAliases   map[string]string
 
 	AbsOutputFile      string
@@ -265,7 +286,7 @@ type Options struct {
 	ExtensionToLoader  map[string]Loader
 
 	PublicPath      string
-	InjectAbsPaths  []string
+	InjectPaths     []string
 	InjectedDefines []InjectedDefine
 	InjectedFiles   []InjectedFile
 

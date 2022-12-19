@@ -204,6 +204,7 @@ mergeVersions('ClassStaticField', { es2022: true })
 mergeVersions('TopLevelAwait', { es2022: true })
 mergeVersions('ArbitraryModuleNamespaceNames', { es2022: true })
 mergeVersions('RegexpMatchIndices', { es2022: true })
+mergeVersions('RegexpSetNotation', {})
 mergeVersions('ImportAssertions', {})
 
 // Manually copied from https://caniuse.com/?search=export%20*%20as
@@ -262,6 +263,11 @@ mergeVersions('TypeofExoticObjectIsObject', {
   opera0: true,
   safari0: true,
 })
+
+// If you want to embed the output directly in HTML, then closing HTML tags must
+// be marked as unsupported. Doing this escapes "</script>" in JS and "</style>"
+// in CSS. Otherwise the containing HTML tag will be ended early.
+mergeVersions('InlineScript', {})
 
 // This is a special case. Node added support for it to both v12.20+ and v13.2+
 // so the range is inconveniently discontiguous. Sources:
@@ -433,10 +439,6 @@ var StringToJSFeature = map[string]JSFeature{
 ${simpleMap(Object.keys(versions).sort().map(x => [`"${jsFeatureString(x)}"`, x]))}
 }
 
-var JSFeatureToString = map[JSFeature]string{
-${simpleMap(Object.keys(versions).sort().map(x => [x, `"${jsFeatureString(x)}"`]))}
-}
-
 func (features JSFeature) Has(feature JSFeature) bool {
 \treturn (features & feature) != 0
 }
@@ -452,6 +454,9 @@ ${Object.keys(versions).sort().map(x => `\t${x}: ${jsTableMap(versions[x])},`).j
 // Return all features that are not available in at least one environment
 func UnsupportedJSFeatures(constraints map[Engine][]int) (unsupported JSFeature) {
 \tfor feature, engines := range jsTable {
+\t\tif feature == InlineScript {
+\t\t\tcontinue // This is purely user-specified
+\t\t}
 \t\tfor engine, version := range constraints {
 \t\t\tif versionRanges, ok := engines[engine]; !ok || !isVersionSupported(versionRanges, version) {
 \t\t\t\tunsupported |= feature

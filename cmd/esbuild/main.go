@@ -38,11 +38,12 @@ var helpText = func(colors logger.Colors) string {
                         bundling, otherwise default is iife when platform
                         is browser and cjs when platform is node)
   --loader:X=L          Use loader L to load file extension X, where L is
-                        one of: js | jsx | ts | tsx | css | json | text |
-                        base64 | file | dataurl | binary | copy
+                        one of: base64 | binary | copy | css | dataurl |
+                        empty | file | js | json | jsx | text | ts | tsx
   --minify              Minify the output (sets all --minify-* flags)
   --outdir=...          The output directory (for multiple entry points)
   --outfile=...         The output file (for one entry point)
+  --packages=...        Set to "external" to avoid bundling any package
   --platform=...        Platform target (browser | node | neutral,
                         default browser)
   --serve=...           Start a local HTTP server on this host:port for outputs
@@ -282,21 +283,26 @@ func main() {
 				exitCode = cli.Run(osArgs)
 			}
 		} else {
-			// Don't disable the GC if this is a long-running process
 			isServeOrWatch := false
+			nonFlagCount := 0
 			for _, arg := range osArgs {
-				if arg == "--serve" || arg == "--watch" || strings.HasPrefix(arg, "--serve=") {
+				if !strings.HasPrefix(arg, "-") {
+					nonFlagCount++
+				} else if arg == "--serve" || arg == "--watch" || strings.HasPrefix(arg, "--serve=") {
 					isServeOrWatch = true
-					break
 				}
 			}
 
 			if !isServeOrWatch {
-				// Disable the GC since we're just going to allocate a bunch of memory
-				// and then exit anyway. This speedup is not insignificant. Make sure to
-				// only do this here once we know that we're not going to be a long-lived
-				// process though.
-				debug.SetGCPercent(-1)
+				// If this is not a long-running process and there is at most a single
+				// entry point, then disable the GC since we're just going to allocate
+				// a bunch of memory and then exit anyway. This speedup is not
+				// insignificant. We don't do this when there are multiple entry points
+				// since otherwise esbuild could unnecessarily use much more memory
+				// than it might otherwise need to process many entry points.
+				if nonFlagCount <= 1 {
+					debug.SetGCPercent(-1)
+				}
 			} else if !isStdinTTY && !isWatchForever {
 				// If stdin isn't a TTY, watch stdin and abort in case it is closed.
 				// This is necessary when the esbuild binary executable is invoked via

@@ -25,8 +25,8 @@ import (
 	"github.com/evanw/esbuild/internal/graph"
 	"github.com/evanw/esbuild/internal/helpers"
 	"github.com/evanw/esbuild/internal/js_ast"
-	"github.com/evanw/esbuild/internal/js_lexer"
 	"github.com/evanw/esbuild/internal/js_parser"
+	"github.com/evanw/esbuild/internal/linker"
 	"github.com/evanw/esbuild/internal/logger"
 	"github.com/evanw/esbuild/internal/resolver"
 )
@@ -97,11 +97,9 @@ func validatePathTemplate(template string) []config.PathTemplate {
 	return parts
 }
 
-func validatePlatform(value Platform, defaultPlatform config.Platform) config.Platform {
+func validatePlatform(value Platform) config.Platform {
 	switch value {
-	case PlatformDefault:
-		return defaultPlatform
-	case PlatformBrowser:
+	case PlatformDefault, PlatformBrowser:
 		return config.PlatformBrowser
 	case PlatformNode:
 		return config.PlatformNode
@@ -146,13 +144,7 @@ func validateSourceMap(value SourceMap) config.SourceMap {
 
 func validateLegalComments(value LegalComments, bundle bool) config.LegalComments {
 	switch value {
-	case LegalCommentsDefault:
-		if bundle {
-			return config.LegalCommentsEndOfFile
-		} else {
-			return config.LegalCommentsInline
-		}
-	case LegalCommentsNone:
+	case LegalCommentsDefault, LegalCommentsNone:
 		return config.LegalCommentsNone
 	case LegalCommentsInline:
 		return config.LegalCommentsInline
@@ -241,6 +233,10 @@ func validateLoader(value Loader) config.Loader {
 		return config.LoaderCSS
 	case LoaderDataURL:
 		return config.LoaderDataURL
+	case LoaderDefault:
+		return config.LoaderDefault
+	case LoaderEmpty:
+		return config.LoaderEmpty
 	case LoaderFile:
 		return config.LoaderFile
 	case LoaderJS:
@@ -257,8 +253,6 @@ func validateLoader(value Loader) config.Loader {
 		return config.LoaderTS
 	case LoaderTSX:
 		return config.LoaderTSX
-	case LoaderDefault:
-		return config.LoaderDefault
 	default:
 		panic("Invalid loader")
 	}
@@ -562,6 +556,7 @@ func validateDefines(
 	defines map[string]string,
 	pureFns []string,
 	platform config.Platform,
+	isBuildAPI bool,
 	minify bool,
 	drop Drop,
 ) (*config.ProcessedDefines, []config.InjectedDefine) {
@@ -572,7 +567,7 @@ func validateDefines(
 	for key, value := range defines {
 		// The key must be a dot-separated identifier list
 		for _, part := range strings.Split(key, ".") {
-			if !js_lexer.IsIdentifier(part) {
+			if !js_ast.IsIdentifier(part) {
 				if part == key {
 					log.AddError(nil, logger.Range{}, fmt.Sprintf("The define key %q must be a valid identifier", key))
 				} else {
@@ -627,7 +622,7 @@ func validateDefines(
 	// that must be handled to avoid all React code crashing instantly. This
 	// is only done if it's not already defined so that you can override it if
 	// necessary.
-	if platform == config.PlatformBrowser {
+	if isBuildAPI && platform == config.PlatformBrowser {
 		if _, process := rawDefines["process"]; !process {
 			if _, processEnv := rawDefines["process.env"]; !processEnv {
 				if _, processEnvNodeEnv := rawDefines["process.env.NODE_ENV"]; !processEnvNodeEnv {
@@ -653,7 +648,7 @@ func validateDefines(
 	for _, key := range pureFns {
 		// The key must be a dot-separated identifier list
 		for _, part := range strings.Split(key, ".") {
-			if !js_lexer.IsIdentifier(part) {
+			if !js_ast.IsIdentifier(part) {
 				log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid pure function: %q", key))
 				continue
 			}
@@ -952,12 +947,12 @@ func rebuildImpl(
 	}
 	targetFromAPI, jsFeatures, cssFeatures, targetEnv := validateFeatures(log, buildOpts.Target, buildOpts.Engines)
 	jsOverrides, jsMask, cssOverrides, cssMask := validateSupported(log, buildOpts.Supported)
-	outJS, outCSS := validateOutputExtensions(log, buildOpts.OutExtensions)
+	outJS, outCSS := validateOutputExtensions(log, buildOpts.OutExtension)
 	bannerJS, bannerCSS := validateBannerOrFooter(log, "banner", buildOpts.Banner)
 	footerJS, footerCSS := validateBannerOrFooter(log, "footer", buildOpts.Footer)
 	minify := buildOpts.MinifyWhitespace && buildOpts.MinifyIdentifiers && buildOpts.MinifySyntax
-	platform := validatePlatform(buildOpts.Platform, config.PlatformBrowser)
-	defines, injectedDefines := validateDefines(log, buildOpts.Define, buildOpts.Pure, platform, minify, buildOpts.Drop)
+	platform := validatePlatform(buildOpts.Platform)
+	defines, injectedDefines := validateDefines(log, buildOpts.Define, buildOpts.Pure, platform, true /* isBuildAPI */, minify, buildOpts.Drop)
 	mangleCache := cloneMangleCache(log, buildOpts.MangleCache)
 	options := config.Options{
 		TargetFromAPI:                      targetFromAPI,
@@ -969,8 +964,8 @@ func rebuildImpl(
 		UnsupportedCSSFeatureOverridesMask: cssMask,
 		OriginalTargetEnv:                  targetEnv,
 		JSX: config.JSXOptions{
-			Preserve:         buildOpts.JSXMode == JSXModePreserve,
-			AutomaticRuntime: buildOpts.JSXMode == JSXModeAutomatic,
+			Preserve:         buildOpts.JSX == JSXPreserve,
+			AutomaticRuntime: buildOpts.JSX == JSXAutomatic,
 			Factory:          validateJSXExpr(log, buildOpts.JSXFactory, "factory"),
 			Fragment:         validateJSXExpr(log, buildOpts.JSXFragment, "fragment"),
 			Development:      buildOpts.JSXDev,
@@ -1010,13 +1005,13 @@ func rebuildImpl(
 		ExtensionToLoader:     validateLoaders(log, buildOpts.Loader),
 		ExtensionOrder:        validateResolveExtensions(log, buildOpts.ResolveExtensions),
 		ExternalSettings:      validateExternals(log, realFS, buildOpts.External),
+		ExternalPackages:      buildOpts.Packages == PackagesExternal,
 		PackageAliases:        validateAlias(log, realFS, buildOpts.Alias),
 		TsConfigOverride:      validatePath(log, realFS, buildOpts.Tsconfig, "tsconfig path"),
 		MainFields:            buildOpts.MainFields,
-		Conditions:            append([]string{}, buildOpts.Conditions...),
 		PublicPath:            buildOpts.PublicPath,
 		KeepNames:             buildOpts.KeepNames,
-		InjectAbsPaths:        make([]string, len(buildOpts.Inject)),
+		InjectPaths:           append([]string{}, buildOpts.Inject...),
 		AbsNodePaths:          make([]string, len(buildOpts.NodePaths)),
 		JSBanner:              bannerJS,
 		JSFooter:              footerJS,
@@ -1026,11 +1021,11 @@ func rebuildImpl(
 		WatchMode:             buildOpts.Watch != nil,
 		Plugins:               plugins,
 	}
+	if buildOpts.Conditions != nil {
+		options.Conditions = append([]string{}, buildOpts.Conditions...)
+	}
 	if options.MainFields != nil {
 		options.MainFields = append([]string{}, options.MainFields...)
-	}
-	for i, path := range buildOpts.Inject {
-		options.InjectAbsPaths[i] = validatePath(log, realFS, path, "inject path")
 	}
 	for i, path := range buildOpts.NodePaths {
 		options.AbsNodePaths[i] = validatePath(log, realFS, path, "node path")
@@ -1117,6 +1112,11 @@ func rebuildImpl(
 		options.Mode = config.ModeConvertFormat
 	}
 
+	// Automatically enable the "module" condition for better tree shaking
+	if options.Conditions == nil && options.Platform != config.PlatformNeutral {
+		options.Conditions = []string{"module"}
+	}
+
 	// Code splitting is experimental and currently only enabled for ES6 modules
 	if options.CodeSplitting && options.OutputFormat != config.FormatESModule {
 		log.AddError(nil, logger.Range{}, "Splitting currently only works with the \"esm\" format")
@@ -1146,7 +1146,7 @@ func rebuildImpl(
 		// Stop now if there were errors
 		if !log.HasErrors() {
 			// Compile the bundle
-			results, metafile := bundle.Compile(log, timer, mangleCache)
+			results, metafile := bundle.Compile(log, timer, mangleCache, linker.Link)
 
 			// Stop now if there were errors
 			if !log.HasErrors() {
@@ -1277,7 +1277,7 @@ func rebuildImpl(
 
 type watcher struct {
 	data              fs.WatchData
-	resolver          resolver.Resolver
+	resolver          *resolver.Resolver
 	rebuild           func() fs.WatchData
 	recentItems       []string
 	itemsToScan       []string
@@ -1436,8 +1436,8 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 	var unusedImportFlagsTS config.UnusedImportFlagsTS
 	useDefineForClassFieldsTS := config.Unspecified
 	jsx := config.JSXOptions{
-		Preserve:         transformOpts.JSXMode == JSXModePreserve,
-		AutomaticRuntime: transformOpts.JSXMode == JSXModeAutomatic,
+		Preserve:         transformOpts.JSX == JSXPreserve,
+		AutomaticRuntime: transformOpts.JSX == JSXAutomatic,
 		Factory:          validateJSXExpr(log, transformOpts.JSXFactory, "factory"),
 		Fragment:         validateJSXExpr(log, transformOpts.JSXFragment, "fragment"),
 		Development:      transformOpts.JSXDev,
@@ -1491,8 +1491,8 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 	// Convert and validate the transformOpts
 	targetFromAPI, jsFeatures, cssFeatures, targetEnv := validateFeatures(log, transformOpts.Target, transformOpts.Engines)
 	jsOverrides, jsMask, cssOverrides, cssMask := validateSupported(log, transformOpts.Supported)
-	platform := validatePlatform(transformOpts.Platform, config.PlatformNeutral)
-	defines, injectedDefines := validateDefines(log, transformOpts.Define, transformOpts.Pure, platform, false /* minify */, transformOpts.Drop)
+	platform := validatePlatform(transformOpts.Platform)
+	defines, injectedDefines := validateDefines(log, transformOpts.Define, transformOpts.Pure, platform, false /* isBuildAPI */, false /* minify */, transformOpts.Drop)
 	mangleCache := cloneMangleCache(log, transformOpts.MangleCache)
 	options := config.Options{
 		TargetFromAPI:                      targetFromAPI,
@@ -1576,7 +1576,7 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 		// Stop now if there were errors
 		if !log.HasErrors() {
 			// Compile the bundle
-			results, _ = bundle.Compile(log, timer, mangleCache)
+			results, _ = bundle.Compile(log, timer, mangleCache, linker.Link)
 		}
 
 		timer.Log(log)
@@ -1850,6 +1850,10 @@ func loadPlugins(initialOptions *BuildOptions, fs fs.FS, log logger.Log, caches 
 			// change the initial options object, which can affect path resolution.
 			if buildOptions == nil {
 				return ResolveResult{Errors: []Message{{Text: "Cannot call \"resolve\" before plugin setup has completed"}}}
+			}
+
+			if options.Kind == ResolveNone {
+				return ResolveResult{Errors: []Message{{Text: "Must specify \"kind\" when calling \"resolve\""}}}
 			}
 
 			// Make a new resolver so it has its own log

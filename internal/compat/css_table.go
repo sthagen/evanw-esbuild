@@ -4,7 +4,7 @@ type CSSFeature uint8
 
 const (
 	HexRGBA CSSFeature = 1 << iota
-
+	InlineStyle
 	RebeccaPurple
 
 	// This feature includes all of the following:
@@ -20,18 +20,11 @@ const (
 
 var StringToCSSFeature = map[string]CSSFeature{
 	"hex-rgba":       HexRGBA,
+	"inline-style":   InlineStyle,
 	"rebecca-purple": RebeccaPurple,
 	"modern-rgb-hsl": Modern_RGB_HSL,
 	"inset-property": InsetProperty,
 	"nesting":        Nesting,
-}
-
-var CSSFeatureToString = map[CSSFeature]string{
-	HexRGBA:        "hex-rgba",
-	RebeccaPurple:  "rebecca-purple",
-	Modern_RGB_HSL: "modern-rgb-hsl",
-	InsetProperty:  "inset-property",
-	Nesting:        "nesting",
 }
 
 func (features CSSFeature) Has(feature CSSFeature) bool {
@@ -87,6 +80,9 @@ var cssTable = map[CSSFeature]map[Engine][]versionRange{
 // Return all features that are not available in at least one environment
 func UnsupportedCSSFeatures(constraints map[Engine][]int) (unsupported CSSFeature) {
 	for feature, engines := range cssTable {
+		if feature == InlineStyle {
+			continue // This is purely user-specified
+		}
 		for engine, version := range constraints {
 			if engine == ES || engine == Node {
 				// Specifying "--target=es2020" shouldn't affect CSS

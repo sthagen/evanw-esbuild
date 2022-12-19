@@ -632,7 +632,7 @@ tests.push(
 )
 
 // Check template literal lowering
-for (const target of ['--target=es5', '--target=es6']) {
+for (const target of ['--target=es5', '--target=es6', '--target=es2020']) {
   tests.push(
     // Untagged template literals
     test(['in.js', '--outfile=node.js', target], {
@@ -738,6 +738,23 @@ for (const target of ['--target=es5', '--target=es6']) {
         var foo = () => (x => x)\`y\`;
         var bar = () => (x => x)\`y\`;
         if (foo() === bar()) throw 'fail'
+      `,
+    }),
+    test(['in.js', '--outfile=node.js', target], {
+      'in.js': `
+        var count = 0;
+        var obj = {
+          foo: function() {
+            if (this === obj) count++;
+          }
+        };
+        var bar = 'foo';
+        (obj?.foo)\`\`;
+        (obj?.[bar])\`\`;
+        var other = { obj };
+        (other?.obj.foo)\`\`;
+        (other?.obj[bar])\`\`;
+        if (count !== 4) throw 'fail';
       `,
     }),
 
@@ -2810,6 +2827,51 @@ for (let flags of [[], ['--minify', '--keep-names']]) {
     }),
     test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
       'in.js': `(() => { let obj = {}; obj['cls'] = class {}; if (obj.cls.name !== '') throw 'fail: ' + obj.cls.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { class Foo { static foo } if (Foo.name !== 'Foo') throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { class Foo { static name = 123 } if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { class Foo { static name() { return 123 } } if (Foo.name() !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { class Foo { static get name() { return 123 } } if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { class Foo { static ['name'] = 123 } if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class Bar { static foo }; if (Foo.name !== 'Bar') throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class Bar { static name = 123 }; if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class Bar { static name() { return 123 } }; if (Foo.name() !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class Bar { static get name() { return 123 } }; if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class Bar { static ['name'] = 123 }; if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class { static foo }; if (Foo.name !== 'Foo') throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class { static name = 123 }; if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class { static name() { return 123 } }; if (Foo.name() !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class { static get name() { return 123 } }; if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
+      'in.js': `(() => { let Foo = class { static ['name'] = 123 }; if (Foo.name !== 123) throw 'fail: ' + Foo.name })()`,
     }),
 
     // Methods
@@ -6113,6 +6175,58 @@ for (const flags of [[], ['--bundle']]) {
             { "default": "./yes.js" },
             "./no.js"
           ]
+        }
+      }`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle', '--platform=browser'].concat(flags), {
+      'in.js': `import abc from 'pkg'; if (abc !== 'module') throw 'fail'`,
+      'node_modules/pkg/default.js': `module.exports = 'default'`,
+      'node_modules/pkg/module.js': `export default 'module'`,
+      'node_modules/pkg/package.json': `{
+        "exports": {
+          ".": {
+            "module": "./module.js",
+            "default": "./default.js"
+          }
+        }
+      }`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle', '--platform=node'].concat(flags), {
+      'in.js': `import abc from 'pkg'; if (abc !== 'module') throw 'fail'`,
+      'node_modules/pkg/default.js': `module.exports = 'default'`,
+      'node_modules/pkg/module.js': `export default 'module'`,
+      'node_modules/pkg/package.json': `{
+        "exports": {
+          ".": {
+            "module": "./module.js",
+            "default": "./default.js"
+          }
+        }
+      }`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle', '--platform=neutral'].concat(flags), {
+      'in.js': `import abc from 'pkg'; if (abc !== 'default') throw 'fail'`,
+      'node_modules/pkg/default.js': `module.exports = 'default'`,
+      'node_modules/pkg/module.js': `export default 'module'`,
+      'node_modules/pkg/package.json': `{
+        "exports": {
+          ".": {
+            "module": "./module.js",
+            "default": "./default.js"
+          }
+        }
+      }`,
+    }),
+    test(['in.js', '--outfile=node.js', '--bundle', '--conditions='].concat(flags), {
+      'in.js': `import abc from 'pkg'; if (abc !== 'default') throw 'fail'`,
+      'node_modules/pkg/default.js': `module.exports = 'default'`,
+      'node_modules/pkg/module.js': `export default 'module'`,
+      'node_modules/pkg/package.json': `{
+        "exports": {
+          ".": {
+            "module": "./module.js",
+            "default": "./default.js"
+          }
         }
       }`,
     }),

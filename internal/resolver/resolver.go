@@ -169,17 +169,7 @@ func (dm DebugMeta) LogErrorMsg(log logger.Log, source *logger.Source, r logger.
 	log.AddMsg(msg)
 }
 
-type Resolver interface {
-	Resolve(sourceDir string, importPath string, kind ast.ImportKind) (result *ResolveResult, debug DebugMeta)
-	ResolveAbs(absPath string) *ResolveResult
-	PrettyPath(path logger.Path) string
-
-	// This tries to run "Resolve" on a package path as a relative path. If
-	// successful, the user just forgot a leading "./" in front of the path.
-	ProbeResolvePackageAsRelative(sourceDir string, importPath string, kind ast.ImportKind) *ResolveResult
-}
-
-type resolver struct {
+type Resolver struct {
 	fs     fs.FS
 	log    logger.Log
 	caches *cache.CacheSet
@@ -235,14 +225,14 @@ type resolver struct {
 }
 
 type resolverQuery struct {
-	*resolver
+	*Resolver
 	moduleSuffixes []string
 	debugMeta      *DebugMeta
 	debugLogs      *debugLogs
 	kind           ast.ImportKind
 }
 
-func NewResolver(fs fs.FS, log logger.Log, caches *cache.CacheSet, options config.Options) Resolver {
+func NewResolver(fs fs.FS, log logger.Log, caches *cache.CacheSet, options config.Options) *Resolver {
 	// Filter out non-CSS extensions for CSS "@import" imports
 	atImportExtensionOrder := make([]string, 0, len(options.ExtensionOrder))
 	for _, ext := range options.ExtensionOrder {
@@ -272,7 +262,7 @@ func NewResolver(fs fs.FS, log logger.Log, caches *cache.CacheSet, options confi
 
 	fs.Cwd()
 
-	return &resolver{
+	return &Resolver{
 		fs:                     fs,
 		log:                    log,
 		options:                options,
@@ -285,10 +275,10 @@ func NewResolver(fs fs.FS, log logger.Log, caches *cache.CacheSet, options confi
 	}
 }
 
-func (rr *resolver) Resolve(sourceDir string, importPath string, kind ast.ImportKind) (*ResolveResult, DebugMeta) {
+func (res *Resolver) Resolve(sourceDir string, importPath string, kind ast.ImportKind) (*ResolveResult, DebugMeta) {
 	var debugMeta DebugMeta
 	r := resolverQuery{
-		resolver:  rr,
+		Resolver:  res,
 		debugMeta: &debugMeta,
 		kind:      kind,
 	}
@@ -313,7 +303,21 @@ func (rr *resolver) Resolve(sourceDir string, importPath string, kind ast.Import
 				// when using Yarn PnP because Yarn PnP doesn't allow nested packages
 				// to "reach outside" of their normal dependency lists.
 				sourceDir = r.fs.Cwd()
-				debugMeta.ModifiedImportPath = value + importPath[len(key):]
+				if tail := importPath[len(key):]; tail != "/" {
+					// Don't include the trailing characters if they are equal to a
+					// single slash. This comes up because you can abuse this quirk of
+					// node's path resolution to force node to load the package from the
+					// file system instead of as a built-in module. For example, "util"
+					// is node's built-in module while "util/" is one on the file system.
+					// Leaving the trailing slash in place causes problems for people:
+					// https://github.com/evanw/esbuild/issues/2730. It should be ok to
+					// always strip the trailing slash even when using the alias feature
+					// to swap one package for another (except when you swap a reference
+					// to one built-in node module with another but really why would you
+					// do that).
+					value += tail
+				}
+				debugMeta.ModifiedImportPath = value
 				if r.debugLogs != nil {
 					r.debugLogs.addNote(fmt.Sprintf("  Matched with alias from %q to %q", key, value))
 					r.debugLogs.addNote(fmt.Sprintf("  Modified import path from %q to %q", importPath, debugMeta.ModifiedImportPath))
@@ -330,7 +334,7 @@ func (rr *resolver) Resolve(sourceDir string, importPath string, kind ast.Import
 	}
 
 	// Certain types of URLs default to being external for convenience
-	if isExplicitlyExternal := r.isExternal(r.options.ExternalSettings.PreResolve, importPath); isExplicitlyExternal ||
+	if isExplicitlyExternal := r.isExternal(r.options.ExternalSettings.PreResolve, importPath, kind); isExplicitlyExternal ||
 
 		// "fill: url(#filter);"
 		(kind == ast.ImportURL && strings.HasPrefix(importPath, "#")) ||
@@ -350,6 +354,19 @@ func (rr *resolver) Resolve(sourceDir string, importPath string, kind ast.Import
 			} else {
 				r.debugLogs.addNote("Marking this path as implicitly external")
 			}
+		}
+
+		r.flushDebugLogs(flushDueToSuccess)
+		return &ResolveResult{
+			PathPair:   PathPair{Primary: logger.Path{Text: importPath}},
+			IsExternal: true,
+		}, debugMeta
+	}
+
+	// "import 'pkg'" when all packages are external (vs. "import './pkg'")
+	if r.options.ExternalPackages && IsPackagePath(importPath) && !r.fs.IsAbs(importPath) && !strings.HasPrefix(importPath, "#") {
+		if r.debugLogs != nil {
+			r.debugLogs.addNote("Marking this path as external because it's a package path")
 		}
 
 		r.flushDebugLogs(flushDueToSuccess)
@@ -536,7 +553,11 @@ func (r *resolverQuery) loadModuleSuffixesForSourceDir(sourceDir string) *dirInf
 	return sourceDirInfo
 }
 
-func (r resolverQuery) isExternal(matchers config.ExternalMatchers, path string) bool {
+func (r resolverQuery) isExternal(matchers config.ExternalMatchers, path string, kind ast.ImportKind) bool {
+	if kind == ast.ImportEntryPoint {
+		// Never mark an entry point as external. This is not useful.
+		return false
+	}
 	if _, ok := matchers.Exact[path]; ok {
 		return true
 	}
@@ -553,8 +574,8 @@ func (r resolverQuery) isExternal(matchers config.ExternalMatchers, path string)
 	return false
 }
 
-func (rr *resolver) ResolveAbs(absPath string) *ResolveResult {
-	r := resolverQuery{resolver: rr}
+func (res *Resolver) ResolveAbs(absPath string) *ResolveResult {
+	r := resolverQuery{Resolver: res}
 	if r.log.Level <= logger.LevelDebug {
 		r.debugLogs = &debugLogs{what: fmt.Sprintf("Getting metadata for absolute path %s", absPath)}
 	}
@@ -569,9 +590,11 @@ func (rr *resolver) ResolveAbs(absPath string) *ResolveResult {
 	return result
 }
 
-func (rr *resolver) ProbeResolvePackageAsRelative(sourceDir string, importPath string, kind ast.ImportKind) *ResolveResult {
+// This tries to run "Resolve" on a package path as a relative path. If
+// successful, the user just forgot a leading "./" in front of the path.
+func (res *Resolver) ProbeResolvePackageAsRelative(sourceDir string, importPath string, kind ast.ImportKind) *ResolveResult {
 	r := resolverQuery{
-		resolver: rr,
+		Resolver: res,
 		kind:     kind,
 	}
 	absPath := r.fs.Join(sourceDir, importPath)
@@ -629,7 +652,7 @@ func (r resolverQuery) flushDebugLogs(mode flushMode) {
 }
 
 func (r resolverQuery) finalizeResolve(result *ResolveResult) {
-	if !result.IsExternal && r.isExternal(r.options.ExternalSettings.PostResolve, result.PathPair.Primary.Text) {
+	if !result.IsExternal && r.isExternal(r.options.ExternalSettings.PostResolve, result.PathPair.Primary.Text, r.kind) {
 		if r.debugLogs != nil {
 			r.debugLogs.addNote(fmt.Sprintf("The path %q was marked as external by the user", result.PathPair.Primary.Text))
 		}
@@ -806,7 +829,7 @@ func (r resolverQuery) resolveWithoutSymlinks(sourceDir string, sourceDirInfo *d
 		absPath := r.fs.Join(sourceDir, importPath)
 
 		// Check for external packages first
-		if r.isExternal(r.options.ExternalSettings.PostResolve, absPath) {
+		if r.isExternal(r.options.ExternalSettings.PostResolve, absPath, r.kind) {
 			if r.debugLogs != nil {
 				r.debugLogs.addNote(fmt.Sprintf("The path %q was marked as external by the user", absPath))
 			}
@@ -883,9 +906,9 @@ func (r resolverQuery) resolveWithoutRemapping(sourceDirInfo *dirInfo, importPat
 	}
 }
 
-func (r *resolver) PrettyPath(path logger.Path) string {
+func (res *Resolver) PrettyPath(path logger.Path) string {
 	if path.Namespace == "file" {
-		if rel, ok := r.fs.Rel(r.fs.Cwd(), path.Text); ok {
+		if rel, ok := res.fs.Rel(res.fs.Cwd(), path.Text); ok {
 			path.Text = rel
 		}
 
@@ -1095,10 +1118,28 @@ func (r resolverQuery) parseTSConfig(file string, visited map[string]bool) (*TSC
 				current = next
 			}
 		} else {
-			// If this is a regular path, search relative to the enclosing directory
 			extendsFile := extends
-			if !r.fs.IsAbs(extends) {
-				extendsFile = r.fs.Join(fileDir, extends)
+
+			// The TypeScript compiler has a strange behavior that seems like a bug
+			// where "." and ".." behave differently than other forms such as "./."
+			// or "../." and are interpreted as having an implicit "tsconfig.json"
+			// suffix.
+			//
+			// I believe their bug is caused by some parts of their code checking for
+			// relative paths using the literal "./" and "../" prefixes (requiring
+			// the slash) and other parts checking using the regular expression
+			// /^\.\.?($|[\\/])/ (with the slash optional).
+			//
+			// In any case, people are now relying on this behavior. One example is
+			// this: https://github.com/esbuild-kit/tsx/pull/158. So we replicate this
+			// bug in esbuild as well.
+			if extendsFile == "." || extendsFile == ".." {
+				extendsFile += "/tsconfig.json"
+			}
+
+			// If this is a regular path, search relative to the enclosing directory
+			if !r.fs.IsAbs(extendsFile) {
+				extendsFile = r.fs.Join(fileDir, extendsFile)
 			}
 			base, err := r.parseTSConfig(extendsFile, visited)
 
@@ -2111,39 +2152,50 @@ func (r resolverQuery) loadNodeModules(importPath string, dirInfo *dirInfo, forb
 		}
 	}
 
+	// Common package resolution logic shared between "node_modules" and "NODE_PATHS"
+	tryToResolvePackage := func(absDir string) (PathPair, bool, *fs.DifferentCase, bool) {
+		absPath := r.fs.Join(absDir, importPath)
+		if r.debugLogs != nil {
+			r.debugLogs.addNote(fmt.Sprintf("Checking for a package in the directory %q", absPath))
+		}
+
+		// Try node's new package resolution rules
+		if esmOK {
+			absPkgPath := r.fs.Join(absDir, esmPackageName)
+			if pkgDirInfo := r.dirInfoCached(absPkgPath); pkgDirInfo != nil {
+				// Check the "exports" map
+				if packageJSON := pkgDirInfo.packageJSON; packageJSON != nil && packageJSON.exportsMap != nil {
+					absolute, ok, diffCase := r.esmResolveAlgorithm(esmPackageName, esmPackageSubpath, packageJSON, absPkgPath, absPath)
+					return absolute, ok, diffCase, true
+				}
+
+				// Check the "browser" map
+				if remapped, ok := r.checkBrowserMap(pkgDirInfo, absPath, absolutePathKind); ok {
+					if remapped == nil {
+						return PathPair{Primary: logger.Path{Text: absPath, Namespace: "file", Flags: logger.PathDisabled}}, true, nil, true
+					}
+					if remappedResult, ok, diffCase := r.resolveWithoutRemapping(pkgDirInfo.enclosingBrowserScope, *remapped); ok {
+						return remappedResult, true, diffCase, true
+					}
+				}
+			}
+		}
+
+		// Try node's old package resolution rules
+		if absolute, ok, diffCase := r.loadAsFileOrDirectory(absPath); ok {
+			return absolute, true, diffCase, true
+		}
+
+		return PathPair{}, false, nil, false
+	}
+
 	// Then check for the package in any enclosing "node_modules" directories
 	for {
 		// Skip directories that are themselves called "node_modules", since we
 		// don't ever want to search for "node_modules/node_modules"
 		if dirInfo.hasNodeModules {
-			absPath := r.fs.Join(dirInfo.absPath, "node_modules", importPath)
-			if r.debugLogs != nil {
-				r.debugLogs.addNote(fmt.Sprintf("Checking for a package in the directory %q", absPath))
-			}
-
-			// Check the package's package.json file
-			if esmOK {
-				absPkgPath := r.fs.Join(dirInfo.absPath, "node_modules", esmPackageName)
-				if pkgDirInfo := r.dirInfoCached(absPkgPath); pkgDirInfo != nil {
-					// Check the "exports" map
-					if packageJSON := pkgDirInfo.packageJSON; packageJSON != nil && packageJSON.exportsMap != nil {
-						return r.esmResolveAlgorithm(esmPackageName, esmPackageSubpath, packageJSON, absPkgPath, absPath)
-					}
-
-					// Check the "browser" map
-					if remapped, ok := r.checkBrowserMap(pkgDirInfo, absPath, absolutePathKind); ok {
-						if remapped == nil {
-							return PathPair{Primary: logger.Path{Text: absPath, Namespace: "file", Flags: logger.PathDisabled}}, true, nil
-						}
-						if remappedResult, ok, diffCase := r.resolveWithoutRemapping(pkgDirInfo.enclosingBrowserScope, *remapped); ok {
-							return remappedResult, true, diffCase
-						}
-					}
-				}
-			}
-
-			if absolute, ok, diffCase := r.loadAsFileOrDirectory(absPath); ok {
-				return absolute, true, diffCase
+			if absolute, ok, diffCase, shouldStop := tryToResolvePackage(r.fs.Join(dirInfo.absPath, "node_modules")); shouldStop {
+				return absolute, ok, diffCase
 			}
 		}
 
@@ -2154,17 +2206,12 @@ func (r resolverQuery) loadNodeModules(importPath string, dirInfo *dirInfo, forb
 		}
 	}
 
-	// Then check the global "NODE_PATH" environment variable.
-	//
-	// Note: This is a deviation from node's published module resolution
-	// algorithm. The published algorithm says "NODE_PATH" must take precedence
-	// over "node_modules" paths, but it appears that the published algorithm is
-	// incorrect. We follow node's actual behavior instead of following the
-	// published algorithm. See also: https://github.com/nodejs/node/issues/38128.
+	// Then check the global "NODE_PATH" environment variable. It has been
+	// clarified that this step comes last after searching for "node_modules"
+	// directories: https://github.com/nodejs/node/issues/38128.
 	for _, absDir := range r.options.AbsNodePaths {
-		absPath := r.fs.Join(absDir, importPath)
-		if absolute, ok, diffCase := r.loadAsFileOrDirectory(absPath); ok {
-			return absolute, true, diffCase
+		if absolute, ok, diffCase, shouldStop := tryToResolvePackage(absDir); shouldStop {
+			return absolute, ok, diffCase
 		}
 	}
 

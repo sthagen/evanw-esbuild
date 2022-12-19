@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.19\.3 ' || (echo 'Please install Go version 1.19.3' && false)
+	@go version | grep ' go1\.19\.4 ' || (echo 'Please install Go version 1.19.4' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -100,7 +100,7 @@ lib-typecheck: | lib/node_modules
 	cd lib && node_modules/.bin/tsc -noEmit -p tsconfig-deno.json
 
 # End-to-end tests
-test-e2e: test-e2e-npm test-e2e-pnpm test-e2e-yarn-berry
+test-e2e: test-e2e-npm test-e2e-pnpm test-e2e-yarn-berry test-e2e-deno
 
 test-e2e-npm:
 	# Test normal install
@@ -204,6 +204,9 @@ test-e2e-yarn-berry:
 	# Clean up
 	rm -fr e2e-yb
 
+test-e2e-deno:
+	deno eval 'import { transform, stop } from "https://deno.land/x/esbuild@v$(ESBUILD_VERSION)/mod.js"; console.log((await transform("1+2")).code); stop()' | grep "1 + 2;"
+
 test-yarnpnp: platform-wasm
 	node scripts/test-yarnpnp.js
 
@@ -220,37 +223,6 @@ test-yarnpnp: platform-wasm
 # "cmd/esbuild/version.go" as a dependency.
 version-go:
 	node scripts/esbuild.js --update-version-go
-
-wasm-napi-exit0-darwin-x64:
-	node -e 'console.log(`#include <unistd.h>\nvoid* napi_register_module_v1(void* a, void* b) { _exit(0); }`)' \
-		| clang -x c -dynamiclib -mmacosx-version-min=10.5 -o lib/npm/exit0/darwin-x64-LE.node -
-	ls -l lib/npm/exit0/darwin-x64-LE.node
-
-wasm-napi-exit0-darwin-arm64:
-	node -e 'console.log(`#include <unistd.h>\nvoid* napi_register_module_v1(void* a, void* b) { _exit(0); }`)' \
-		| clang -x c -dynamiclib -mmacosx-version-min=10.5 -o lib/npm/exit0/darwin-arm64-LE.node -
-	ls -l lib/npm/exit0/darwin-arm64-LE.node
-
-wasm-napi-exit0-linux-x64:
-	node -e 'console.log(`#include <unistd.h>\nvoid* napi_register_module_v1(void* a, void* b) { _exit(0); }`)' \
-		| gcc -x c -shared -o lib/npm/exit0/linux-x64-LE.node -
-	strip lib/npm/exit0/linux-x64-LE.node
-	ls -l lib/npm/exit0/linux-x64-LE.node
-
-wasm-napi-exit0-linux-arm64:
-	node -e 'console.log(`#include <unistd.h>\nvoid* napi_register_module_v1(void* a, void* b) { _exit(0); }`)' \
-		| gcc -x c -shared -o lib/npm/exit0/linux-arm64-LE.node -
-	strip lib/npm/exit0/linux-arm64-LE.node
-	ls -l lib/npm/exit0/linux-arm64-LE.node
-
-wasm-napi-exit0-win32-x64:
-	# This isn't meant to be run directly but is a rough overview of the instructions
-	echo '__declspec(dllexport) void* napi_register_module_v1(void* a, void* b) { ExitProcess(0); }' > main.c
-	echo 'setlocal' > main.bat
-	echo 'call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" x64' >> main.bat
-	echo 'cl.exe /LD main.c /link /DLL /NODEFAULTLIB /NOENTRY kernel32.lib /OUT:lib/npm/exit0/win32-x64-LE.node' >> main.bat
-	main.bat
-	rm -f main.*
 
 platform-all:
 	@$(MAKE) --no-print-directory -j4 \
@@ -281,16 +253,16 @@ platform-all:
 		platform-win32-x64
 
 platform-win32-x64: version-go
-	node scripts/esbuild.js npm/esbuild-windows-64/package.json --version
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_FLAGS) -o npm/esbuild-windows-64/esbuild.exe ./cmd/esbuild
+	node scripts/esbuild.js npm/@esbuild/win32-x64/package.json --version
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_FLAGS) -o npm/@esbuild/win32-x64/esbuild.exe ./cmd/esbuild
 
 platform-win32-ia32: version-go
-	node scripts/esbuild.js npm/esbuild-windows-32/package.json --version
-	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(GO_FLAGS) -o npm/esbuild-windows-32/esbuild.exe ./cmd/esbuild
+	node scripts/esbuild.js npm/@esbuild/win32-ia32/package.json --version
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(GO_FLAGS) -o npm/@esbuild/win32-ia32/esbuild.exe ./cmd/esbuild
 
 platform-win32-arm64: version-go
-	node scripts/esbuild.js npm/esbuild-windows-arm64/package.json --version
-	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(GO_FLAGS) -o npm/esbuild-windows-arm64/esbuild.exe ./cmd/esbuild
+	node scripts/esbuild.js npm/@esbuild/win32-arm64/package.json --version
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(GO_FLAGS) -o npm/@esbuild/win32-arm64/esbuild.exe ./cmd/esbuild
 
 platform-unixlike: version-go
 	@test -n "$(GOOS)" || (echo "The environment variable GOOS must be provided" && false)
@@ -300,61 +272,61 @@ platform-unixlike: version-go
 	CGO_ENABLED=0 GOOS="$(GOOS)" GOARCH="$(GOARCH)" go build $(GO_FLAGS) -o "$(NPMDIR)/bin/esbuild" ./cmd/esbuild
 
 platform-android-x64: platform-wasm
-	node scripts/esbuild.js npm/esbuild-android-64/package.json --version
+	node scripts/esbuild.js npm/@esbuild/android-x64/package.json --version
 
 platform-android-arm: platform-wasm
 	node scripts/esbuild.js npm/@esbuild/android-arm/package.json --version
 
 platform-android-arm64:
-	@$(MAKE) --no-print-directory GOOS=android GOARCH=arm64 NPMDIR=npm/esbuild-android-arm64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=android GOARCH=arm64 NPMDIR=npm/@esbuild/android-arm64 platform-unixlike
 
 platform-darwin-x64:
-	@$(MAKE) --no-print-directory GOOS=darwin GOARCH=amd64 NPMDIR=npm/esbuild-darwin-64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=darwin GOARCH=amd64 NPMDIR=npm/@esbuild/darwin-x64 platform-unixlike
 
 platform-darwin-arm64:
-	@$(MAKE) --no-print-directory GOOS=darwin GOARCH=arm64 NPMDIR=npm/esbuild-darwin-arm64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=darwin GOARCH=arm64 NPMDIR=npm/@esbuild/darwin-arm64 platform-unixlike
 
 platform-freebsd-x64:
-	@$(MAKE) --no-print-directory GOOS=freebsd GOARCH=amd64 NPMDIR=npm/esbuild-freebsd-64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=freebsd GOARCH=amd64 NPMDIR=npm/@esbuild/freebsd-x64 platform-unixlike
 
 platform-freebsd-arm64:
-	@$(MAKE) --no-print-directory GOOS=freebsd GOARCH=arm64 NPMDIR=npm/esbuild-freebsd-arm64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=freebsd GOARCH=arm64 NPMDIR=npm/@esbuild/freebsd-arm64 platform-unixlike
 
 platform-netbsd-x64:
-	@$(MAKE) --no-print-directory GOOS=netbsd GOARCH=amd64 NPMDIR=npm/esbuild-netbsd-64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=netbsd GOARCH=amd64 NPMDIR=npm/@esbuild/netbsd-x64 platform-unixlike
 
 platform-openbsd-x64:
-	@$(MAKE) --no-print-directory GOOS=openbsd GOARCH=amd64 NPMDIR=npm/esbuild-openbsd-64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=openbsd GOARCH=amd64 NPMDIR=npm/@esbuild/openbsd-x64 platform-unixlike
 
 platform-linux-x64:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=amd64 NPMDIR=npm/esbuild-linux-64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=amd64 NPMDIR=npm/@esbuild/linux-x64 platform-unixlike
 
 platform-linux-ia32:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=386 NPMDIR=npm/esbuild-linux-32 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=386 NPMDIR=npm/@esbuild/linux-ia32 platform-unixlike
 
 platform-linux-arm:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=arm NPMDIR=npm/esbuild-linux-arm platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=arm NPMDIR=npm/@esbuild/linux-arm platform-unixlike
 
 platform-linux-arm64:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=arm64 NPMDIR=npm/esbuild-linux-arm64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=arm64 NPMDIR=npm/@esbuild/linux-arm64 platform-unixlike
 
 platform-linux-loong64:
 	@$(MAKE) --no-print-directory GOOS=linux GOARCH=loong64 NPMDIR=npm/@esbuild/linux-loong64 platform-unixlike
 
 platform-linux-mips64el:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=mips64le NPMDIR=npm/esbuild-linux-mips64le platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=mips64le NPMDIR=npm/@esbuild/linux-mips64el platform-unixlike
 
 platform-linux-ppc64:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=ppc64le NPMDIR=npm/esbuild-linux-ppc64le platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=ppc64le NPMDIR=npm/@esbuild/linux-ppc64 platform-unixlike
 
 platform-linux-riscv64:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=riscv64 NPMDIR=npm/esbuild-linux-riscv64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=riscv64 NPMDIR=npm/@esbuild/linux-riscv64 platform-unixlike
 
 platform-linux-s390x:
-	@$(MAKE) --no-print-directory GOOS=linux GOARCH=s390x NPMDIR=npm/esbuild-linux-s390x platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=linux GOARCH=s390x NPMDIR=npm/@esbuild/linux-s390x platform-unixlike
 
 platform-sunos-x64:
-	@$(MAKE) --no-print-directory GOOS=illumos GOARCH=amd64 NPMDIR=npm/esbuild-sunos-64 platform-unixlike
+	@$(MAKE) --no-print-directory GOOS=illumos GOARCH=amd64 NPMDIR=npm/@esbuild/sunos-x64 platform-unixlike
 
 platform-wasm: esbuild
 	node scripts/esbuild.js npm/esbuild-wasm/package.json --version
@@ -372,8 +344,8 @@ publish-all: check-go-version
 	@echo "Checking for uncommitted/untracked changes..." && test -z "`git status --porcelain | grep -vE 'M (CHANGELOG\.md|version\.txt)'`" || \
 		(echo "Refusing to publish with these uncommitted/untracked changes:" && \
 		git status --porcelain | grep -vE 'M (CHANGELOG\.md|version\.txt)' && false)
-	@echo "Checking for master branch..." && test master = "`git rev-parse --abbrev-ref HEAD`" || \
-		(echo "Refusing to publish from non-master branch `git rev-parse --abbrev-ref HEAD`" && false)
+	@echo "Checking for main branch..." && test main = "`git rev-parse --abbrev-ref HEAD`" || \
+		(echo "Refusing to publish from non-main branch `git rev-parse --abbrev-ref HEAD`" && false)
 	@echo "Checking for unpushed commits..." && git fetch
 	@test "" = "`git cherry`" || (echo "Refusing to publish with unpushed commits" && false)
 
@@ -434,75 +406,76 @@ publish-all: check-go-version
 	@read OTP && OTP="$$OTP" $(MAKE) --no-print-directory -j4 \
 		publish-neutral \
 		publish-deno \
-		publish-wasm
+		publish-wasm \
+		publish-dl
 
-	git push origin master "v$(ESBUILD_VERSION)"
+	git push origin main "v$(ESBUILD_VERSION)"
 
 publish-win32-x64: platform-win32-x64
-	test -n "$(OTP)" && cd npm/esbuild-windows-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/win32-x64 && npm publish --otp="$(OTP)"
 
 publish-win32-ia32: platform-win32-ia32
-	test -n "$(OTP)" && cd npm/esbuild-windows-32 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/win32-ia32 && npm publish --otp="$(OTP)"
 
 publish-win32-arm64: platform-win32-arm64
-	test -n "$(OTP)" && cd npm/esbuild-windows-arm64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/win32-arm64 && npm publish --otp="$(OTP)"
 
 publish-android-x64: platform-android-x64
-	test -n "$(OTP)" && cd npm/esbuild-android-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/android-x64 && npm publish --otp="$(OTP)"
 
 publish-android-arm: platform-android-arm
 	test -n "$(OTP)" && cd npm/@esbuild/android-arm && npm publish --otp="$(OTP)"
 
 publish-android-arm64: platform-android-arm64
-	test -n "$(OTP)" && cd npm/esbuild-android-arm64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/android-arm64 && npm publish --otp="$(OTP)"
 
 publish-darwin-x64: platform-darwin-x64
-	test -n "$(OTP)" && cd npm/esbuild-darwin-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/darwin-x64 && npm publish --otp="$(OTP)"
 
 publish-darwin-arm64: platform-darwin-arm64
-	test -n "$(OTP)" && cd npm/esbuild-darwin-arm64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/darwin-arm64 && npm publish --otp="$(OTP)"
 
 publish-freebsd-x64: platform-freebsd-x64
-	test -n "$(OTP)" && cd npm/esbuild-freebsd-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/freebsd-x64 && npm publish --otp="$(OTP)"
 
 publish-freebsd-arm64: platform-freebsd-arm64
-	test -n "$(OTP)" && cd npm/esbuild-freebsd-arm64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/freebsd-arm64 && npm publish --otp="$(OTP)"
 
 publish-netbsd-x64: platform-netbsd-x64
-	test -n "$(OTP)" && cd npm/esbuild-netbsd-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/netbsd-x64 && npm publish --otp="$(OTP)"
 
 publish-openbsd-x64: platform-openbsd-x64
-	test -n "$(OTP)" && cd npm/esbuild-openbsd-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/openbsd-x64 && npm publish --otp="$(OTP)"
 
 publish-linux-x64: platform-linux-x64
-	test -n "$(OTP)" && cd npm/esbuild-linux-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-x64 && npm publish --otp="$(OTP)"
 
 publish-linux-ia32: platform-linux-ia32
-	test -n "$(OTP)" && cd npm/esbuild-linux-32 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-ia32 && npm publish --otp="$(OTP)"
 
 publish-linux-arm: platform-linux-arm
-	test -n "$(OTP)" && cd npm/esbuild-linux-arm && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-arm && npm publish --otp="$(OTP)"
 
 publish-linux-arm64: platform-linux-arm64
-	test -n "$(OTP)" && cd npm/esbuild-linux-arm64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-arm64 && npm publish --otp="$(OTP)"
 
 publish-linux-loong64: platform-linux-loong64
 	test -n "$(OTP)" && cd npm/@esbuild/linux-loong64 && npm publish --otp="$(OTP)"
 
 publish-linux-mips64el: platform-linux-mips64el
-	test -n "$(OTP)" && cd npm/esbuild-linux-mips64le && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-mips64el && npm publish --otp="$(OTP)"
 
 publish-linux-ppc64: platform-linux-ppc64
-	test -n "$(OTP)" && cd npm/esbuild-linux-ppc64le && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-ppc64 && npm publish --otp="$(OTP)"
 
 publish-linux-riscv64: platform-linux-riscv64
-	test -n "$(OTP)" && cd npm/esbuild-linux-riscv64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-riscv64 && npm publish --otp="$(OTP)"
 
 publish-linux-s390x: platform-linux-s390x
-	test -n "$(OTP)" && cd npm/esbuild-linux-s390x && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/linux-s390x && npm publish --otp="$(OTP)"
 
 publish-sunos-x64: platform-sunos-x64
-	test -n "$(OTP)" && cd npm/esbuild-sunos-64 && npm publish --otp="$(OTP)"
+	test -n "$(OTP)" && cd npm/@esbuild/sunos-x64 && npm publish --otp="$(OTP)"
 
 publish-wasm: platform-wasm
 	test -n "$(OTP)" && cd npm/esbuild-wasm && npm publish --otp="$(OTP)"
@@ -518,6 +491,15 @@ publish-deno:
 	cd deno && git commit -m "publish $(ESBUILD_VERSION) to deno"
 	cd deno && git tag "v$(ESBUILD_VERSION)"
 	cd deno && git push origin main "v$(ESBUILD_VERSION)"
+
+publish-dl:
+	test -d www/.git || (rm -fr www && git clone git@github.com:esbuild/esbuild.github.io.git www)
+	cd www && git fetch && git checkout gh-pages && git reset --hard origin/gh-pages
+	cd www && cat ../dl.sh | sed 's/$$ESBUILD_VERSION/$(ESBUILD_VERSION)/' > dl/latest
+	cd www && cat ../dl.sh | sed 's/$$ESBUILD_VERSION/$(ESBUILD_VERSION)/' > "dl/v$(ESBUILD_VERSION)"
+	cd www && git add dl/latest "dl/v$(ESBUILD_VERSION)"
+	cd www && git commit -m "publish download script for $(ESBUILD_VERSION)"
+	cd www && git push origin gh-pages
 
 validate-build:
 	@test -n "$(TARGET)" || (echo "The environment variable TARGET must be provided" && false)
@@ -536,56 +518,56 @@ validate-build:
 # This checks that the published binaries are bitwise-identical to the locally-build binaries
 validate-builds:
 	git fetch --all --tags && git checkout "v$(ESBUILD_VERSION)"
-	@$(MAKE) --no-print-directory TARGET=platform-android-arm SCOPE=@esbuild/ PACKAGE=android-arm SUBPATH=esbuild.wasm validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-android-arm64 PACKAGE=esbuild-android-arm64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-android-x64 PACKAGE=esbuild-android-64 SUBPATH=esbuild.wasm validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-darwin-arm64 PACKAGE=esbuild-darwin-arm64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-darwin-x64 PACKAGE=esbuild-darwin-64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-freebsd-arm64 PACKAGE=esbuild-freebsd-arm64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-freebsd-x64 PACKAGE=esbuild-freebsd-64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-arm PACKAGE=esbuild-linux-arm SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-arm64 PACKAGE=esbuild-linux-arm64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-ia32 PACKAGE=esbuild-linux-32 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-loong64 SCOPE=@esbuild/ PACKAGE=linux-loong64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-mips64el PACKAGE=esbuild-linux-mips64le SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-ppc64 PACKAGE=esbuild-linux-ppc64le SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-riscv64 PACKAGE=esbuild-linux-riscv64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-s390x PACKAGE=esbuild-linux-s390x SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-linux-x64 PACKAGE=esbuild-linux-64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-netbsd-x64 PACKAGE=esbuild-netbsd-64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-openbsd-x64 PACKAGE=esbuild-openbsd-64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-sunos-x64 PACKAGE=esbuild-sunos-64 SUBPATH=bin/esbuild validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-wasm PACKAGE=esbuild-wasm SUBPATH=esbuild.wasm validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-win32-arm64 PACKAGE=esbuild-windows-arm64 SUBPATH=esbuild.exe validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-win32-ia32 PACKAGE=esbuild-windows-32 SUBPATH=esbuild.exe validate-build
-	@$(MAKE) --no-print-directory TARGET=platform-win32-x64 PACKAGE=esbuild-windows-64 SUBPATH=esbuild.exe validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-android-arm    SCOPE=@esbuild/ PACKAGE=android-arm     SUBPATH=esbuild.wasm validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-android-arm64  SCOPE=@esbuild/ PACKAGE=android-arm64   SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-android-x64    SCOPE=@esbuild/ PACKAGE=android-x64     SUBPATH=esbuild.wasm validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-darwin-arm64   SCOPE=@esbuild/ PACKAGE=darwin-arm64    SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-darwin-x64     SCOPE=@esbuild/ PACKAGE=darwin-x64      SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-freebsd-arm64  SCOPE=@esbuild/ PACKAGE=freebsd-arm64   SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-freebsd-x64    SCOPE=@esbuild/ PACKAGE=freebsd-x64     SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-arm      SCOPE=@esbuild/ PACKAGE=linux-arm       SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-arm64    SCOPE=@esbuild/ PACKAGE=linux-arm64     SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-ia32     SCOPE=@esbuild/ PACKAGE=linux-ia32      SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-loong64  SCOPE=@esbuild/ PACKAGE=linux-loong64   SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-mips64el SCOPE=@esbuild/ PACKAGE=linux-mips64el  SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-ppc64    SCOPE=@esbuild/ PACKAGE=linux-ppc64     SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-riscv64  SCOPE=@esbuild/ PACKAGE=linux-riscv64   SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-s390x    SCOPE=@esbuild/ PACKAGE=linux-s390x     SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-linux-x64      SCOPE=@esbuild/ PACKAGE=linux-x64       SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-netbsd-x64     SCOPE=@esbuild/ PACKAGE=netbsd-x64      SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-openbsd-x64    SCOPE=@esbuild/ PACKAGE=openbsd-x64     SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-sunos-x64      SCOPE=@esbuild/ PACKAGE=sunos-x64       SUBPATH=bin/esbuild  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-wasm                           PACKAGE=esbuild-wasm    SUBPATH=esbuild.wasm validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-win32-arm64    SCOPE=@esbuild/ PACKAGE=win32-arm64     SUBPATH=esbuild.exe  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-win32-ia32     SCOPE=@esbuild/ PACKAGE=win32-ia32      SUBPATH=esbuild.exe  validate-build
+	@$(MAKE) --no-print-directory TARGET=platform-win32-x64      SCOPE=@esbuild/ PACKAGE=win32-x64       SUBPATH=esbuild.exe  validate-build
 
 clean:
 	go clean -testcache ./internal/...
 	rm -f esbuild
-	rm -f npm/esbuild-wasm/esbuild.wasm npm/esbuild-wasm/wasm_exec*.js npm/esbuild-wasm/exit0.js
-	rm -f npm/esbuild-windows-32/esbuild.exe
-	rm -f npm/esbuild-windows-64/esbuild.exe
-	rm -f npm/esbuild-windows-arm64/esbuild.exe
-	rm -rf npm/@esbuild/android-arm/bin npm/@esbuild/android-arm/esbuild.wasm npm/@esbuild/android-arm/wasm_exec*.js npm/@esbuild/android-arm/exit0.js
+	rm -f npm/@esbuild/win32-arm64/esbuild.exe
+	rm -f npm/@esbuild/win32-ia32/esbuild.exe
+	rm -f npm/@esbuild/win32-x64/esbuild.exe
+	rm -f npm/esbuild-wasm/esbuild.wasm npm/esbuild-wasm/wasm_exec*.js
+	rm -rf npm/@esbuild/android-arm/bin npm/@esbuild/android-arm/esbuild.wasm npm/@esbuild/android-arm/wasm_exec*.js
+	rm -rf npm/@esbuild/android-arm64/bin
+	rm -rf npm/@esbuild/android-x64/bin npm/@esbuild/android-x64/esbuild.wasm npm/@esbuild/android-x64/wasm_exec*.js
+	rm -rf npm/@esbuild/darwin-arm64/bin
+	rm -rf npm/@esbuild/darwin-x64/bin
+	rm -rf npm/@esbuild/freebsd-arm64/bin
+	rm -rf npm/@esbuild/freebsd-x64/bin
+	rm -rf npm/@esbuild/linux-arm/bin
+	rm -rf npm/@esbuild/linux-arm64/bin
+	rm -rf npm/@esbuild/linux-ia32/bin
 	rm -rf npm/@esbuild/linux-loong64/bin
-	rm -rf npm/esbuild-android-64/bin npm/esbuild-android-64/esbuild.wasm npm/esbuild-android-64/wasm_exec*.js npm/esbuild-android-64/exit0.js
-	rm -rf npm/esbuild-android-arm64/bin
-	rm -rf npm/esbuild-darwin-64/bin
-	rm -rf npm/esbuild-darwin-arm64/bin
-	rm -rf npm/esbuild-freebsd-64/bin
-	rm -rf npm/esbuild-freebsd-amd64/bin
-	rm -rf npm/esbuild-linux-32/bin
-	rm -rf npm/esbuild-linux-64/bin
-	rm -rf npm/esbuild-linux-arm/bin
-	rm -rf npm/esbuild-linux-arm64/bin
-	rm -rf npm/esbuild-linux-mips64le/bin
-	rm -rf npm/esbuild-linux-ppc64le/bin
-	rm -rf npm/esbuild-linux-riscv64/bin
-	rm -rf npm/esbuild-linux-s390x/bin
-	rm -rf npm/esbuild-netbsd-64/bin
-	rm -rf npm/esbuild-openbsd-64/bin
-	rm -rf npm/esbuild-sunos-64/bin
+	rm -rf npm/@esbuild/linux-mips64el/bin
+	rm -rf npm/@esbuild/linux-ppc64/bin
+	rm -rf npm/@esbuild/linux-riscv64/bin
+	rm -rf npm/@esbuild/linux-s390x/bin
+	rm -rf npm/@esbuild/linux-x64/bin
+	rm -rf npm/@esbuild/netbsd-x64/bin
+	rm -rf npm/@esbuild/openbsd-x64/bin
+	rm -rf npm/@esbuild/sunos-x64/bin
 	rm -rf npm/esbuild-wasm/esm
 	rm -rf npm/esbuild-wasm/lib
 	rm -rf npm/esbuild/bin npm/esbuild/lib npm/esbuild/install.js
@@ -640,10 +622,11 @@ github/test262:
 
 demo/test262: | github/test262
 	mkdir -p demo/test262
+	cp -r github/test262/harness demo/test262/harness
 	cp -r github/test262/test demo/test262/test
 
 test262: esbuild | demo/test262
-	node scripts/test262.js
+	node --experimental-vm-modules scripts/test262.js
 
 ################################################################################
 # This runs UglifyJS's test suite through esbuild
@@ -1005,37 +988,54 @@ bench-rome-parcel2: | require/parcel2/node_modules bench/rome bench/rome-verify
 ################################################################################
 # React admin benchmark (measures performance of an application-like setup)
 
-READMIN_HTML = <meta charset=utf8><div id=root></div><script src=main.js></script>
+READMIN_HTML = <meta charset=utf8><div id=root></div><script src=index.js type=module></script>
 
 github/react-admin:
 	mkdir -p github
-	git clone --depth 1 --branch v3.8.1 https://github.com/marmelab/react-admin.git github/react-admin
+	git clone --depth 1 --branch v4.6.1 https://github.com/marmelab/react-admin.git github/react-admin
 
 bench/readmin: | github/react-admin
 	mkdir -p bench/readmin
-	cp -r github/react-admin/examples/simple bench/readmin/repo
-	cp scripts/readmin-package-lock.json bench/readmin/repo/package-lock.json # Pin package versions for determinism
-	cd bench/readmin/repo && npm ci
+	cp -r github/react-admin bench/readmin/repo
+	cd bench/readmin/repo && yarn # This takes approximately forever
 
 bench-readmin: bench-readmin-esbuild
 
+READMIN_ESBUILD_FLAGS += --alias:data-generator-retail=./bench/readmin/repo/examples/data-generator/src
+READMIN_ESBUILD_FLAGS += --alias:ra-core=./bench/readmin/repo/packages/ra-core/src
+READMIN_ESBUILD_FLAGS += --alias:ra-data-fakerest=./bench/readmin/repo/packages/ra-data-fakerest/src
+READMIN_ESBUILD_FLAGS += --alias:ra-data-graphql-simple=./bench/readmin/repo/packages/ra-data-graphql-simple/src
+READMIN_ESBUILD_FLAGS += --alias:ra-data-graphql=./bench/readmin/repo/packages/ra-data-graphql/src
+READMIN_ESBUILD_FLAGS += --alias:ra-data-simple-rest=./bench/readmin/repo/packages/ra-data-simple-rest/src
+READMIN_ESBUILD_FLAGS += --alias:ra-i18n-polyglot=./bench/readmin/repo/packages/ra-i18n-polyglot/src
+READMIN_ESBUILD_FLAGS += --alias:ra-input-rich-text=./bench/readmin/repo/packages/ra-input-rich-text/src
+READMIN_ESBUILD_FLAGS += --alias:ra-language-english=./bench/readmin/repo/packages/ra-language-english/src
+READMIN_ESBUILD_FLAGS += --alias:ra-language-french=./bench/readmin/repo/packages/ra-language-french/src
+READMIN_ESBUILD_FLAGS += --alias:ra-ui-materialui=./bench/readmin/repo/packages/ra-ui-materialui/src
+READMIN_ESBUILD_FLAGS += --alias:react-admin=./bench/readmin/repo/packages/react-admin/src
 READMIN_ESBUILD_FLAGS += --bundle
-READMIN_ESBUILD_FLAGS += --define:global=window
-READMIN_ESBUILD_FLAGS += --loader:.js=jsx
+READMIN_ESBUILD_FLAGS += --define:process.env.REACT_APP_DATA_PROVIDER=null
+READMIN_ESBUILD_FLAGS += --format=esm
+READMIN_ESBUILD_FLAGS += --loader:.png=file
+READMIN_ESBUILD_FLAGS += --loader:.svg=file
 READMIN_ESBUILD_FLAGS += --minify
+READMIN_ESBUILD_FLAGS += --outdir=derp
 READMIN_ESBUILD_FLAGS += --sourcemap
+READMIN_ESBUILD_FLAGS += --splitting
+READMIN_ESBUILD_FLAGS += --target=esnext
 READMIN_ESBUILD_FLAGS += --timing
+READMIN_ESBUILD_FLAGS += bench/readmin/repo/examples/demo/src/index.tsx
 
 bench-readmin-esbuild: esbuild | bench/readmin
 	rm -fr bench/readmin/esbuild
-	time -p ./esbuild $(READMIN_ESBUILD_FLAGS) --outfile=bench/readmin/esbuild/main.js bench/readmin/repo/src/index.js
+	time -p ./esbuild $(READMIN_ESBUILD_FLAGS) --outdir=bench/readmin/esbuild
 	echo "$(READMIN_HTML)" > bench/readmin/esbuild/index.html
-	du -h bench/readmin/esbuild/main.js*
-	shasum bench/readmin/esbuild/main.js*
+	du -h bench/readmin/esbuild/index.js*
+	shasum bench/readmin/esbuild/index.js*
 
 bench-readmin-eswasm: platform-wasm | bench/readmin
 	rm -fr bench/readmin/eswasm
-	time -p ./npm/esbuild-wasm/bin/esbuild $(READMIN_ESBUILD_FLAGS) --outfile=bench/readmin/eswasm/main.js bench/readmin/repo/src/index.js
+	time -p ./npm/esbuild-wasm/bin/esbuild $(READMIN_ESBUILD_FLAGS) --outdir=bench/readmin/eswasm
 	echo "$(READMIN_HTML)" > bench/readmin/eswasm/index.html
-	du -h bench/readmin/eswasm/main.js*
-	shasum bench/readmin/eswasm/main.js*
+	du -h bench/readmin/eswasm/index.js*
+	shasum bench/readmin/eswasm/index.js*

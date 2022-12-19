@@ -2235,7 +2235,7 @@ error: Invalid path suffix "%what" returned from plugin (must start with "?" or 
         plugins: [{
           name: 'plugin',
           async setup(build) {
-            await build.resolve('foo')
+            await build.resolve('foo', { kind: 'entry-point' })
           },
         }],
       })
@@ -2257,7 +2257,7 @@ error: Invalid path suffix "%what" returned from plugin (must start with "?" or 
       }],
     })
     try {
-      const result = await resolve('foo')
+      const result = await resolve('foo', { kind: 'entry-point' })
       console.log(result.errors)
       throw new Error('Expected an error to be thrown')
     } catch (e) {
@@ -2297,7 +2297,10 @@ error: Invalid path suffix "%what" returned from plugin (must start with "?" or 
         name: 'plugin',
         async setup(build) {
           build.onResolve({ filter: /^foo$/ }, async () => {
-            const result = await build.resolve('bar', { resolveDir: testDir })
+            const result = await build.resolve('bar', {
+              resolveDir: testDir,
+              kind: 'import-statement',
+            })
             assert(result.external)
             return { path: 'baz', external: true }
           })
@@ -2319,7 +2322,10 @@ error: Invalid path suffix "%what" returned from plugin (must start with "?" or 
         name: 'plugin',
         setup(build) {
           build.onResolve({ filter: /^entry$/ }, async () => {
-            return await build.resolve('./' + path.basename(input), { resolveDir: srcDir })
+            return await build.resolve('./' + path.basename(input), {
+              resolveDir: srcDir,
+              kind: 'import-statement',
+            })
           })
         },
       }],
@@ -2360,6 +2366,28 @@ error: Invalid path suffix "%what" returned from plugin (must start with "?" or 
       }],
     })
     assert.strictEqual(result.outputFiles[0].text, `console.log(123);\n`)
+  },
+
+  async injectWithVirtualFile({ esbuild, testDir }) {
+    const input = path.join(testDir, 'input.js')
+    await writeFileAsync(input, `console.log(test)`)
+    const result = await esbuild.build({
+      entryPoints: [input],
+      write: false,
+      inject: ['plugin-file'],
+      plugins: [{
+        name: 'plugin',
+        setup(build) {
+          build.onResolve({ filter: /^plugin-file$/ }, () => {
+            return { namespace: 'plugin', path: 'path' }
+          })
+          build.onLoad({ filter: /^path$/, namespace: 'plugin' }, () => {
+            return { contents: `export let test = 'injected'` }
+          })
+        },
+      }],
+    })
+    assert.strictEqual(result.outputFiles[0].text, `var test = "injected";\nconsole.log(test);\n`)
   },
 }
 
