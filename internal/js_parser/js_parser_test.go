@@ -534,6 +534,12 @@ func TestStrictMode(t *testing.T) {
 	expectParseError(t, "for await (x of y); with (y) z", tlaKeyword)
 	expectParseError(t, "with (y) z; for await (x of y);", tlaKeyword)
 
+	fAlreadyDeclaredError := "<stdin>: ERROR: The symbol \"f\" has already been declared\n" +
+		"<stdin>: NOTE: The symbol \"f\" was originally declared here:\n"
+	nestedNote := "<stdin>: NOTE: Duplicate function declarations are not allowed in nested blocks"
+	moduleNote := "<stdin>: NOTE: Duplicate top-level function declarations are not allowed in an ECMAScript module. " +
+		"This file is considered to be an ECMAScript module because of the \"export\" keyword here:\n"
+
 	cases := []string{
 		"function f() {} function f() {}",
 		"function f() {} function *f() {}",
@@ -542,27 +548,34 @@ func TestStrictMode(t *testing.T) {
 		"async function f() {} function f() {}",
 		"function f() {} async function *f() {}",
 		"async function *f() {} function f() {}",
-		"{ function f() {} function f() {} }",
-		"switch (0) { case 1: function f() {} default: function f() {} }",
 	}
-
-	fAlreadyDeclaredError :=
-		"<stdin>: ERROR: The symbol \"f\" has already been declared\n" +
-			"<stdin>: NOTE: The symbol \"f\" was originally declared here:\n" +
-			"<stdin>: NOTE: Duplicate lexically-declared names are not allowed"
 
 	for _, c := range cases {
 		expectParseError(t, c, "")
-
-		expectParseError(t, "'use strict'; "+c, fAlreadyDeclaredError+" in strict mode. "+
-			"Strict mode is triggered by the \"use strict\" directive here:\n")
-
-		expectParseError(t, "function foo() { 'use strict'; "+c+" }", fAlreadyDeclaredError+" in strict mode. "+
-			"Strict mode is triggered by the \"use strict\" directive here:\n")
-
-		expectParseError(t, c+" export {}", fAlreadyDeclaredError+" in an ECMAScript module. "+
-			"This file is considered to be an ECMAScript module because of the \"export\" keyword here:\n")
+		expectParseError(t, "'use strict'; "+c, "")
+		expectParseError(t, "function foo() { 'use strict'; "+c+" }", "")
 	}
+
+	expectParseError(t, "function f() {} function f() {} export {}", fAlreadyDeclaredError+moduleNote)
+	expectParseError(t, "function f() {} function *f() {} export {}", fAlreadyDeclaredError+moduleNote)
+	expectParseError(t, "function f() {} async function f() {} export {}", fAlreadyDeclaredError+moduleNote)
+	expectParseError(t, "function *f() {} function f() {} export {}", fAlreadyDeclaredError+moduleNote)
+	expectParseError(t, "async function f() {} function f() {} export {}", fAlreadyDeclaredError+moduleNote)
+
+	expectParseError(t, "'use strict'; { function f() {} function f() {} }",
+		fAlreadyDeclaredError+nestedNote+" in strict mode. Strict mode is triggered by the \"use strict\" directive here:\n")
+	expectParseError(t, "'use strict'; switch (0) { case 1: function f() {} default: function f() {} }",
+		fAlreadyDeclaredError+nestedNote+" in strict mode. Strict mode is triggered by the \"use strict\" directive here:\n")
+
+	expectParseError(t, "function foo() { 'use strict'; { function f() {} function f() {} } }",
+		fAlreadyDeclaredError+nestedNote+" in strict mode. Strict mode is triggered by the \"use strict\" directive here:\n")
+	expectParseError(t, "function foo() { 'use strict'; switch (0) { case 1: function f() {} default: function f() {} } }",
+		fAlreadyDeclaredError+nestedNote+" in strict mode. Strict mode is triggered by the \"use strict\" directive here:\n")
+
+	expectParseError(t, "{ function f() {} function f() {} } export {}",
+		fAlreadyDeclaredError+nestedNote+" in an ECMAScript module. This file is considered to be an ECMAScript module because of the \"export\" keyword here:\n")
+	expectParseError(t, "switch (0) { case 1: function f() {} default: function f() {} } export {}",
+		fAlreadyDeclaredError+nestedNote+" in an ECMAScript module. This file is considered to be an ECMAScript module because of the \"export\" keyword here:\n")
 
 	expectParseError(t, "var x; var x", "")
 	expectParseError(t, "'use strict'; var x; var x", "")
@@ -1444,6 +1457,16 @@ func TestLexicalDecl(t *testing.T) {
 	expectParseError(t, "with (1) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "while (1) label: label2: function f() {}", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
 	expectParseError(t, "do label: label2: function f() {} while (0)", "<stdin>: ERROR: Cannot use a declaration in a single-statement context\n")
+
+	// Test direct "eval"
+	expectPrinted(t, "if (foo) { function x() {} }", "if (foo) {\n  let x = function() {\n  };\n  var x = x;\n}\n")
+	expectPrinted(t, "if (foo) { function x() {} eval('') }", "if (foo) {\n  function x() {\n  }\n  eval(\"\");\n}\n")
+	expectPrinted(t, "if (foo) { function x() {} if (bar) { eval('') } }", "if (foo) {\n  function x() {\n  }\n  if (bar) {\n    eval(\"\");\n  }\n}\n")
+	expectPrinted(t, "if (foo) { eval(''); function x() {} }", "if (foo) {\n  function x() {\n  }\n  eval(\"\");\n}\n")
+	expectPrinted(t, "'use strict'; if (foo) { function x() {} }", "\"use strict\";\nif (foo) {\n  let x = function() {\n  };\n}\n")
+	expectPrinted(t, "'use strict'; if (foo) { function x() {} eval('') }", "\"use strict\";\nif (foo) {\n  function x() {\n  }\n  eval(\"\");\n}\n")
+	expectPrinted(t, "'use strict'; if (foo) { function x() {} if (bar) { eval('') } }", "\"use strict\";\nif (foo) {\n  function x() {\n  }\n  if (bar) {\n    eval(\"\");\n  }\n}\n")
+	expectPrinted(t, "'use strict'; if (foo) { eval(''); function x() {} }", "\"use strict\";\nif (foo) {\n  function x() {\n  }\n  eval(\"\");\n}\n")
 }
 
 func TestFunction(t *testing.T) {
@@ -4625,6 +4648,8 @@ func TestPreservedComments(t *testing.T) {
 	expectPrinted(t, "//!", "//!\n")
 	expectPrinted(t, "//@license", "//@license\n")
 	expectPrinted(t, "//@preserve", "//@preserve\n")
+	expectPrinted(t, "// @license", "// @license\n")
+	expectPrinted(t, "// @preserve", "// @preserve\n")
 
 	expectPrinted(t, "/**/", "")
 	expectPrinted(t, "/*preserve*/", "")
@@ -4632,6 +4657,8 @@ func TestPreservedComments(t *testing.T) {
 	expectPrinted(t, "/*!*/", "/*!*/\n")
 	expectPrinted(t, "/*@license*/", "/*@license*/\n")
 	expectPrinted(t, "/*@preserve*/", "/*@preserve*/\n")
+	expectPrinted(t, "/*\n * @license\n */", "/*\n * @license\n */\n")
+	expectPrinted(t, "/*\n * @preserve\n */", "/*\n * @preserve\n */\n")
 
 	expectPrinted(t, "foo() //! test", "foo();\n//! test\n")
 	expectPrinted(t, "//! test\nfoo()", "//! test\nfoo();\n")

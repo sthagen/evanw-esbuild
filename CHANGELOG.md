@@ -1,5 +1,115 @@
 # Changelog
 
+## Unreleased
+
+* Avoid a syntax error in the presence of direct `eval` ([#2761](https://github.com/evanw/esbuild/issues/2761))
+
+    The behavior of nested `function` declarations in JavaScript depends on whether the code is run in strict mode or not. It would be problematic if esbuild preserved nested `function` declarations in its output because then the behavior would depend on whether the output was run in strict mode or not instead of respecting the strict mode behavior of the original source code. To avoid this, esbuild transforms nested `function` declarations to preserve the intended behavior of the original source code regardless of whether the output is run in strict mode or not:
+
+    ```js
+    // Original code
+    if (true) {
+      function foo() {}
+      console.log(!!foo)
+      foo = null
+      console.log(!!foo)
+    }
+    console.log(!!foo)
+
+    // Transformed code
+    if (true) {
+      let foo2 = function() {
+      };
+      var foo = foo2;
+      console.log(!!foo2);
+      foo2 = null;
+      console.log(!!foo2);
+    }
+    console.log(!!foo);
+    ```
+
+    In the above example, the original code should print `true false true` because it's not run in strict mode (it doesn't contain `"use strict"` and is not an ES module). The code that esbuild generates has been transformed such that it prints `true false true` regardless of whether it's run in strict mode or not.
+
+    However, this transformation is impossible if the code contains direct `eval` because direct `eval` "poisons" all containing scopes by preventing anything in those scopes from being renamed. That prevents esbuild from splitting up accesses to `foo` into two separate variables with different names. Previously esbuild still did this transformation but with two variables both named `foo`, which is a syntax error. With this release esbuild will now skip doing this transformation when direct `eval` is present to avoid generating code with a syntax error. This means that the generated code may no longer behave as intended since the behavior depends on the run-time strict mode setting instead of the strict mode setting present in the original source code. To fix this problem, you will need to remove the use of direct `eval`.
+
+## 0.16.10
+
+* Change the default "legal comment" behavior again ([#2745](https://github.com/evanw/esbuild/issues/2745))
+
+    The legal comments feature automatically gathers comments containing `@license` or `@preserve` and puts the comments somewhere (either in the generated code or in a separate file). This behavior used to be on by default but was disabled by default in version 0.16.0 because automatically inserting comments is potentially confusing and misleading. These comments can appear to be assigning the copyright of your code to another entity. And this behavior can be especially problematic if it happens automatically by default since you may not even be aware of it happening. For example, if you bundle the TypeScript compiler the preserving legal comments means your source code would contain this comment, which appears to be assigning the copyright of all of your code to Microsoft:
+
+    ```js
+    /*! *****************************************************************************
+    Copyright (c) Microsoft Corporation. All rights reserved.
+    Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+    this file except in compliance with the License. You may obtain a copy of the
+    License at http://www.apache.org/licenses/LICENSE-2.0
+
+    THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
+    WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
+    MERCHANTABLITY OR NON-INFRINGEMENT.
+
+    See the Apache Version 2.0 License for specific language governing permissions
+    and limitations under the License.
+    ***************************************************************************** */
+    ```
+
+    However, people have asked for this feature to be re-enabled by default. To resolve the confusion about what these comments are applying to, esbuild's default behavior will now be to attempt to describe which package the comments are coming from. So while this feature has been re-enabled by default, the output will now look something like this instead:
+
+    ```js
+    /*! Bundled license information:
+
+    typescript/lib/typescript.js:
+      (*! *****************************************************************************
+      Copyright (c) Microsoft Corporation. All rights reserved.
+      Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+      this file except in compliance with the License. You may obtain a copy of the
+      License at http://www.apache.org/licenses/LICENSE-2.0
+
+      THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+      KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
+      WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
+      MERCHANTABLITY OR NON-INFRINGEMENT.
+
+      See the Apache Version 2.0 License for specific language governing permissions
+      and limitations under the License.
+      ***************************************************************************** *)
+    */
+    ```
+
+    Note that you can still customize this behavior with the `--legal-comments=` flag. For example, you can use `--legal-comments=none` to turn this off, or you can use `--legal-comments=linked` to put these comments in a separate `.LEGAL.txt` file instead.
+
+* Enable `external` legal comments with the transform API ([#2390](https://github.com/evanw/esbuild/issues/2390))
+
+    Previously esbuild's transform API only supported `none`, `inline`, or `eof` legal comments. With this release, `external` legal comments are now also supported with the transform API. This only applies to the JS and Go APIs, not to the CLI, and looks like this:
+
+    * JS:
+
+        ```js
+        const { code, legalComments } = await esbuild.transform(input, {
+          legalComments: 'external',
+        })
+        ```
+
+    * Go:
+
+        ```go
+        result := api.Transform(input, api.TransformOptions{
+          LegalComments: api.LegalCommentsEndOfFile,
+        })
+        code := result.Code
+        legalComments := result.LegalComments
+        ```
+
+* Fix duplicate function declaration edge cases ([#2757](https://github.com/evanw/esbuild/issues/2757))
+
+    The change in the previous release to forbid duplicate function declarations in certain cases accidentally forbid some edge cases that should have been allowed. Specifically duplicate function declarations are forbidden in nested blocks in strict mode and at the top level of modules, but are allowed when they are declared at the top level of function bodies. This release fixes the regression by re-allowing the last case.
+
+* Allow package subpaths with `alias` ([#2715](https://github.com/evanw/esbuild/issues/2715))
+
+    Previously the names passed to the `alias` feature had to be the name of a package (with or without a package scope). With this release, you can now also use the `alias` feature with package subpaths. So for example you can now create an alias that substitutes `@org/pkg/lib` with something else.
+
 ## 0.16.9
 
 * Update to Unicode 15.0.0

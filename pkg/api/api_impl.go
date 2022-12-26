@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -144,7 +145,13 @@ func validateSourceMap(value SourceMap) config.SourceMap {
 
 func validateLegalComments(value LegalComments, bundle bool) config.LegalComments {
 	switch value {
-	case LegalCommentsDefault, LegalCommentsNone:
+	case LegalCommentsDefault:
+		if bundle {
+			return config.LegalCommentsEndOfFile
+		} else {
+			return config.LegalCommentsInline
+		}
+	case LegalCommentsNone:
 		return config.LegalCommentsNone
 	case LegalCommentsInline:
 		return config.LegalCommentsInline
@@ -278,6 +285,7 @@ func validateEngine(value EngineName) compat.Engine {
 }
 
 var versionRegex = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]+))?(?:\.([0-9]+))?$`)
+var preReleaseVersionRegex = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]+))?(?:\.([0-9]+))?-`)
 
 func validateFeatures(log logger.Log, target Target, engines []Engine) (config.TargetFromAPI, compat.JSFeature, compat.CSSFeature, string) {
 	if target == DefaultTarget && len(engines) == 0 {
@@ -330,7 +338,16 @@ func validateFeatures(log logger.Log, target Target, engines []Engine) (config.T
 			}
 		}
 
-		log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid version: %q", engine.Version))
+		text := "All version numbers passed to esbuild must be in the format \"X\", \"X.Y\", or \"X.Y.Z\" where X, Y, and Z are non-negative integers."
+
+		// Our internal version-to-feature database only includes version triples.
+		// We don't have any data on pre-release versions, so we don't accept them.
+		if preReleaseVersionRegex.MatchString(engine.Version) {
+			text += " Pre-release versions are not supported and cannot be used."
+		}
+
+		log.AddErrorWithNotes(nil, logger.Range{}, fmt.Sprintf("Invalid version: %q", engine.Version),
+			[]logger.MsgData{{Text: text}})
 	}
 
 	for engine, version := range constraints {
@@ -482,28 +499,24 @@ func validateAlias(log logger.Log, fs fs.FS, alias map[string]string) map[string
 
 		// Valid alias names:
 		//   "foo"
+		//   "foo/bar"
 		//   "@foo"
 		//   "@foo/bar"
+		//   "@foo/bar/baz"
 		//
 		// Invalid alias names:
 		//   "./foo"
-		//   "foo/bar"
+		//   "../foo"
+		//   "/foo"
+		//   "C:\\foo"
+		//   ".foo"
+		//   "foo/"
 		//   "@foo/"
-		//   "@foo/bar/baz"
+		//   "foo/../bar"
 		//
-		if !strings.HasPrefix(old, ".") && !strings.HasPrefix(old, "/") && !fs.IsAbs(old) {
-			slash := strings.IndexByte(old, '/')
-			isScope := strings.HasPrefix(old, "@")
-			if slash != -1 && isScope {
-				pkgAfterScope := old[slash+1:]
-				if slash2 := strings.IndexByte(pkgAfterScope, '/'); slash2 == -1 && pkgAfterScope != "" {
-					valid[old] = new
-					continue
-				}
-			} else if slash == -1 {
-				valid[old] = new
-				continue
-			}
+		if !strings.HasPrefix(old, ".") && !strings.HasPrefix(old, "/") && !fs.IsAbs(old) && path.Clean(strings.ReplaceAll(old, "\\", "/")) == old {
+			valid[old] = new
+			continue
 		}
 
 		log.AddError(nil, logger.Range{}, fmt.Sprintf("Invalid alias name: %q", old))
@@ -1550,8 +1563,12 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 		log.AddError(nil, logger.Range{},
 			"Must use \"sourcefile\" with \"sourcemap\" to set the original file name")
 	}
-	if options.LegalComments.HasExternalFile() {
-		log.AddError(nil, logger.Range{}, "Cannot transform with linked or external legal comments")
+	if logger.API == logger.CLIAPI {
+		if options.LegalComments.HasExternalFile() {
+			log.AddError(nil, logger.Range{}, "Cannot transform with linked or external legal comments")
+		}
+	} else if options.LegalComments == config.LegalCommentsLinkedWithComment {
+		log.AddError(nil, logger.Range{}, "Cannot transform with linked legal comments")
 	}
 
 	// Set the output mode using other settings
@@ -1585,16 +1602,24 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 	// Return the results
 	var code []byte
 	var sourceMap []byte
+	var legalComments []byte
 
-	// Unpack the JavaScript file and the source map file
-	if len(results) == 1 {
-		code = results[0].Contents
-	} else if len(results) == 2 {
-		a, b := results[0], results[1]
-		if a.AbsPath == b.AbsPath+".map" {
-			sourceMap, code = a.Contents, b.Contents
-		} else if a.AbsPath+".map" == b.AbsPath {
-			code, sourceMap = a.Contents, b.Contents
+	var shortestAbsPath string
+	for _, result := range results {
+		if shortestAbsPath == "" || len(result.AbsPath) < len(shortestAbsPath) {
+			shortestAbsPath = result.AbsPath
+		}
+	}
+
+	// Unpack the JavaScript file, the source map file, and the legal comments file
+	for _, result := range results {
+		switch result.AbsPath {
+		case shortestAbsPath:
+			code = result.Contents
+		case shortestAbsPath + ".map":
+			sourceMap = result.Contents
+		case shortestAbsPath + ".LEGAL.txt":
+			legalComments = result.Contents
 		}
 	}
 
@@ -1605,11 +1630,12 @@ func transformImpl(input string, transformOpts TransformOptions) TransformResult
 
 	msgs := log.Done()
 	return TransformResult{
-		Errors:      convertMessagesToPublic(logger.Error, msgs),
-		Warnings:    convertMessagesToPublic(logger.Warning, msgs),
-		Code:        code,
-		Map:         sourceMap,
-		MangleCache: mangleCache,
+		Errors:        convertMessagesToPublic(logger.Error, msgs),
+		Warnings:      convertMessagesToPublic(logger.Warning, msgs),
+		Code:          code,
+		Map:           sourceMap,
+		LegalComments: legalComments,
+		MangleCache:   mangleCache,
 	}
 }
 
