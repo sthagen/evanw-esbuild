@@ -43,6 +43,15 @@ tests.push(
   }),
 )
 
+// Test enabling watch mode and serve mode, which is disallowed
+tests.push(
+  test(['--watch=forever', '--servedir=.'], {}, {
+    expectedStderr: `${errorIcon} [ERROR] Cannot use "watch" with "serve"
+
+`,
+  }),
+)
+
 // Test bogus paths with a file as a parent directory (this happens when you use "pnpx esbuild")
 tests.push(
   test(['entry.js', '--bundle'], {
@@ -440,6 +449,22 @@ if (process.platform !== 'win32') {
         import { foo } from '@monorepo-source/a';
         export function fn() { return foo(); }
       `,
+    }),
+
+    // These tests are for https://github.com/evanw/esbuild/issues/2773
+    test(['--bundle', 'in.js', '--outfile=node.js'], {
+      'in.js': `import {foo} from './baz/bar/foo'; if (foo !== 444) throw 'fail'`,
+      'foo/index.js': `import {qux} from '../qux'; export const foo = 123 + qux`,
+      'qux/index.js': `export const qux = 321`,
+      'bar/foo': { symlink: `../foo` },
+      'baz/bar': { symlink: `../bar` },
+    }),
+    test(['--bundle', 'in.js', '--outfile=node.js'], {
+      'in.js': `import {foo} from './baz/bar/foo'; if (foo !== 444) throw 'fail'`,
+      'foo/index.js': `import {qux} from '../qux'; export const foo = 123 + qux`,
+      'qux/index.js': `export const qux = 321`,
+      'bar/foo': { symlink: `TEST_DIR_ABS_PATH/foo` },
+      'baz/bar': { symlink: `TEST_DIR_ABS_PATH/bar` },
     }),
   )
 }
@@ -1317,6 +1342,36 @@ for (const minify of [[], ['--minify']]) {
       'node2.ts': `throw [foo.bar, require('./node2.ts')] // Force this file to be lazily initialized so foo.js is lazily initialized`,
       'foo.js': `export let foo = {bar: 123}`,
     }),
+
+    // https://github.com/evanw/esbuild/issues/2793
+    test(['--bundle', 'src/index.js', '--outfile=node.js', '--format=esm'].concat(minify), {
+      'src/a.js': `
+        export const A = 42;
+      `,
+      'src/b.js': `
+        export const B = async () => (await import(".")).A
+      `,
+      'src/index.js': `
+        export * from "./a"
+        export * from "./b"
+        import { B } from '.'
+        export let async = async () => { if (42 !== await B()) throw 'fail' }
+      `,
+    }, { async: true }),
+    test(['--bundle', 'src/node.js', '--outdir=.', '--format=esm', '--splitting'].concat(minify), {
+      'src/a.js': `
+        export const A = 42;
+      `,
+      'src/b.js': `
+        export const B = async () => (await import("./node")).A
+      `,
+      'src/node.js': `
+        export * from "./a"
+        export * from "./b"
+        import { B } from './node'
+        export let async = async () => { if (42 !== await B()) throw 'fail' }
+      `,
+    }, { async: true }),
   )
 }
 
@@ -6230,6 +6285,46 @@ for (const flags of [[], ['--bundle']]) {
         }
       }`,
     }),
+
+    // This is an edge case for extensionless files. The file should be treated
+    // as CommonJS even though package.json says "type": "module" because that
+    // only applies to ".js" files in node, not to all JavaScript files.
+    test(['in.js', '--outfile=node.js', '--bundle'], {
+      'in.js': `
+        const fn = require('yargs/yargs')
+        if (fn() !== 123) throw 'fail'
+      `,
+      'node_modules/yargs/package.json': `{
+        "main": "./index.cjs",
+        "exports": {
+          "./package.json": "./package.json",
+          ".": [
+            {
+              "import": "./index.mjs",
+              "require": "./index.cjs"
+            },
+            "./index.cjs"
+          ],
+          "./yargs": [
+            {
+              "import": "./yargs.mjs",
+              "require": "./yargs"
+            },
+            "./yargs"
+          ]
+        },
+        "type": "module",
+        "module": "./index.mjs"
+      }`,
+      'node_modules/yargs/index.cjs': ``,
+      'node_modules/yargs/index.mjs': ``,
+      'node_modules/yargs/yargs.mjs': ``,
+      'node_modules/yargs/yargs': `
+        module.exports = function() {
+          return 123
+        }
+      `,
+    }),
   )
 
   // Node 17+ deliberately broke backward compatibility with packages using mappings
@@ -6562,6 +6657,80 @@ if (process.platform === 'darwin' || process.platform === 'win32') {
   )
 }
 
+// End-to-end watch mode tests
+tests.push(
+  // Validate that the CLI watch mode correctly updates the metafile
+  testWatch({ metafile: true }, async ({ infile, outfile, metafile }) => {
+    await waitForCondition(
+      'initial build',
+      20,
+      () => fs.writeFile(infile, 'foo()'),
+      async () => {
+        assert.strictEqual(await fs.readFile(outfile, 'utf8'), 'foo();\n')
+        assert.strictEqual(JSON.parse(await fs.readFile(metafile, 'utf8')).inputs[path.basename(infile)].bytes, 5)
+      },
+    )
+
+    await waitForCondition(
+      'subsequent build',
+      20,
+      () => fs.writeFile(infile, 'foo(123)'),
+      async () => {
+        assert.strictEqual(await fs.readFile(outfile, 'utf8'), 'foo(123);\n')
+        assert.strictEqual(JSON.parse(await fs.readFile(metafile, 'utf8')).inputs[path.basename(infile)].bytes, 8)
+      },
+    )
+  }),
+
+  // Validate that the CLI watch mode correctly updates the mangle cache
+  testWatch({ args: ['--mangle-props=.'], mangleCache: true }, async ({ infile, outfile, mangleCache }) => {
+    await waitForCondition(
+      'initial build',
+      20,
+      () => fs.writeFile(infile, 'foo()'),
+      async () => {
+        assert.strictEqual(await fs.readFile(outfile, 'utf8'), 'foo();\n')
+        assert.strictEqual(await fs.readFile(mangleCache, 'utf8'), '{}\n')
+      },
+    )
+
+    await waitForCondition(
+      'subsequent build',
+      20,
+      () => fs.writeFile(infile, 'foo(bar.baz)'),
+      async () => {
+        assert.strictEqual(await fs.readFile(outfile, 'utf8'), 'foo(bar.a);\n')
+        assert.strictEqual(await fs.readFile(mangleCache, 'utf8'), '{\n  "baz": "a"\n}\n')
+      },
+    )
+  }),
+)
+
+function waitForCondition(what, seconds, mutator, condition) {
+  return new Promise(async (resolve, reject) => {
+    const start = Date.now()
+    let e
+    try {
+      await mutator()
+      while (true) {
+        if (Date.now() - start > seconds * 1000) {
+          throw new Error(`Timeout of ${seconds} seconds waiting for ${what}` + (e ? `: ${e && e.message || e}` : ''))
+        }
+        await new Promise(r => setTimeout(r, 50))
+        try {
+          await condition()
+          break
+        } catch (err) {
+          e = err
+        }
+      }
+      resolve()
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+
 function test(args, files, options) {
   return async () => {
     const hasBundle = args.includes('--bundle')
@@ -6577,6 +6746,7 @@ function test(args, files, options) {
       const logLevelArgs = args.some(arg => arg.startsWith('--log-level=')) ? [] : ['--log-level=warning']
       const modifiedArgs = (!hasBundle || args.includes(formatArg) ? args : args.concat(formatArg)).concat(logLevelArgs)
       const thisTestDir = path.join(testDir, '' + testCount++)
+      await fs.mkdir(thisTestDir, { recursive: true })
 
       try {
         // Test setup
@@ -6698,6 +6868,83 @@ function testStdout(input, args, callback) {
     } catch (e) {
       console.error(`❌ test failed: ${e && e.message || e}
   dir: ${path.relative(dirname, thisTestDir)}`)
+      return false
+    }
+
+    return true
+  }
+}
+
+function testWatch(options, callback) {
+  return async () => {
+    const thisTestDir = path.join(testDir, '' + testCount++)
+    const infile = path.join(thisTestDir, 'in.js')
+    const outdir = path.join(thisTestDir, 'out')
+    const outfile = path.join(outdir, path.basename(infile))
+    const args = ['--watch=forever', infile, '--outdir=' + outdir, '--color'].concat(options.args || [])
+    let metafile
+    let mangleCache
+
+    if (options.metafile) {
+      metafile = path.join(thisTestDir, 'meta.json')
+      args.push('--metafile=' + metafile)
+    }
+
+    if (options.mangleCache) {
+      mangleCache = path.join(thisTestDir, 'mangle.json')
+      args.push('--mangle-cache=' + mangleCache)
+    }
+
+    let stderrPromise
+    try {
+      await fs.mkdir(thisTestDir, { recursive: true })
+      const maxSeconds = 60
+
+      // Start the child
+      const child = childProcess.spawn(esbuildPath, args, {
+        cwd: thisTestDir,
+        stdio: ['inherit', 'inherit', 'pipe'],
+        timeout: maxSeconds * 1000,
+      })
+
+      // Make sure the child is always killed
+      try {
+        // Buffer stderr in case we need it
+        const stderr = []
+        child.stderr.on('data', data => stderr.push(data))
+        const exitPromise = new Promise((_, reject) => {
+          child.on('close', code => reject(new Error(`Child "esbuild" process exited with code ${code}`)))
+        })
+        stderrPromise = new Promise(resolve => {
+          child.stderr.on('end', () => resolve(Buffer.concat(stderr).toString()))
+        })
+
+        // Run whatever check the caller is doing
+        let timeout
+        await Promise.race([
+          new Promise((_, reject) => {
+            timeout = setTimeout(() => reject(new Error(`Timeout of ${maxSeconds} seconds exceeded`)), maxSeconds * 1000)
+          }),
+          exitPromise,
+          callback({
+            infile,
+            outfile,
+            metafile,
+            mangleCache,
+          }),
+        ])
+        clearTimeout(timeout)
+
+        // Clean up test output
+        removeRecursiveSync(thisTestDir)
+      } finally {
+        child.kill()
+      }
+    } catch (e) {
+      let stderr = stderrPromise ? '\n  stderr:' + ('\n' + await stderrPromise).split('\n').join('\n    ') : ''
+      console.error(`❌ test failed: ${e && e.message || e}
+  dir: ${path.relative(dirname, thisTestDir)}
+  args: ${args.join(' ')}` + stderr)
       return false
     }
 

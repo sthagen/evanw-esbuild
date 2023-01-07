@@ -63,6 +63,36 @@ let buildTests = {
     }
   },
 
+  // Verify that it's possible to disable a loader by setting it to "default".
+  // In particular, verify that it's possible to disable the special loader ""
+  // for extensionless files.
+  async errorIfExtensionlessLoaderIsDisabled({ esbuild, testDir }) {
+    let entry = path.join(testDir, 'entry.js');
+    let what = path.join(testDir, 'what');
+    await writeFileAsync(entry, 'import "./what"')
+    await writeFileAsync(what, 'foo()')
+    await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+    })
+    try {
+      await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        write: false,
+        logLevel: 'silent',
+        loader: { '': 'default' },
+      })
+      throw new Error('Expected build failure');
+    } catch (e) {
+      const relPath = path.relative(process.cwd(), what).split(path.sep).join('/')
+      if (!e.errors || !e.errors[0] || e.errors[0].text !== 'Do not know how to load path: ' + relPath) {
+        throw e;
+      }
+    }
+  },
+
   async mangleCacheBuild({ esbuild }) {
     var result = await esbuild.build({
       stdin: {
@@ -1014,9 +1044,9 @@ body {
     // Check inputs
     assert.deepStrictEqual(json.inputs[makePath(entry)].bytes, 144)
     assert.deepStrictEqual(json.inputs[makePath(entry)].imports, [
-      { path: makePath(imported), kind: 'import-statement' },
-      { path: makePath(css), kind: 'import-statement' },
-      { path: makePath(text), kind: 'require-call' },
+      { path: makePath(imported), kind: 'import-statement', original: './imported' },
+      { path: makePath(css), kind: 'import-statement', original: './example.css' },
+      { path: makePath(text), kind: 'require-call', original: './text.txt' },
     ])
     assert.deepStrictEqual(json.inputs[makePath(imported)].bytes, 18)
     assert.deepStrictEqual(json.inputs[makePath(imported)].imports, [])
@@ -1094,9 +1124,21 @@ body {
     const outEntry2 = makeOutPath(path.basename(entry2));
     const outChunk = makeOutPath(chunk);
 
-    assert.deepStrictEqual(json.inputs[inEntry1], { bytes: 94, imports: [{ path: inImported, kind: 'import-statement' }] })
-    assert.deepStrictEqual(json.inputs[inEntry2], { bytes: 107, imports: [{ path: inImported, kind: 'import-statement' }] })
-    assert.deepStrictEqual(json.inputs[inImported], { bytes: 118, imports: [] })
+    assert.deepStrictEqual(json.inputs[inEntry1], {
+      bytes: 94,
+      imports: [{ path: inImported, kind: 'import-statement', original: './' + path.basename(imported) }],
+      format: 'esm',
+    })
+    assert.deepStrictEqual(json.inputs[inEntry2], {
+      bytes: 107,
+      imports: [{ path: inImported, kind: 'import-statement', original: './' + path.basename(imported) }],
+      format: 'esm',
+    })
+    assert.deepStrictEqual(json.inputs[inImported], {
+      bytes: 118,
+      imports: [],
+      format: 'esm',
+    })
 
     assert.deepStrictEqual(json.outputs[outEntry1].imports, [{ path: makeOutPath(chunk), kind: 'import-statement' }])
     assert.deepStrictEqual(json.outputs[outEntry2].imports, [{ path: makeOutPath(chunk), kind: 'import-statement' }])
@@ -1158,9 +1200,21 @@ body {
     const outEntry2 = makeOutPath(path.basename(entry2));
     const outChunk = makeOutPath(chunk);
 
-    assert.deepStrictEqual(json.inputs[inEntry1], { bytes: 94, imports: [{ path: inImported, kind: 'import-statement' }] })
-    assert.deepStrictEqual(json.inputs[inEntry2], { bytes: 107, imports: [{ path: inImported, kind: 'import-statement' }] })
-    assert.deepStrictEqual(json.inputs[inImported], { bytes: 118, imports: [] })
+    assert.deepStrictEqual(json.inputs[inEntry1], {
+      bytes: 94,
+      imports: [{ path: inImported, kind: 'import-statement', original: './' + path.basename(imported) }],
+      format: 'esm',
+    })
+    assert.deepStrictEqual(json.inputs[inEntry2], {
+      bytes: 107,
+      imports: [{ path: inImported, kind: 'import-statement', original: './' + path.basename(imported) }],
+      format: 'esm',
+    })
+    assert.deepStrictEqual(json.inputs[inImported], {
+      bytes: 118,
+      imports: [],
+      format: 'esm',
+    })
 
     assert.deepStrictEqual(json.outputs[outEntry1].imports, [{ path: makeOutPath(chunk), kind: 'import-statement' }])
     assert.deepStrictEqual(json.outputs[outEntry2].imports, [{ path: makeOutPath(chunk), kind: 'import-statement' }])
@@ -1182,18 +1236,18 @@ body {
     const import2 = path.join(importDir, 'import2.js')
     const shared = path.join(testDir, 'shared.js')
     const outdir = path.join(testDir, 'out')
-    const makeImportPath = (importing, imported) => JSON.stringify('./' + path.relative(path.dirname(importing), imported).split(path.sep).join('/'))
+    const makeImportPath = (importing, imported) => './' + path.relative(path.dirname(importing), imported).split(path.sep).join('/')
     await mkdirAsync(importDir)
     await writeFileAsync(entry, `
-      import ${makeImportPath(entry, shared)}
-      import(${makeImportPath(entry, import1)})
-      import(${makeImportPath(entry, import2)})
+      import ${JSON.stringify(makeImportPath(entry, shared))}
+      import(${JSON.stringify(makeImportPath(entry, import1))})
+      import(${JSON.stringify(makeImportPath(entry, import2))})
     `)
     await writeFileAsync(import1, `
-      import ${makeImportPath(import1, shared)}
+      import ${JSON.stringify(makeImportPath(import1, shared))}
     `)
     await writeFileAsync(import2, `
-      import ${makeImportPath(import2, shared)}
+      import ${JSON.stringify(makeImportPath(import2, shared))}
     `)
     await writeFileAsync(shared, `
       console.log('side effect')
@@ -1228,22 +1282,25 @@ body {
     assert.deepStrictEqual(json.inputs[inEntry], {
       bytes: 112,
       imports: [
-        { path: inShared, kind: 'import-statement' },
-        { path: inImport1, kind: 'dynamic-import' },
-        { path: inImport2, kind: 'dynamic-import' },
-      ]
+        { path: inShared, kind: 'import-statement', original: makeImportPath(entry, shared) },
+        { path: inImport1, kind: 'dynamic-import', original: makeImportPath(entry, import1) },
+        { path: inImport2, kind: 'dynamic-import', original: makeImportPath(entry, import2) },
+      ],
+      format: 'esm',
     })
     assert.deepStrictEqual(json.inputs[inImport1], {
       bytes: 35,
       imports: [
-        { path: inShared, kind: 'import-statement' },
-      ]
+        { path: inShared, kind: 'import-statement', original: makeImportPath(import1, shared) },
+      ],
+      format: 'esm',
     })
     assert.deepStrictEqual(json.inputs[inImport2], {
       bytes: 35,
       imports: [
-        { path: inShared, kind: 'import-statement' },
-      ]
+        { path: inShared, kind: 'import-statement', original: makeImportPath(import2, shared) },
+      ],
+      format: 'esm',
     })
     assert.deepStrictEqual(json.inputs[inShared], { bytes: 38, imports: [] })
 
@@ -1417,11 +1474,11 @@ body {
     const makePath = pathname => path.relative(cwd, pathname).split(path.sep).join('/')
     const json = result.metafile
     assert.deepStrictEqual(json.inputs[makePath(entry)].imports, [
-      { path: makePath(nested1), kind: 'import-statement' },
-      { path: makePath(nested2), kind: 'import-statement' },
+      { path: makePath(nested1), kind: 'import-statement', original: nested1 },
+      { path: makePath(nested2), kind: 'import-statement', original: nested2 },
     ])
     assert.deepStrictEqual(json.inputs[makePath(nested1)].imports, [
-      { path: makePath(nested3), kind: 'import-statement' },
+      { path: makePath(nested3), kind: 'import-statement', original: nested3 },
     ])
     assert.deepStrictEqual(json.inputs[makePath(nested2)].imports, [])
     assert.deepStrictEqual(json.inputs[makePath(nested3)].imports, [])
@@ -1464,12 +1521,12 @@ body {
         [makePath(entry)]: {
           bytes: 98,
           imports: [
-            { path: makePath(imported), kind: 'import-rule' },
+            { path: makePath(imported), kind: 'import-rule', original: './imported' },
             { external: true, kind: 'url-token', path: 'https://example.com/external.png' },
           ]
         },
         [makePath(image)]: { bytes: 8, imports: [] },
-        [makePath(imported)]: { bytes: 48, imports: [{ path: makePath(image), kind: 'url-token' }] },
+        [makePath(imported)]: { bytes: 48, imports: [{ path: makePath(image), kind: 'url-token', original: './example.png' }] },
       },
       outputs: {
         [makePath(output)]: {
@@ -3559,9 +3616,119 @@ let watchTests = {
       result.stop()
     }
   },
+
+  async watchMetafile({ esbuild, testDir }) {
+    const srcDir = path.join(testDir, 'src')
+    const outdir = path.join(testDir, 'out')
+    const input = path.join(srcDir, 'in.js')
+    const output = path.join(outdir, 'in.js')
+    await mkdirAsync(srcDir, { recursive: true })
+    await writeFileAsync(input, `foo()`)
+
+    let onRebuild = () => { }
+    const result = await esbuild.build({
+      entryPoints: [input],
+      outdir,
+      format: 'esm',
+      logLevel: 'silent',
+      metafile: true,
+      watch: {
+        onRebuild: (...args) => onRebuild(args),
+      },
+    })
+    const rebuildUntil = (mutator, condition) => {
+      let timeout
+      return new Promise((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Timeout after 30 seconds')), 30 * 1000)
+        onRebuild = args => {
+          try { if (condition(...args)) clearTimeout(timeout), resolve(args) }
+          catch (e) { clearTimeout(timeout), reject(e) }
+        }
+        mutator()
+      })
+    }
+
+    try {
+      const relInput = path.relative(process.cwd(), input).split(path.sep).join('/')
+      assert.strictEqual(result.metafile.inputs[relInput].bytes, 5)
+      assert.strictEqual(await readFileAsync(output, 'utf8'), 'foo();\n')
+
+      // Rebuild and check that the metafile has been updated
+      {
+        const [error2, result2] = await rebuildUntil(
+          () => writeFileAtomic(input, `foo(123)`),
+          () => fs.readFileSync(output, 'utf8') === 'foo(123);\n',
+        )
+        assert.strictEqual(result2.metafile.inputs[relInput].bytes, 8)
+      }
+    } finally {
+      result.stop()
+    }
+  },
+
+  async watchMangleCache({ esbuild, testDir }) {
+    const srcDir = path.join(testDir, 'src')
+    const outdir = path.join(testDir, 'out')
+    const input = path.join(srcDir, 'in.js')
+    const output = path.join(outdir, 'in.js')
+    await mkdirAsync(srcDir, { recursive: true })
+    await writeFileAsync(input, `foo()`)
+
+    let onRebuild = () => { }
+    const result = await esbuild.build({
+      entryPoints: [input],
+      outdir,
+      format: 'esm',
+      logLevel: 'silent',
+      mangleProps: /./,
+      mangleCache: {},
+      watch: {
+        onRebuild: (...args) => onRebuild(args),
+      },
+    })
+    const rebuildUntil = (mutator, condition) => {
+      let timeout
+      return new Promise((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Timeout after 30 seconds')), 30 * 1000)
+        onRebuild = args => {
+          try { if (condition(...args)) clearTimeout(timeout), resolve(args) }
+          catch (e) { clearTimeout(timeout), reject(e) }
+        }
+        mutator()
+      })
+    }
+
+    try {
+      assert.strictEqual(JSON.stringify(result.mangleCache), '{}')
+
+      // Rebuild and check that the mangle cache has been updated
+      {
+        const [error2, result2] = await rebuildUntil(
+          () => writeFileAtomic(input, `foo(bar.baz)`),
+          () => fs.readFileSync(output, 'utf8') === 'foo(bar.a);\n',
+        )
+        assert.strictEqual(JSON.stringify(result2.mangleCache), '{"baz":"a"}')
+      }
+    } finally {
+      result.stop()
+    }
+  },
 }
 
 let serveTests = {
+  async serveWatch({ esbuild }) {
+    try {
+      const result = await esbuild.serve({}, {
+        watch: true,
+      })
+      result.stop()
+      await result.wait
+      throw new Error('Expected an error to be thrown')
+    } catch (err) {
+      assert.strictEqual(err.message, 'Cannot use "watch" with "serve"')
+    }
+  },
+
   async serveBasic({ esbuild, testDir }) {
     const input = path.join(testDir, 'in.js')
     await writeFileAsync(input, `console.log(123)`)
@@ -5702,7 +5869,7 @@ let syncTests = {
     const input = path.join(testDir, 'in.js')
     const output = path.join(testDir, 'out.js')
     await writeFileAsync(input, 'module.exports = 123')
-    let prettyPath = path.relative(process.cwd(), input).replace(/\\/g, '/')
+    let prettyPath = path.relative(process.cwd(), input).split(path.sep).join('/')
     let text = `// ${prettyPath}\nmodule.exports = 123;\n`
     let result = esbuild.buildSync({ entryPoints: [input], bundle: true, outfile: output, format: 'cjs', write: false })
     assert.strictEqual(result.outputFiles.length, 1)
@@ -5771,7 +5938,7 @@ let syncTests = {
     } catch (error) {
       assert(error instanceof Error, 'Must be an Error object');
       assert.strictEqual(error.message, `Build failed with 1 error:
-${path.relative(process.cwd(), input).replace(/\\/g, '/')}:1:2: ERROR: Unexpected end of file`);
+${path.relative(process.cwd(), input).split(path.sep).join('/')}:1:2: ERROR: Unexpected end of file`);
       assert.strictEqual(error.errors.length, 1);
       assert.strictEqual(error.warnings.length, 0);
     }

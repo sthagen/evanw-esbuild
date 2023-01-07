@@ -1,7 +1,11 @@
 package cli
 
+// This file implements the public CLI. It's deliberately implemented using
+// esbuild's public "Build", "Transform", and "AnalyzeMetafile" APIs instead of
+// using internal APIs so that any tests that cover the CLI also implicitly
+// cover the public API as well.
+
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -1051,7 +1055,7 @@ func runImpl(osArgs []string) int {
 		// Special-case running a server
 		if arg == "--serve" || strings.HasPrefix(arg, "--serve=") || strings.HasPrefix(arg, "--servedir=") {
 			if err := serveImpl(osArgs); err != nil {
-				logger.PrintErrorToStderr(osArgs, err.Error())
+				logger.PrintErrorWithNoteToStderr(osArgs, err.Text, err.Note)
 				return 1
 			}
 			return 0
@@ -1207,50 +1211,60 @@ func runImpl(osArgs []string) int {
 					}
 				}
 			}
-
-			// Write out the metafile whenever we rebuild
-			if buildOptions.Watch != nil {
-				buildOptions.Watch.OnRebuild = func(result api.BuildResult) {
-					writeMetafile(result.Metafile)
-				}
-			}
 		}
 
-		// Always generate a metafile if we're analyzing, even if it won't be written out
+		// Print metafile analysis after the build if it's enabled
+		var printAnalysis func(metafile string)
 		if analyze {
+			printAnalysis = func(metafile string) {
+				if metafile == "" {
+					return
+				}
+				logger.PrintTextWithColor(os.Stderr, logger.OutputOptionsForArgs(osArgs).Color, func(colors logger.Colors) string {
+					return api.AnalyzeMetafile(metafile, api.AnalyzeMetafileOptions{
+						Color:   colors != logger.Colors{},
+						Verbose: analyzeVerbose,
+					})
+				})
+				os.Stderr.WriteString("\n")
+			}
+
+			// Always generate a metafile if we're analyzing, even if it won't be written out
 			buildOptions.Metafile = true
 		}
+
+		// Handle post-build actions with a plugin so they also work in watch mode
+		buildOptions.Plugins = append(buildOptions.Plugins, api.Plugin{
+			Name: "PostBuildActions",
+			Setup: func(build api.PluginBuild) {
+				build.OnEnd(func(result *api.BuildResult) {
+					// Print our analysis of the metafile
+					if printAnalysis != nil {
+						printAnalysis(result.Metafile)
+					}
+
+					// Write the metafile to the file system
+					if writeMetafile != nil {
+						writeMetafile(result.Metafile)
+					}
+
+					// Write the mangle cache to the file system
+					if writeMangleCache != nil {
+						writeMangleCache(result.MangleCache)
+					}
+				})
+			},
+		})
 
 		// Run the build
 		result := api.Build(*buildOptions)
 
-		// Print the analysis after the build
-		if analyze {
-			logger.PrintTextWithColor(os.Stderr, logger.OutputOptionsForArgs(osArgs).Color, func(colors logger.Colors) string {
-				return api.AnalyzeMetafile(result.Metafile, api.AnalyzeMetafileOptions{
-					Color:   colors != logger.Colors{},
-					Verbose: analyzeVerbose,
-				})
-			})
-			os.Stderr.WriteString("\n")
-		}
-
-		// Write the metafile to the file system
-		if writeMetafile != nil {
-			writeMetafile(result.Metafile)
-		}
-
-		// Write the mangle cache to the file system
-		if writeMangleCache != nil {
-			writeMangleCache(result.MangleCache)
-		}
-
 		// Do not exit if we're in watch mode
 		if buildOptions.Watch != nil {
-			<-make(chan bool)
+			<-make(chan struct{})
 		}
 
-		// Stop if there were errors
+		// Return a non-zero exit code if there were errors
 		if len(result.Errors) > 0 {
 			return 1
 		}
@@ -1274,14 +1288,7 @@ func runImpl(osArgs []string) int {
 		os.Stdout.Write(result.Code)
 
 	case err != nil:
-		msg := logger.Msg{
-			Kind: logger.Error,
-			Data: logger.MsgData{Text: err.Text},
-		}
-		if err.Note != "" {
-			msg.Notes = []logger.MsgData{{Text: err.Note}}
-		}
-		logger.PrintMessageToStderr(osArgs, msg)
+		logger.PrintErrorWithNoteToStderr(osArgs, err.Text, err.Note)
 		return 1
 	}
 
@@ -1332,10 +1339,10 @@ func parseServeOptionsImpl(osArgs []string) (api.ServeOptions, []string, error) 
 	}, filteredArgs, nil
 }
 
-func serveImpl(osArgs []string) error {
+func serveImpl(osArgs []string) *cli_helpers.ErrorWithNote {
 	serveOptions, filteredArgs, err := parseServeOptionsImpl(osArgs)
 	if err != nil {
-		return err
+		return cli_helpers.MakeErrorWithNote(err.Error(), "")
 	}
 
 	options := newBuildOptions()
@@ -1345,8 +1352,7 @@ func serveImpl(osArgs []string) error {
 	options.LogLevel = api.LogLevelInfo
 
 	if _, err := parseOptionsImpl(filteredArgs, &options, nil, kindInternal); err != nil {
-		logger.PrintErrorToStderr(filteredArgs, err.Text)
-		return errors.New(err.Text)
+		return err
 	}
 
 	serveOptions.OnRequest = func(args api.ServeOnRequestArgs) {
@@ -1365,7 +1371,7 @@ func serveImpl(osArgs []string) error {
 
 	result, err := api.Serve(serveOptions, options)
 	if err != nil {
-		return err
+		return cli_helpers.MakeErrorWithNote(err.Error(), "")
 	}
 
 	// Show what actually got bound if the port was 0
@@ -1414,7 +1420,12 @@ func serveImpl(osArgs []string) error {
 		sb.WriteString("\n\n")
 		return sb.String()
 	})
-	return result.Wait()
+
+	if err := result.Wait(); err != nil {
+		return cli_helpers.MakeErrorWithNote(err.Error(), "")
+	}
+
+	return nil
 }
 
 func parseLogLevel(value string, arg string) (api.LogLevel, *cli_helpers.ErrorWithNote) {

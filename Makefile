@@ -80,19 +80,28 @@ verify-source-map: version-go | scripts/node_modules
 	node scripts/esbuild.js npm/esbuild/package.json --version
 	node scripts/verify-source-map.js
 
-end-to-end-tests: version-go | scripts/node_modules
+end-to-end-tests: version-go
 	node scripts/esbuild.js npm/esbuild/package.json --version
 	node scripts/end-to-end-tests.js
 
-js-api-tests: version-go | scripts/node_modules
+js-api-tests: version-go
 	node scripts/esbuild.js npm/esbuild/package.json --version
 	node scripts/js-api-tests.js
 
-plugin-tests: version-go | scripts/node_modules
+plugin-tests: version-go
 	node scripts/plugin-tests.js
 
 ts-type-tests: | scripts/node_modules
 	node scripts/ts-type-tests.js
+
+require/old-ts/node_modules:
+	cd require/old-ts && npm ci
+
+test-old-ts: platform-neutral | require/old-ts/node_modules
+	rm -fr scripts/.test-old-ts && mkdir scripts/.test-old-ts
+	cp `find npm/esbuild -name '*.d.ts'` scripts/.test-old-ts
+	cd scripts/.test-old-ts && ../../require/old-ts/node_modules/.bin/tsc *.d.ts
+	rm -fr scripts/.test-old-ts
 
 node-unref-tests: | scripts/node_modules
 	node scripts/node-unref-tests.js
@@ -1022,7 +1031,6 @@ READMIN_ESBUILD_FLAGS += --format=esm
 READMIN_ESBUILD_FLAGS += --loader:.png=file
 READMIN_ESBUILD_FLAGS += --loader:.svg=file
 READMIN_ESBUILD_FLAGS += --minify
-READMIN_ESBUILD_FLAGS += --outdir=derp
 READMIN_ESBUILD_FLAGS += --sourcemap
 READMIN_ESBUILD_FLAGS += --splitting
 READMIN_ESBUILD_FLAGS += --target=esnext

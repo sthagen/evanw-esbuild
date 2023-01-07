@@ -196,7 +196,7 @@ export interface OutputFile {
   /** "text" as bytes */
   contents: Uint8Array;
   /** "contents" as text (changes automatically with "contents") */
-  get text(): string;
+  readonly text: string;
 }
 
 export interface BuildInvalidate {
@@ -442,7 +442,9 @@ export interface Metafile {
         path: string
         kind: ImportKind
         external?: boolean
+        original?: string
       }[]
+      format?: 'cjs' | 'esm'
     }
   }
   outputs: {
