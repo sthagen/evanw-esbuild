@@ -342,18 +342,20 @@ type printer struct {
 	jsonMetadataImports    []string
 	options                Options
 	builder                sourcemap.ChunkBuilder
-	stmtStart              int
-	exportDefaultStart     int
-	arrowExprStart         int
-	forOfInitStart         int
-	prevOpEnd              int
-	prevNumEnd             int
-	prevRegExpEnd          int
-	noLeadingNewlineHere   int
-	intToBytesBuffer       [64]byte
-	needsSemicolon         bool
-	prevOp                 js_ast.OpCode
-	moduleType             js_ast.ModuleType
+
+	stmtStart          int
+	exportDefaultStart int
+	arrowExprStart     int
+	forOfInitStart     int
+
+	prevOpEnd            int
+	prevNumEnd           int
+	prevRegExpEnd        int
+	noLeadingNewlineHere int
+	intToBytesBuffer     [64]byte
+	needsSemicolon       bool
+	prevOp               js_ast.OpCode
+	moduleType           js_ast.ModuleType
 }
 
 func (p *printer) print(text string) {
@@ -1621,12 +1623,58 @@ func (p *printer) isIdentifierOrNumericConstantOrPropertyAccess(expr js_ast.Expr
 	return false
 }
 
+type exprStartFlags uint8
+
+const (
+	stmtStartFlag exprStartFlags = 1 << iota
+	exportDefaultStartFlag
+	arrowExprStartFlag
+	forOfInitStartFlag
+)
+
+func (p *printer) saveExprStartFlags() (flags exprStartFlags) {
+	n := len(p.js)
+	if p.stmtStart == n {
+		flags |= stmtStartFlag
+	}
+	if p.exportDefaultStart == n {
+		flags |= exportDefaultStartFlag
+	}
+	if p.arrowExprStart == n {
+		flags |= arrowExprStartFlag
+	}
+	if p.forOfInitStart == n {
+		flags |= forOfInitStartFlag
+	}
+	return
+}
+
+func (p *printer) restoreExprStartFlags(flags exprStartFlags) {
+	if flags != 0 {
+		n := len(p.js)
+		if (flags & stmtStartFlag) != 0 {
+			p.stmtStart = n
+		}
+		if (flags & exportDefaultStartFlag) != 0 {
+			p.exportDefaultStart = n
+		}
+		if (flags & arrowExprStartFlag) != 0 {
+			p.arrowExprStart = n
+		}
+		if (flags & forOfInitStartFlag) != 0 {
+			p.forOfInitStart = n
+		}
+	}
+}
+
 // Print any stored comments that are associated with this location
 func (p *printer) printExprCommentsAtLoc(loc logger.Loc) {
 	if p.options.MinifyWhitespace {
 		return
 	}
 	if comments := p.exprComments[loc]; comments != nil && !p.printedExprComments[loc] {
+		flags := p.saveExprStartFlags()
+
 		// We must never generate a newline before certain expressions. For example,
 		// generating a newline before the expression in a "return" statement will
 		// cause a semicolon to be inserted, which would change the code's behavior.
@@ -1653,11 +1701,15 @@ func (p *printer) printExprCommentsAtLoc(loc logger.Loc) {
 
 		// Mark these comments as printed so we don't print them again
 		p.printedExprComments[loc] = true
+
+		p.restoreExprStartFlags(flags)
 	}
 }
 
 func (p *printer) printExprCommentsAfterCloseTokenAtLoc(loc logger.Loc) {
 	if comments := p.exprComments[loc]; comments != nil && !p.printedExprComments[loc] {
+		flags := p.saveExprStartFlags()
+
 		for _, comment := range comments {
 			p.printIndent()
 			p.printIndentedComment(comment)
@@ -1665,6 +1717,8 @@ func (p *printer) printExprCommentsAfterCloseTokenAtLoc(loc logger.Loc) {
 
 		// Mark these comments as printed so we don't print them again
 		p.printedExprComments[loc] = true
+
+		p.restoreExprStartFlags(flags)
 	}
 }
 
@@ -2057,16 +2111,10 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 		}
 
 		if hasPureComment {
-			wasStmtStart := p.stmtStart == len(p.js)
-			wasExportDefaultStart := p.exportDefaultStart == len(p.js)
+			flags := p.saveExprStartFlags()
 			p.addSourceMapping(expr.Loc)
 			p.print("/* @__PURE__ */ ")
-			if wasStmtStart {
-				p.stmtStart = len(p.js)
-			}
-			if wasExportDefaultStart {
-				p.exportDefaultStart = len(p.js)
-			}
+			p.restoreExprStartFlags(flags)
 		}
 
 		// We don't ever want to accidentally generate a direct eval expression here
@@ -2412,7 +2460,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 		if len(e.Body.Block.Stmts) == 1 && e.PreferExpr {
 			if s, ok := e.Body.Block.Stmts[0].Data.(*js_ast.SReturn); ok && s.ValueOrNil.Data != nil {
 				p.arrowExprStart = len(p.js)
-				p.printExpr(s.ValueOrNil, js_ast.LComma, flags&forbidIn)
+				p.printExprWithoutLeadingNewline(s.ValueOrNil, js_ast.LComma, flags&forbidIn)
 				wasPrinted = true
 			}
 		}
@@ -2779,7 +2827,7 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 				p.print("*")
 			}
 			p.printSpace()
-			p.printExpr(e.ValueOrNil, js_ast.LYield, 0)
+			p.printExprWithoutLeadingNewline(e.ValueOrNil, js_ast.LYield, 0)
 		}
 
 		if wrap {
@@ -3267,7 +3315,17 @@ func (p *printer) printIf(s *js_ast.SIf) {
 	p.print("if")
 	p.printSpace()
 	p.print("(")
-	p.printExpr(s.Test, js_ast.LLowest, 0)
+	if p.willPrintExprCommentsAtLoc(s.Test.Loc) {
+		p.printNewline()
+		p.options.Indent++
+		p.printIndent()
+		p.printExpr(s.Test, js_ast.LLowest, 0)
+		p.printNewline()
+		p.options.Indent--
+		p.printIndent()
+	} else {
+		p.printExpr(s.Test, js_ast.LLowest, 0)
+	}
 	p.print(")")
 
 	// Simplify the else branch, which may disappear entirely
@@ -3613,7 +3671,7 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 			// Functions and classes must be wrapped to avoid confusion with their statement forms
 			p.exportDefaultStart = len(p.js)
 
-			p.printExpr(s2.Value, js_ast.LComma, 0)
+			p.printExprWithoutLeadingNewline(s2.Value, js_ast.LComma, 0)
 			p.printSemicolonAfterStatement()
 			return
 
@@ -3803,7 +3861,17 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		p.print("while")
 		p.printSpace()
 		p.print("(")
-		p.printExpr(s.Test, js_ast.LLowest, 0)
+		if p.willPrintExprCommentsAtLoc(s.Test.Loc) {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+			p.printExpr(s.Test, js_ast.LLowest, 0)
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
+		} else {
+			p.printExpr(s.Test, js_ast.LLowest, 0)
+		}
 		p.print(")")
 		p.printSemicolonAfterStatement()
 
@@ -3814,12 +3882,29 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		p.print("for")
 		p.printSpace()
 		p.print("(")
+		hasInitComment := p.willPrintExprCommentsAtLoc(s.Init.Loc)
+		hasValueComment := p.willPrintExprCommentsAtLoc(s.Value.Loc)
+		if hasInitComment || hasValueComment {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+		}
 		p.printForLoopInit(s.Init, forbidIn)
 		p.printSpace()
 		p.printSpaceBeforeIdentifier()
 		p.print("in")
-		p.printSpace()
+		if hasValueComment {
+			p.printNewline()
+			p.printIndent()
+		} else {
+			p.printSpace()
+		}
 		p.printExpr(s.Value, js_ast.LLowest, 0)
+		if hasInitComment || hasValueComment {
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
+		}
 		p.print(")")
 		p.printBody(s.Body)
 
@@ -3833,17 +3918,34 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		}
 		p.printSpace()
 		p.print("(")
-		p.forOfInitStart = len(p.js)
+		hasInitComment := p.willPrintExprCommentsAtLoc(s.Init.Loc)
+		hasValueComment := p.willPrintExprCommentsAtLoc(s.Value.Loc)
 		flags := forbidIn | isFollowedByOf
 		if s.IsAwait {
 			flags |= isInsideForAwait
 		}
+		if hasInitComment || hasValueComment {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+		}
+		p.forOfInitStart = len(p.js)
 		p.printForLoopInit(s.Init, flags)
 		p.printSpace()
 		p.printSpaceBeforeIdentifier()
 		p.print("of")
-		p.printSpace()
+		if hasValueComment {
+			p.printNewline()
+			p.printIndent()
+		} else {
+			p.printSpace()
+		}
 		p.printExpr(s.Value, js_ast.LComma, 0)
+		if hasInitComment || hasValueComment {
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
+		}
 		p.print(")")
 		p.printBody(s.Body)
 
@@ -3854,7 +3956,17 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		p.print("while")
 		p.printSpace()
 		p.print("(")
-		p.printExpr(s.Test, js_ast.LLowest, 0)
+		if p.willPrintExprCommentsAtLoc(s.Test.Loc) {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+			p.printExpr(s.Test, js_ast.LLowest, 0)
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
+		} else {
+			p.printExpr(s.Test, js_ast.LLowest, 0)
+		}
 		p.print(")")
 		p.printBody(s.Body)
 
@@ -3865,7 +3977,17 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		p.print("with")
 		p.printSpace()
 		p.print("(")
-		p.printExpr(s.Value, js_ast.LLowest, 0)
+		if p.willPrintExprCommentsAtLoc(s.Value.Loc) {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+			p.printExpr(s.Value, js_ast.LLowest, 0)
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
+		} else {
+			p.printExpr(s.Value, js_ast.LLowest, 0)
+		}
 		p.print(")")
 		p.printBody(s.Body)
 
@@ -3937,18 +4059,42 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		p.print("for")
 		p.printSpace()
 		p.print("(")
+		isMultiLine :=
+			(init.Data != nil && p.willPrintExprCommentsAtLoc(init.Loc)) ||
+				(s.TestOrNil.Data != nil && p.willPrintExprCommentsAtLoc(s.TestOrNil.Loc)) ||
+				(update.Data != nil && p.willPrintExprCommentsAtLoc(update.Loc))
+		if isMultiLine {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+		}
 		if init.Data != nil {
 			p.printForLoopInit(init, forbidIn)
 		}
 		p.print(";")
-		p.printSpace()
+		if isMultiLine {
+			p.printNewline()
+			p.printIndent()
+		} else {
+			p.printSpace()
+		}
 		if s.TestOrNil.Data != nil {
 			p.printExpr(s.TestOrNil, js_ast.LLowest, 0)
 		}
 		p.print(";")
-		p.printSpace()
+		if !isMultiLine {
+			p.printSpace()
+		} else if update.Data != nil {
+			p.printNewline()
+			p.printIndent()
+		}
 		if update.Data != nil {
 			p.printExpr(update, js_ast.LLowest, exprResultIsUnused)
+		}
+		if isMultiLine {
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
 		}
 		p.print(")")
 		p.printBody(s.Body)
@@ -3960,7 +4106,17 @@ func (p *printer) printStmt(stmt js_ast.Stmt, flags printStmtFlags) {
 		p.print("switch")
 		p.printSpace()
 		p.print("(")
-		p.printExpr(s.Test, js_ast.LLowest, 0)
+		if p.willPrintExprCommentsAtLoc(s.Test.Loc) {
+			p.printNewline()
+			p.options.Indent++
+			p.printIndent()
+			p.printExpr(s.Test, js_ast.LLowest, 0)
+			p.printNewline()
+			p.options.Indent--
+			p.printIndent()
+		} else {
+			p.printExpr(s.Test, js_ast.LLowest, 0)
+		}
 		p.print(")")
 		p.printSpace()
 		p.addSourceMapping(s.BodyLoc)
@@ -4258,20 +4414,23 @@ type PrintResult struct {
 
 func Print(tree js_ast.AST, symbols js_ast.SymbolMap, r renamer.Renamer, options Options) PrintResult {
 	p := &printer{
-		symbols:            symbols,
-		renamer:            r,
-		importRecords:      tree.ImportRecords,
-		options:            options,
-		moduleType:         tree.ModuleTypeData.Type,
-		exprComments:       tree.ExprComments,
+		symbols:       symbols,
+		renamer:       r,
+		importRecords: tree.ImportRecords,
+		options:       options,
+		moduleType:    tree.ModuleTypeData.Type,
+		exprComments:  tree.ExprComments,
+
 		stmtStart:          -1,
 		exportDefaultStart: -1,
 		arrowExprStart:     -1,
 		forOfInitStart:     -1,
-		prevOpEnd:          -1,
-		prevNumEnd:         -1,
-		prevRegExpEnd:      -1,
-		builder:            sourcemap.MakeChunkBuilder(options.InputSourceMap, options.LineOffsetTables, options.ASCIIOnly),
+
+		prevOpEnd:            -1,
+		prevNumEnd:           -1,
+		prevRegExpEnd:        -1,
+		noLeadingNewlineHere: -1,
+		builder:              sourcemap.MakeChunkBuilder(options.InputSourceMap, options.LineOffsetTables, options.ASCIIOnly),
 	}
 
 	if p.exprComments != nil {

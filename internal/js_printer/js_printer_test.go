@@ -543,6 +543,19 @@ func TestFunction(t *testing.T) {
 		"function foo([, ,] = [, ,]) {\n}\n")
 }
 
+func TestCommentsAndParentheses(t *testing.T) {
+	expectPrinted(t, "(/* foo */ { x() { foo() } }.x());", "/* foo */\n({ x() {\n  foo();\n} }).x();\n")
+	expectPrinted(t, "(/* foo */ function f() { foo(f) }());", "/* foo */\n(function f() {\n  foo(f);\n})();\n")
+	expectPrinted(t, "(/* foo */ class x { static y() { foo(x) } }.y());", "/* foo */\n(class x {\n  static y() {\n    foo(x);\n  }\n}).y();\n")
+	expectPrinted(t, "(/* @__PURE__ */ (() => foo())());", "/* @__PURE__ */ (() => foo())();\n")
+	expectPrinted(t, "export default (/* foo */ function f() {});", "export default (\n  /* foo */\n  function f() {\n  }\n);\n")
+	expectPrinted(t, "export default (/* foo */ class x {});", "export default (\n  /* foo */\n  class x {\n  }\n);\n")
+	expectPrinted(t, "x = () => (/* foo */ {});", "x = () => (\n  /* foo */\n  {}\n);\n")
+	expectPrinted(t, "for ((/* foo */ let).x of y) ;", "for (\n  /* foo */\n  (let).x of y\n)\n  ;\n")
+	expectPrinted(t, "for (/* foo */ (let).x of y) ;", "for (\n  /* foo */\n  (let).x of y\n)\n  ;\n")
+	expectPrinted(t, "function *x() { yield (/* foo */ y) }", "function* x() {\n  yield (\n    /* foo */\n    y\n  );\n}\n")
+}
+
 func TestPureComment(t *testing.T) {
 	expectPrinted(t,
 		"(function() {})",
