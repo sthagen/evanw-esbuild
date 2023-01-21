@@ -1,12 +1,12 @@
-import * as types from "./types";
-import * as protocol from "./stdio_protocol";
+import type * as types from "./types"
+import * as protocol from "./stdio_protocol"
 
-declare const ESBUILD_VERSION: string;
+declare const ESBUILD_VERSION: string
 
 const quote: (x: string) => string = JSON.stringify
 
-const buildLogLevelDefault = 'warning';
-const transformLogLevelDefault = 'silent';
+const buildLogLevelDefault = 'warning'
+const transformLogLevelDefault = 'silent'
 
 function validateTarget(target: string): string {
   validateStringValue(target, 'target')
@@ -14,86 +14,83 @@ function validateTarget(target: string): string {
   return target
 }
 
-let canBeAnything = () => null;
+let canBeAnything = () => null
 
 let mustBeBoolean = (value: boolean | undefined): string | null =>
-  typeof value === 'boolean' ? null : 'a boolean';
-
-let mustBeBooleanOrObject = (value: Object | boolean | undefined): string | null =>
-  typeof value === 'boolean' || (typeof value === 'object' && !Array.isArray(value)) ? null : 'a boolean or an object';
+  typeof value === 'boolean' ? null : 'a boolean'
 
 let mustBeString = (value: string | undefined): string | null =>
-  typeof value === 'string' ? null : 'a string';
+  typeof value === 'string' ? null : 'a string'
 
 let mustBeRegExp = (value: RegExp | undefined): string | null =>
-  value instanceof RegExp ? null : 'a RegExp object';
+  value instanceof RegExp ? null : 'a RegExp object'
 
 let mustBeInteger = (value: number | undefined): string | null =>
-  typeof value === 'number' && value === (value | 0) ? null : 'an integer';
+  typeof value === 'number' && value === (value | 0) ? null : 'an integer'
 
 let mustBeFunction = (value: Function | undefined): string | null =>
-  typeof value === 'function' ? null : 'a function';
+  typeof value === 'function' ? null : 'a function'
 
 let mustBeArray = <T>(value: T[] | undefined): string | null =>
-  Array.isArray(value) ? null : 'an array';
+  Array.isArray(value) ? null : 'an array'
 
 let mustBeObject = (value: Object | undefined): string | null =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? null : 'an object';
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? null : 'an object'
+
+let mustBeEntryPoints = (value: types.BuildOptions['entryPoints']): string | null =>
+  typeof value === 'object' && value !== null ? null : 'an array or an object'
 
 let mustBeWebAssemblyModule = (value: WebAssembly.Module | undefined): string | null =>
-  value instanceof WebAssembly.Module ? null : 'a WebAssembly.Module';
-
-let mustBeArrayOrRecord = <T extends string>(value: T[] | Record<T, T> | undefined): string | null =>
-  typeof value === 'object' && value !== null ? null : 'an array or an object';
+  value instanceof WebAssembly.Module ? null : 'a WebAssembly.Module'
 
 let mustBeObjectOrNull = (value: Object | null | undefined): string | null =>
-  typeof value === 'object' && !Array.isArray(value) ? null : 'an object or null';
+  typeof value === 'object' && !Array.isArray(value) ? null : 'an object or null'
 
 let mustBeStringOrBoolean = (value: string | boolean | undefined): string | null =>
-  typeof value === 'string' || typeof value === 'boolean' ? null : 'a string or a boolean';
+  typeof value === 'string' || typeof value === 'boolean' ? null : 'a string or a boolean'
 
 let mustBeStringOrObject = (value: string | Object | undefined): string | null =>
-  typeof value === 'string' || typeof value === 'object' && value !== null && !Array.isArray(value) ? null : 'a string or an object';
+  typeof value === 'string' || typeof value === 'object' && value !== null && !Array.isArray(value) ? null : 'a string or an object'
 
 let mustBeStringOrArray = (value: string | string[] | undefined): string | null =>
-  typeof value === 'string' || Array.isArray(value) ? null : 'a string or an array';
+  typeof value === 'string' || Array.isArray(value) ? null : 'a string or an array'
 
 let mustBeStringOrUint8Array = (value: string | Uint8Array | undefined): string | null =>
-  typeof value === 'string' || value instanceof Uint8Array ? null : 'a string or a Uint8Array';
+  typeof value === 'string' || value instanceof Uint8Array ? null : 'a string or a Uint8Array'
 
 let mustBeStringOrURL = (value: string | URL | undefined): string | null =>
-  typeof value === 'string' || value instanceof URL ? null : 'a string or a URL';
+  typeof value === 'string' || value instanceof URL ? null : 'a string or a URL'
 
-type OptionKeys = { [key: string]: boolean };
+type OptionKeys = { [key: string]: boolean }
 
 function getFlag<T, K extends (keyof T & string)>(object: T, keys: OptionKeys, key: K, mustBeFn: (value: T[K]) => string | null): T[K] | undefined {
-  let value = object[key];
-  keys[key + ''] = true;
-  if (value === undefined) return undefined;
-  let mustBe = mustBeFn(value);
-  if (mustBe !== null) throw new Error(`${quote(key)} must be ${mustBe}`);
-  return value;
+  let value = object[key]
+  keys[key + ''] = true
+  if (value === undefined) return undefined
+  let mustBe = mustBeFn(value)
+  if (mustBe !== null) throw new Error(`${quote(key)} must be ${mustBe}`)
+  return value
 }
 
 function checkForInvalidFlags(object: Object, keys: OptionKeys, where: string): void {
   for (let key in object) {
     if (!(key in keys)) {
-      throw new Error(`Invalid option ${where}: ${quote(key)}`);
+      throw new Error(`Invalid option ${where}: ${quote(key)}`)
     }
   }
 }
 
 export function validateInitializeOptions(options: types.InitializeOptions): types.InitializeOptions {
-  let keys: OptionKeys = Object.create(null);
-  let wasmURL = getFlag(options, keys, 'wasmURL', mustBeStringOrURL);
-  let wasmModule = getFlag(options, keys, 'wasmModule', mustBeWebAssemblyModule);
-  let worker = getFlag(options, keys, 'worker', mustBeBoolean);
-  checkForInvalidFlags(options, keys, 'in initialize() call');
+  let keys: OptionKeys = Object.create(null)
+  let wasmURL = getFlag(options, keys, 'wasmURL', mustBeStringOrURL)
+  let wasmModule = getFlag(options, keys, 'wasmModule', mustBeWebAssemblyModule)
+  let worker = getFlag(options, keys, 'worker', mustBeBoolean)
+  checkForInvalidFlags(options, keys, 'in initialize() call')
   return {
     wasmURL,
     wasmModule,
     worker,
-  };
+  }
 }
 
 type MangleCache = Record<string, string | false>
@@ -114,109 +111,109 @@ function validateMangleCache(mangleCache: MangleCache | undefined): MangleCache 
   return validated
 }
 
-type CommonOptions = types.BuildOptions | types.TransformOptions;
+type CommonOptions = types.BuildOptions | types.TransformOptions
 
 function pushLogFlags(flags: string[], options: CommonOptions, keys: OptionKeys, isTTY: boolean, logLevelDefault: types.LogLevel): void {
-  let color = getFlag(options, keys, 'color', mustBeBoolean);
-  let logLevel = getFlag(options, keys, 'logLevel', mustBeString);
-  let logLimit = getFlag(options, keys, 'logLimit', mustBeInteger);
+  let color = getFlag(options, keys, 'color', mustBeBoolean)
+  let logLevel = getFlag(options, keys, 'logLevel', mustBeString)
+  let logLimit = getFlag(options, keys, 'logLimit', mustBeInteger)
 
-  if (color !== void 0) flags.push(`--color=${color}`);
+  if (color !== void 0) flags.push(`--color=${color}`)
   else if (isTTY) flags.push(`--color=true`); // This is needed to fix "execFileSync" which buffers stderr
-  flags.push(`--log-level=${logLevel || logLevelDefault}`);
-  flags.push(`--log-limit=${logLimit || 0}`);
+  flags.push(`--log-level=${logLevel || logLevelDefault}`)
+  flags.push(`--log-limit=${logLimit || 0}`)
 }
 
 function validateStringValue(value: unknown, what: string, key?: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`Expected value for ${what}${key !== void 0 ? ' ' + quote(key) : ''} to be a string, got ${typeof value} instead`);
+    throw new Error(`Expected value for ${what}${key !== void 0 ? ' ' + quote(key) : ''} to be a string, got ${typeof value} instead`)
   }
   return value
 }
 
 function pushCommonFlags(flags: string[], options: CommonOptions, keys: OptionKeys): void {
-  let legalComments = getFlag(options, keys, 'legalComments', mustBeString);
-  let sourceRoot = getFlag(options, keys, 'sourceRoot', mustBeString);
-  let sourcesContent = getFlag(options, keys, 'sourcesContent', mustBeBoolean);
-  let target = getFlag(options, keys, 'target', mustBeStringOrArray);
-  let format = getFlag(options, keys, 'format', mustBeString);
-  let globalName = getFlag(options, keys, 'globalName', mustBeString);
-  let mangleProps = getFlag(options, keys, 'mangleProps', mustBeRegExp);
-  let reserveProps = getFlag(options, keys, 'reserveProps', mustBeRegExp);
-  let mangleQuoted = getFlag(options, keys, 'mangleQuoted', mustBeBoolean);
-  let minify = getFlag(options, keys, 'minify', mustBeBoolean);
-  let minifySyntax = getFlag(options, keys, 'minifySyntax', mustBeBoolean);
-  let minifyWhitespace = getFlag(options, keys, 'minifyWhitespace', mustBeBoolean);
-  let minifyIdentifiers = getFlag(options, keys, 'minifyIdentifiers', mustBeBoolean);
-  let drop = getFlag(options, keys, 'drop', mustBeArray);
-  let charset = getFlag(options, keys, 'charset', mustBeString);
-  let treeShaking = getFlag(options, keys, 'treeShaking', mustBeBoolean);
-  let ignoreAnnotations = getFlag(options, keys, 'ignoreAnnotations', mustBeBoolean);
-  let jsx = getFlag(options, keys, 'jsx', mustBeString);
-  let jsxFactory = getFlag(options, keys, 'jsxFactory', mustBeString);
-  let jsxFragment = getFlag(options, keys, 'jsxFragment', mustBeString);
-  let jsxImportSource = getFlag(options, keys, 'jsxImportSource', mustBeString);
-  let jsxDev = getFlag(options, keys, 'jsxDev', mustBeBoolean);
-  let jsxSideEffects = getFlag(options, keys, 'jsxSideEffects', mustBeBoolean);
-  let define = getFlag(options, keys, 'define', mustBeObject);
-  let logOverride = getFlag(options, keys, 'logOverride', mustBeObject);
-  let supported = getFlag(options, keys, 'supported', mustBeObject);
-  let pure = getFlag(options, keys, 'pure', mustBeArray);
-  let keepNames = getFlag(options, keys, 'keepNames', mustBeBoolean);
-  let platform = getFlag(options, keys, 'platform', mustBeString);
+  let legalComments = getFlag(options, keys, 'legalComments', mustBeString)
+  let sourceRoot = getFlag(options, keys, 'sourceRoot', mustBeString)
+  let sourcesContent = getFlag(options, keys, 'sourcesContent', mustBeBoolean)
+  let target = getFlag(options, keys, 'target', mustBeStringOrArray)
+  let format = getFlag(options, keys, 'format', mustBeString)
+  let globalName = getFlag(options, keys, 'globalName', mustBeString)
+  let mangleProps = getFlag(options, keys, 'mangleProps', mustBeRegExp)
+  let reserveProps = getFlag(options, keys, 'reserveProps', mustBeRegExp)
+  let mangleQuoted = getFlag(options, keys, 'mangleQuoted', mustBeBoolean)
+  let minify = getFlag(options, keys, 'minify', mustBeBoolean)
+  let minifySyntax = getFlag(options, keys, 'minifySyntax', mustBeBoolean)
+  let minifyWhitespace = getFlag(options, keys, 'minifyWhitespace', mustBeBoolean)
+  let minifyIdentifiers = getFlag(options, keys, 'minifyIdentifiers', mustBeBoolean)
+  let drop = getFlag(options, keys, 'drop', mustBeArray)
+  let charset = getFlag(options, keys, 'charset', mustBeString)
+  let treeShaking = getFlag(options, keys, 'treeShaking', mustBeBoolean)
+  let ignoreAnnotations = getFlag(options, keys, 'ignoreAnnotations', mustBeBoolean)
+  let jsx = getFlag(options, keys, 'jsx', mustBeString)
+  let jsxFactory = getFlag(options, keys, 'jsxFactory', mustBeString)
+  let jsxFragment = getFlag(options, keys, 'jsxFragment', mustBeString)
+  let jsxImportSource = getFlag(options, keys, 'jsxImportSource', mustBeString)
+  let jsxDev = getFlag(options, keys, 'jsxDev', mustBeBoolean)
+  let jsxSideEffects = getFlag(options, keys, 'jsxSideEffects', mustBeBoolean)
+  let define = getFlag(options, keys, 'define', mustBeObject)
+  let logOverride = getFlag(options, keys, 'logOverride', mustBeObject)
+  let supported = getFlag(options, keys, 'supported', mustBeObject)
+  let pure = getFlag(options, keys, 'pure', mustBeArray)
+  let keepNames = getFlag(options, keys, 'keepNames', mustBeBoolean)
+  let platform = getFlag(options, keys, 'platform', mustBeString)
 
-  if (legalComments) flags.push(`--legal-comments=${legalComments}`);
-  if (sourceRoot !== void 0) flags.push(`--source-root=${sourceRoot}`);
-  if (sourcesContent !== void 0) flags.push(`--sources-content=${sourcesContent}`);
+  if (legalComments) flags.push(`--legal-comments=${legalComments}`)
+  if (sourceRoot !== void 0) flags.push(`--source-root=${sourceRoot}`)
+  if (sourcesContent !== void 0) flags.push(`--sources-content=${sourcesContent}`)
   if (target) {
     if (Array.isArray(target)) flags.push(`--target=${Array.from(target).map(validateTarget).join(',')}`)
     else flags.push(`--target=${validateTarget(target)}`)
   }
-  if (format) flags.push(`--format=${format}`);
-  if (globalName) flags.push(`--global-name=${globalName}`);
-  if (platform) flags.push(`--platform=${platform}`);
+  if (format) flags.push(`--format=${format}`)
+  if (globalName) flags.push(`--global-name=${globalName}`)
+  if (platform) flags.push(`--platform=${platform}`)
 
-  if (minify) flags.push('--minify');
-  if (minifySyntax) flags.push('--minify-syntax');
-  if (minifyWhitespace) flags.push('--minify-whitespace');
-  if (minifyIdentifiers) flags.push('--minify-identifiers');
-  if (charset) flags.push(`--charset=${charset}`);
-  if (treeShaking !== void 0) flags.push(`--tree-shaking=${treeShaking}`);
-  if (ignoreAnnotations) flags.push(`--ignore-annotations`);
-  if (drop) for (let what of drop) flags.push(`--drop:${validateStringValue(what, 'drop')}`);
-  if (mangleProps) flags.push(`--mangle-props=${mangleProps.source}`);
-  if (reserveProps) flags.push(`--reserve-props=${reserveProps.source}`);
+  if (minify) flags.push('--minify')
+  if (minifySyntax) flags.push('--minify-syntax')
+  if (minifyWhitespace) flags.push('--minify-whitespace')
+  if (minifyIdentifiers) flags.push('--minify-identifiers')
+  if (charset) flags.push(`--charset=${charset}`)
+  if (treeShaking !== void 0) flags.push(`--tree-shaking=${treeShaking}`)
+  if (ignoreAnnotations) flags.push(`--ignore-annotations`)
+  if (drop) for (let what of drop) flags.push(`--drop:${validateStringValue(what, 'drop')}`)
+  if (mangleProps) flags.push(`--mangle-props=${mangleProps.source}`)
+  if (reserveProps) flags.push(`--reserve-props=${reserveProps.source}`)
   if (mangleQuoted !== void 0) flags.push(`--mangle-quoted=${mangleQuoted}`)
 
-  if (jsx) flags.push(`--jsx=${jsx}`);
-  if (jsxFactory) flags.push(`--jsx-factory=${jsxFactory}`);
-  if (jsxFragment) flags.push(`--jsx-fragment=${jsxFragment}`);
-  if (jsxImportSource) flags.push(`--jsx-import-source=${jsxImportSource}`);
-  if (jsxDev) flags.push(`--jsx-dev`);
-  if (jsxSideEffects) flags.push(`--jsx-side-effects`);
+  if (jsx) flags.push(`--jsx=${jsx}`)
+  if (jsxFactory) flags.push(`--jsx-factory=${jsxFactory}`)
+  if (jsxFragment) flags.push(`--jsx-fragment=${jsxFragment}`)
+  if (jsxImportSource) flags.push(`--jsx-import-source=${jsxImportSource}`)
+  if (jsxDev) flags.push(`--jsx-dev`)
+  if (jsxSideEffects) flags.push(`--jsx-side-effects`)
 
   if (define) {
     for (let key in define) {
-      if (key.indexOf('=') >= 0) throw new Error(`Invalid define: ${key}`);
-      flags.push(`--define:${key}=${validateStringValue(define[key], 'define', key)}`);
+      if (key.indexOf('=') >= 0) throw new Error(`Invalid define: ${key}`)
+      flags.push(`--define:${key}=${validateStringValue(define[key], 'define', key)}`)
     }
   }
   if (logOverride) {
     for (let key in logOverride) {
-      if (key.indexOf('=') >= 0) throw new Error(`Invalid log override: ${key}`);
-      flags.push(`--log-override:${key}=${validateStringValue(logOverride[key], 'log override', key)}`);
+      if (key.indexOf('=') >= 0) throw new Error(`Invalid log override: ${key}`)
+      flags.push(`--log-override:${key}=${validateStringValue(logOverride[key], 'log override', key)}`)
     }
   }
   if (supported) {
     for (let key in supported) {
-      if (key.indexOf('=') >= 0) throw new Error(`Invalid supported: ${key}`);
+      if (key.indexOf('=') >= 0) throw new Error(`Invalid supported: ${key}`)
       const value = supported[key]
-      if (typeof value !== 'boolean') throw new Error(`Expected value for supported ${quote(key)} to be a boolean, got ${typeof value} instead`);
-      flags.push(`--supported:${key}=${value}`);
+      if (typeof value !== 'boolean') throw new Error(`Expected value for supported ${quote(key)} to be a boolean, got ${typeof value} instead`)
+      flags.push(`--supported:${key}=${value}`)
     }
   }
-  if (pure) for (let fn of pure) flags.push(`--pure:${validateStringValue(fn, 'pure')}`);
-  if (keepNames) flags.push(`--keep-names`);
+  if (pure) for (let fn of pure) flags.push(`--pure:${validateStringValue(fn, 'pure')}`)
+  if (keepNames) flags.push(`--keep-names`)
 }
 
 function flagsForBuildOptions(
@@ -232,174 +229,169 @@ function flagsForBuildOptions(
   stdinContents: Uint8Array | null,
   stdinResolveDir: string | null,
   absWorkingDir: string | undefined,
-  incremental: boolean,
   nodePaths: string[],
-  watch: types.WatchMode | null,
   mangleCache: MangleCache | undefined,
 } {
-  let flags: string[] = [];
-  let entries: [string, string][] = [];
-  let keys: OptionKeys = Object.create(null);
-  let stdinContents: Uint8Array | null = null;
-  let stdinResolveDir: string | null = null;
-  let watchMode: types.WatchMode | null = null;
-  pushLogFlags(flags, options, keys, isTTY, logLevelDefault);
-  pushCommonFlags(flags, options, keys);
+  let flags: string[] = []
+  let entries: [string, string][] = []
+  let keys: OptionKeys = Object.create(null)
+  let stdinContents: Uint8Array | null = null
+  let stdinResolveDir: string | null = null
+  pushLogFlags(flags, options, keys, isTTY, logLevelDefault)
+  pushCommonFlags(flags, options, keys)
 
-  let sourcemap = getFlag(options, keys, 'sourcemap', mustBeStringOrBoolean);
-  let bundle = getFlag(options, keys, 'bundle', mustBeBoolean);
-  let watch = getFlag(options, keys, 'watch', mustBeBooleanOrObject);
-  let splitting = getFlag(options, keys, 'splitting', mustBeBoolean);
-  let preserveSymlinks = getFlag(options, keys, 'preserveSymlinks', mustBeBoolean);
-  let metafile = getFlag(options, keys, 'metafile', mustBeBoolean);
-  let outfile = getFlag(options, keys, 'outfile', mustBeString);
-  let outdir = getFlag(options, keys, 'outdir', mustBeString);
-  let outbase = getFlag(options, keys, 'outbase', mustBeString);
-  let tsconfig = getFlag(options, keys, 'tsconfig', mustBeString);
-  let resolveExtensions = getFlag(options, keys, 'resolveExtensions', mustBeArray);
-  let nodePathsInput = getFlag(options, keys, 'nodePaths', mustBeArray);
-  let mainFields = getFlag(options, keys, 'mainFields', mustBeArray);
-  let conditions = getFlag(options, keys, 'conditions', mustBeArray);
-  let external = getFlag(options, keys, 'external', mustBeArray);
-  let packages = getFlag(options, keys, 'packages', mustBeString);
-  let alias = getFlag(options, keys, 'alias', mustBeObject);
-  let loader = getFlag(options, keys, 'loader', mustBeObject);
-  let outExtension = getFlag(options, keys, 'outExtension', mustBeObject);
-  let publicPath = getFlag(options, keys, 'publicPath', mustBeString);
-  let entryNames = getFlag(options, keys, 'entryNames', mustBeString);
-  let chunkNames = getFlag(options, keys, 'chunkNames', mustBeString);
-  let assetNames = getFlag(options, keys, 'assetNames', mustBeString);
-  let inject = getFlag(options, keys, 'inject', mustBeArray);
-  let banner = getFlag(options, keys, 'banner', mustBeObject);
-  let footer = getFlag(options, keys, 'footer', mustBeObject);
-  let entryPoints = getFlag(options, keys, 'entryPoints', mustBeArrayOrRecord);
-  let absWorkingDir = getFlag(options, keys, 'absWorkingDir', mustBeString);
-  let stdin = getFlag(options, keys, 'stdin', mustBeObject);
+  let sourcemap = getFlag(options, keys, 'sourcemap', mustBeStringOrBoolean)
+  let bundle = getFlag(options, keys, 'bundle', mustBeBoolean)
+  let splitting = getFlag(options, keys, 'splitting', mustBeBoolean)
+  let preserveSymlinks = getFlag(options, keys, 'preserveSymlinks', mustBeBoolean)
+  let metafile = getFlag(options, keys, 'metafile', mustBeBoolean)
+  let outfile = getFlag(options, keys, 'outfile', mustBeString)
+  let outdir = getFlag(options, keys, 'outdir', mustBeString)
+  let outbase = getFlag(options, keys, 'outbase', mustBeString)
+  let tsconfig = getFlag(options, keys, 'tsconfig', mustBeString)
+  let resolveExtensions = getFlag(options, keys, 'resolveExtensions', mustBeArray)
+  let nodePathsInput = getFlag(options, keys, 'nodePaths', mustBeArray)
+  let mainFields = getFlag(options, keys, 'mainFields', mustBeArray)
+  let conditions = getFlag(options, keys, 'conditions', mustBeArray)
+  let external = getFlag(options, keys, 'external', mustBeArray)
+  let packages = getFlag(options, keys, 'packages', mustBeString)
+  let alias = getFlag(options, keys, 'alias', mustBeObject)
+  let loader = getFlag(options, keys, 'loader', mustBeObject)
+  let outExtension = getFlag(options, keys, 'outExtension', mustBeObject)
+  let publicPath = getFlag(options, keys, 'publicPath', mustBeString)
+  let entryNames = getFlag(options, keys, 'entryNames', mustBeString)
+  let chunkNames = getFlag(options, keys, 'chunkNames', mustBeString)
+  let assetNames = getFlag(options, keys, 'assetNames', mustBeString)
+  let inject = getFlag(options, keys, 'inject', mustBeArray)
+  let banner = getFlag(options, keys, 'banner', mustBeObject)
+  let footer = getFlag(options, keys, 'footer', mustBeObject)
+  let entryPoints = getFlag(options, keys, 'entryPoints', mustBeEntryPoints)
+  let absWorkingDir = getFlag(options, keys, 'absWorkingDir', mustBeString)
+  let stdin = getFlag(options, keys, 'stdin', mustBeObject)
   let write = getFlag(options, keys, 'write', mustBeBoolean) ?? writeDefault; // Default to true if not specified
-  let allowOverwrite = getFlag(options, keys, 'allowOverwrite', mustBeBoolean);
-  let incremental = getFlag(options, keys, 'incremental', mustBeBoolean) === true;
-  let mangleCache = getFlag(options, keys, 'mangleCache', mustBeObject);
+  let allowOverwrite = getFlag(options, keys, 'allowOverwrite', mustBeBoolean)
+  let mangleCache = getFlag(options, keys, 'mangleCache', mustBeObject)
   keys.plugins = true; // "plugins" has already been read earlier
-  checkForInvalidFlags(options, keys, `in ${callName}() call`);
+  checkForInvalidFlags(options, keys, `in ${callName}() call`)
 
-  if (sourcemap) flags.push(`--sourcemap${sourcemap === true ? '' : `=${sourcemap}`}`);
-  if (bundle) flags.push('--bundle');
-  if (allowOverwrite) flags.push('--allow-overwrite');
-  if (watch) {
-    flags.push('--watch');
-    if (typeof watch === 'boolean') {
-      watchMode = {};
-    } else {
-      let watchKeys: OptionKeys = Object.create(null);
-      let onRebuild = getFlag(watch, watchKeys, 'onRebuild', mustBeFunction);
-      checkForInvalidFlags(watch, watchKeys, `on "watch" in ${callName}() call`);
-      watchMode = { onRebuild };
-    }
-  }
-  if (splitting) flags.push('--splitting');
-  if (preserveSymlinks) flags.push('--preserve-symlinks');
-  if (metafile) flags.push(`--metafile`);
-  if (outfile) flags.push(`--outfile=${outfile}`);
-  if (outdir) flags.push(`--outdir=${outdir}`);
-  if (outbase) flags.push(`--outbase=${outbase}`);
-  if (tsconfig) flags.push(`--tsconfig=${tsconfig}`);
-  if (packages) flags.push(`--packages=${packages}`);
+  if (sourcemap) flags.push(`--sourcemap${sourcemap === true ? '' : `=${sourcemap}`}`)
+  if (bundle) flags.push('--bundle')
+  if (allowOverwrite) flags.push('--allow-overwrite')
+  if (splitting) flags.push('--splitting')
+  if (preserveSymlinks) flags.push('--preserve-symlinks')
+  if (metafile) flags.push(`--metafile`)
+  if (outfile) flags.push(`--outfile=${outfile}`)
+  if (outdir) flags.push(`--outdir=${outdir}`)
+  if (outbase) flags.push(`--outbase=${outbase}`)
+  if (tsconfig) flags.push(`--tsconfig=${tsconfig}`)
+  if (packages) flags.push(`--packages=${packages}`)
   if (resolveExtensions) {
-    let values: string[] = [];
+    let values: string[] = []
     for (let value of resolveExtensions) {
       validateStringValue(value, 'resolve extension')
-      if (value.indexOf(',') >= 0) throw new Error(`Invalid resolve extension: ${value}`);
-      values.push(value);
+      if (value.indexOf(',') >= 0) throw new Error(`Invalid resolve extension: ${value}`)
+      values.push(value)
     }
-    flags.push(`--resolve-extensions=${values.join(',')}`);
+    flags.push(`--resolve-extensions=${values.join(',')}`)
   }
-  if (publicPath) flags.push(`--public-path=${publicPath}`);
-  if (entryNames) flags.push(`--entry-names=${entryNames}`);
-  if (chunkNames) flags.push(`--chunk-names=${chunkNames}`);
-  if (assetNames) flags.push(`--asset-names=${assetNames}`);
+  if (publicPath) flags.push(`--public-path=${publicPath}`)
+  if (entryNames) flags.push(`--entry-names=${entryNames}`)
+  if (chunkNames) flags.push(`--chunk-names=${chunkNames}`)
+  if (assetNames) flags.push(`--asset-names=${assetNames}`)
   if (mainFields) {
-    let values: string[] = [];
+    let values: string[] = []
     for (let value of mainFields) {
       validateStringValue(value, 'main field')
-      if (value.indexOf(',') >= 0) throw new Error(`Invalid main field: ${value}`);
-      values.push(value);
+      if (value.indexOf(',') >= 0) throw new Error(`Invalid main field: ${value}`)
+      values.push(value)
     }
-    flags.push(`--main-fields=${values.join(',')}`);
+    flags.push(`--main-fields=${values.join(',')}`)
   }
   if (conditions) {
-    let values: string[] = [];
+    let values: string[] = []
     for (let value of conditions) {
       validateStringValue(value, 'condition')
-      if (value.indexOf(',') >= 0) throw new Error(`Invalid condition: ${value}`);
-      values.push(value);
+      if (value.indexOf(',') >= 0) throw new Error(`Invalid condition: ${value}`)
+      values.push(value)
     }
-    flags.push(`--conditions=${values.join(',')}`);
+    flags.push(`--conditions=${values.join(',')}`)
   }
-  if (external) for (let name of external) flags.push(`--external:${validateStringValue(name, 'external')}`);
+  if (external) for (let name of external) flags.push(`--external:${validateStringValue(name, 'external')}`)
   if (alias) {
     for (let old in alias) {
-      if (old.indexOf('=') >= 0) throw new Error(`Invalid package name in alias: ${old}`);
-      flags.push(`--alias:${old}=${validateStringValue(alias[old], 'alias', old)}`);
+      if (old.indexOf('=') >= 0) throw new Error(`Invalid package name in alias: ${old}`)
+      flags.push(`--alias:${old}=${validateStringValue(alias[old], 'alias', old)}`)
     }
   }
   if (banner) {
     for (let type in banner) {
-      if (type.indexOf('=') >= 0) throw new Error(`Invalid banner file type: ${type}`);
-      flags.push(`--banner:${type}=${validateStringValue(banner[type], 'banner', type)}`);
+      if (type.indexOf('=') >= 0) throw new Error(`Invalid banner file type: ${type}`)
+      flags.push(`--banner:${type}=${validateStringValue(banner[type], 'banner', type)}`)
     }
   }
   if (footer) {
     for (let type in footer) {
-      if (type.indexOf('=') >= 0) throw new Error(`Invalid footer file type: ${type}`);
-      flags.push(`--footer:${type}=${validateStringValue(footer[type], 'footer', type)}`);
+      if (type.indexOf('=') >= 0) throw new Error(`Invalid footer file type: ${type}`)
+      flags.push(`--footer:${type}=${validateStringValue(footer[type], 'footer', type)}`)
     }
   }
-  if (inject) for (let path of inject) flags.push(`--inject:${validateStringValue(path, 'inject')}`);
+  if (inject) for (let path of inject) flags.push(`--inject:${validateStringValue(path, 'inject')}`)
   if (loader) {
     for (let ext in loader) {
-      if (ext.indexOf('=') >= 0) throw new Error(`Invalid loader extension: ${ext}`);
-      flags.push(`--loader:${ext}=${validateStringValue(loader[ext], 'loader', ext)}`);
+      if (ext.indexOf('=') >= 0) throw new Error(`Invalid loader extension: ${ext}`)
+      flags.push(`--loader:${ext}=${validateStringValue(loader[ext], 'loader', ext)}`)
     }
   }
   if (outExtension) {
     for (let ext in outExtension) {
-      if (ext.indexOf('=') >= 0) throw new Error(`Invalid out extension: ${ext}`);
-      flags.push(`--out-extension:${ext}=${validateStringValue(outExtension[ext], 'out extension', ext)}`);
+      if (ext.indexOf('=') >= 0) throw new Error(`Invalid out extension: ${ext}`)
+      flags.push(`--out-extension:${ext}=${validateStringValue(outExtension[ext], 'out extension', ext)}`)
     }
   }
 
   if (entryPoints) {
     if (Array.isArray(entryPoints)) {
-      for (let entryPoint of entryPoints) {
-        entries.push(['', validateStringValue(entryPoint, 'entry point')]);
+      for (let i = 0, n = entryPoints.length; i < n; i++) {
+        let entryPoint = entryPoints[i]
+        if (typeof entryPoint === 'object' && entryPoint !== null) {
+          let entryPointKeys: OptionKeys = Object.create(null)
+          let input = getFlag(entryPoint, entryPointKeys, 'in', mustBeString)
+          let output = getFlag(entryPoint, entryPointKeys, 'out', mustBeString)
+          checkForInvalidFlags(entryPoint, entryPointKeys, 'in entry point at index ' + i)
+          if (input === undefined) throw new Error('Missing property "in" for entry point at index ' + i)
+          if (output === undefined) throw new Error('Missing property "out" for entry point at index ' + i)
+          entries.push([output, input])
+        } else {
+          entries.push(['', validateStringValue(entryPoint, 'entry point at index ' + i)])
+        }
       }
     } else {
       for (let key in entryPoints) {
-        entries.push([key, validateStringValue(entryPoints[key], 'entry point', key)]);
+        entries.push([key, validateStringValue(entryPoints[key], 'entry point', key)])
       }
     }
   }
 
   if (stdin) {
-    let stdinKeys: OptionKeys = Object.create(null);
-    let contents = getFlag(stdin, stdinKeys, 'contents', mustBeStringOrUint8Array);
-    let resolveDir = getFlag(stdin, stdinKeys, 'resolveDir', mustBeString);
-    let sourcefile = getFlag(stdin, stdinKeys, 'sourcefile', mustBeString);
-    let loader = getFlag(stdin, stdinKeys, 'loader', mustBeString);
-    checkForInvalidFlags(stdin, stdinKeys, 'in "stdin" object');
+    let stdinKeys: OptionKeys = Object.create(null)
+    let contents = getFlag(stdin, stdinKeys, 'contents', mustBeStringOrUint8Array)
+    let resolveDir = getFlag(stdin, stdinKeys, 'resolveDir', mustBeString)
+    let sourcefile = getFlag(stdin, stdinKeys, 'sourcefile', mustBeString)
+    let loader = getFlag(stdin, stdinKeys, 'loader', mustBeString)
+    checkForInvalidFlags(stdin, stdinKeys, 'in "stdin" object')
 
-    if (sourcefile) flags.push(`--sourcefile=${sourcefile}`);
-    if (loader) flags.push(`--loader=${loader}`);
-    if (resolveDir) stdinResolveDir = resolveDir;
+    if (sourcefile) flags.push(`--sourcefile=${sourcefile}`)
+    if (loader) flags.push(`--loader=${loader}`)
+    if (resolveDir) stdinResolveDir = resolveDir
     if (typeof contents === 'string') stdinContents = protocol.encodeUTF8(contents)
     else if (contents instanceof Uint8Array) stdinContents = contents
   }
 
-  let nodePaths: string[] = [];
+  let nodePaths: string[] = []
   if (nodePathsInput) {
     for (let value of nodePathsInput) {
-      value += '';
-      nodePaths.push(value);
+      value += ''
+      nodePaths.push(value)
     }
   }
 
@@ -410,11 +402,9 @@ function flagsForBuildOptions(
     stdinContents,
     stdinResolveDir,
     absWorkingDir,
-    incremental,
     nodePaths,
-    watch: watchMode,
     mangleCache: validateMangleCache(mangleCache),
-  };
+  }
 }
 
 function flagsForTransformOptions(
@@ -426,67 +416,66 @@ function flagsForTransformOptions(
   flags: string[],
   mangleCache: MangleCache | undefined,
 } {
-  let flags: string[] = [];
-  let keys: OptionKeys = Object.create(null);
-  pushLogFlags(flags, options, keys, isTTY, logLevelDefault);
-  pushCommonFlags(flags, options, keys);
+  let flags: string[] = []
+  let keys: OptionKeys = Object.create(null)
+  pushLogFlags(flags, options, keys, isTTY, logLevelDefault)
+  pushCommonFlags(flags, options, keys)
 
-  let sourcemap = getFlag(options, keys, 'sourcemap', mustBeStringOrBoolean);
-  let tsconfigRaw = getFlag(options, keys, 'tsconfigRaw', mustBeStringOrObject);
-  let sourcefile = getFlag(options, keys, 'sourcefile', mustBeString);
-  let loader = getFlag(options, keys, 'loader', mustBeString);
-  let banner = getFlag(options, keys, 'banner', mustBeString);
-  let footer = getFlag(options, keys, 'footer', mustBeString);
-  let mangleCache = getFlag(options, keys, 'mangleCache', mustBeObject);
-  checkForInvalidFlags(options, keys, `in ${callName}() call`);
+  let sourcemap = getFlag(options, keys, 'sourcemap', mustBeStringOrBoolean)
+  let tsconfigRaw = getFlag(options, keys, 'tsconfigRaw', mustBeStringOrObject)
+  let sourcefile = getFlag(options, keys, 'sourcefile', mustBeString)
+  let loader = getFlag(options, keys, 'loader', mustBeString)
+  let banner = getFlag(options, keys, 'banner', mustBeString)
+  let footer = getFlag(options, keys, 'footer', mustBeString)
+  let mangleCache = getFlag(options, keys, 'mangleCache', mustBeObject)
+  checkForInvalidFlags(options, keys, `in ${callName}() call`)
 
-  if (sourcemap) flags.push(`--sourcemap=${sourcemap === true ? 'external' : sourcemap}`);
-  if (tsconfigRaw) flags.push(`--tsconfig-raw=${typeof tsconfigRaw === 'string' ? tsconfigRaw : JSON.stringify(tsconfigRaw)}`);
-  if (sourcefile) flags.push(`--sourcefile=${sourcefile}`);
-  if (loader) flags.push(`--loader=${loader}`);
-  if (banner) flags.push(`--banner=${banner}`);
-  if (footer) flags.push(`--footer=${footer}`);
+  if (sourcemap) flags.push(`--sourcemap=${sourcemap === true ? 'external' : sourcemap}`)
+  if (tsconfigRaw) flags.push(`--tsconfig-raw=${typeof tsconfigRaw === 'string' ? tsconfigRaw : JSON.stringify(tsconfigRaw)}`)
+  if (sourcefile) flags.push(`--sourcefile=${sourcefile}`)
+  if (loader) flags.push(`--loader=${loader}`)
+  if (banner) flags.push(`--banner=${banner}`)
+  if (footer) flags.push(`--footer=${footer}`)
 
   return {
     flags,
     mangleCache: validateMangleCache(mangleCache),
-  };
+  }
 }
 
 export interface StreamIn {
-  writeToStdin: (data: Uint8Array) => void;
-  readFileSync?: (path: string, encoding: 'utf8') => string;
-  isSync: boolean;
-  isWriteUnavailable: boolean;
-  esbuild: types.PluginBuild['esbuild'];
+  writeToStdin: (data: Uint8Array) => void
+  readFileSync?: (path: string, encoding: 'utf8') => string
+  isSync: boolean
+  hasFS: boolean
+  esbuild: types.PluginBuild['esbuild']
 }
 
 export interface StreamOut {
-  readFromStdout: (data: Uint8Array) => void;
-  afterClose: (error: Error | null) => void;
-  service: StreamService;
+  readFromStdout: (data: Uint8Array) => void
+  afterClose: (error: Error | null) => void
+  service: StreamService
 }
 
 export interface StreamFS {
-  writeFile(contents: string | Uint8Array, callback: (path: string | null) => void): void;
-  readFile(path: string, callback: (err: Error | null, contents: string | null) => void): void;
+  writeFile(contents: string | Uint8Array, callback: (path: string | null) => void): void
+  readFile(path: string, callback: (err: Error | null, contents: string | null) => void): void
 }
 
 export interface Refs {
-  ref(): void;
-  unref(): void;
+  ref(): void
+  unref(): void
 }
 
 export interface StreamService {
-  buildOrServe(args: {
+  buildOrContext(args: {
     callName: string,
     refs: Refs | null,
-    serveOptions: types.ServeOptions | null,
     options: types.BuildOptions,
     isTTY: boolean,
     defaultWD: string,
-    callback: (err: Error | null, res: types.BuildResult | types.ServeResult | null) => void,
-  }): void;
+    callback: (err: Error | null, res: types.BuildResult | types.BuildContext | null) => void,
+  }): void
 
   transform(args: {
     callName: string,
@@ -496,7 +485,7 @@ export interface StreamService {
     isTTY: boolean,
     fs: StreamFS,
     callback: (err: Error | null, res: types.TransformResult | null) => void,
-  }): void;
+  }): void
 
   formatMessages(args: {
     callName: string,
@@ -504,7 +493,7 @@ export interface StreamService {
     messages: types.PartialMessage[],
     options: types.FormatMessagesOptions,
     callback: (err: Error | null, res: string[] | null) => void,
-  }): void;
+  }): void
 
   analyzeMetafile(args: {
     callName: string,
@@ -512,7 +501,7 @@ export interface StreamService {
     metafile: string,
     options: types.AnalyzeMetafileOptions | undefined,
     callback: (err: Error | null, res: string | null) => void,
-  }): void;
+  }): void
 }
 
 type CloseData = { didClose: boolean, reason: string }
@@ -522,78 +511,78 @@ type RequestCallback = (id: number, request: any) => Promise<void> | void
 // for both sync and async code. There is an exception for plugin code because
 // that can't work in sync code anyway.
 export function createChannel(streamIn: StreamIn): StreamOut {
-  const requestCallbacksByKey: { [key: number]: { [command: string]: RequestCallback } } = {};
+  const requestCallbacksByKey: { [key: number]: { [command: string]: RequestCallback } } = {}
   const closeData: CloseData = { didClose: false, reason: '' }
-  let responseCallbacks: { [id: number]: (error: string | null, response: protocol.Value) => void } = {};
-  let nextRequestID = 0;
-  let nextBuildKey = 0;
+  let responseCallbacks: { [id: number]: (error: string | null, response: protocol.Value) => void } = {}
+  let nextRequestID = 0
+  let nextBuildKey = 0
 
   // Use a long-lived buffer to store stdout data
-  let stdout = new Uint8Array(16 * 1024);
-  let stdoutUsed = 0;
+  let stdout = new Uint8Array(16 * 1024)
+  let stdoutUsed = 0
   let readFromStdout = (chunk: Uint8Array) => {
     // Append the chunk to the stdout buffer, growing it as necessary
-    let limit = stdoutUsed + chunk.length;
+    let limit = stdoutUsed + chunk.length
     if (limit > stdout.length) {
-      let swap = new Uint8Array(limit * 2);
-      swap.set(stdout);
-      stdout = swap;
+      let swap = new Uint8Array(limit * 2)
+      swap.set(stdout)
+      stdout = swap
     }
-    stdout.set(chunk, stdoutUsed);
-    stdoutUsed += chunk.length;
+    stdout.set(chunk, stdoutUsed)
+    stdoutUsed += chunk.length
 
     // Process all complete (i.e. not partial) packets
-    let offset = 0;
+    let offset = 0
     while (offset + 4 <= stdoutUsed) {
-      let length = protocol.readUInt32LE(stdout, offset);
+      let length = protocol.readUInt32LE(stdout, offset)
       if (offset + 4 + length > stdoutUsed) {
-        break;
+        break
       }
-      offset += 4;
-      handleIncomingPacket(stdout.subarray(offset, offset + length));
-      offset += length;
+      offset += 4
+      handleIncomingPacket(stdout.subarray(offset, offset + length))
+      offset += length
     }
     if (offset > 0) {
-      stdout.copyWithin(0, offset, stdoutUsed);
-      stdoutUsed -= offset;
+      stdout.copyWithin(0, offset, stdoutUsed)
+      stdoutUsed -= offset
     }
-  };
+  }
 
   let afterClose = (error: Error | null) => {
     // When the process is closed, fail all pending requests
     closeData.didClose = true
     if (error) closeData.reason = ': ' + (error.message || error)
-    const text = 'The service was stopped' + closeData.reason;
+    const text = 'The service was stopped' + closeData.reason
     for (let id in responseCallbacks) {
-      responseCallbacks[id](text, null);
+      responseCallbacks[id](text, null)
     }
-    responseCallbacks = {};
-  };
+    responseCallbacks = {}
+  }
 
   let sendRequest = <Req, Res>(refs: Refs | null, value: Req, callback: (error: string | null, response: Res | null) => void): void => {
-    if (closeData.didClose) return callback('The service is no longer running' + closeData.reason, null);
-    let id = nextRequestID++;
+    if (closeData.didClose) return callback('The service is no longer running' + closeData.reason, null)
+    let id = nextRequestID++
     responseCallbacks[id] = (error, response) => {
       try {
-        callback(error, response as any);
+        callback(error, response as any)
       } finally {
         if (refs) refs.unref() // Do this after the callback so the callback can extend the lifetime if needed
       }
-    };
+    }
     if (refs) refs.ref()
-    streamIn.writeToStdin(protocol.encodePacket({ id, isRequest: true, value: value as any }));
-  };
+    streamIn.writeToStdin(protocol.encodePacket({ id, isRequest: true, value: value as any }))
+  }
 
   let sendResponse = (id: number, value: protocol.Value): void => {
-    if (closeData.didClose) throw new Error('The service is no longer running' + closeData.reason);
-    streamIn.writeToStdin(protocol.encodePacket({ id, isRequest: false, value }));
-  };
+    if (closeData.didClose) throw new Error('The service is no longer running' + closeData.reason)
+    streamIn.writeToStdin(protocol.encodePacket({ id, isRequest: false, value }))
+  }
 
   let handleRequest = async (id: number, request: any) => {
     // Catch exceptions in the code below so they get passed to the caller
     try {
       if (request.command === 'ping') {
-        sendResponse(id, {});
+        sendResponse(id, {})
         return
       }
 
@@ -608,47 +597,47 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         }
       }
 
-      throw new Error(`Invalid command: ` + request.command);
+      throw new Error(`Invalid command: ` + request.command)
     } catch (e) {
-      sendResponse(id, { errors: [extractErrorMessageV8(e, streamIn, null, void 0, '')] } as any);
+      sendResponse(id, { errors: [extractErrorMessageV8(e, streamIn, null, void 0, '')] } as any)
     }
-  };
+  }
 
-  let isFirstPacket = true;
+  let isFirstPacket = true
 
   let handleIncomingPacket = (bytes: Uint8Array): void => {
     // The first packet is a version check
     if (isFirstPacket) {
-      isFirstPacket = false;
+      isFirstPacket = false
 
       // Validate the binary's version number to make sure esbuild was installed
       // correctly. This check was added because some people have reported
       // errors that appear to indicate an incorrect installation.
-      let binaryVersion = String.fromCharCode(...bytes);
+      let binaryVersion = String.fromCharCode(...bytes)
       if (binaryVersion !== ESBUILD_VERSION) {
-        throw new Error(`Cannot start service: Host version "${ESBUILD_VERSION}" does not match binary version ${quote(binaryVersion)}`);
+        throw new Error(`Cannot start service: Host version "${ESBUILD_VERSION}" does not match binary version ${quote(binaryVersion)}`)
       }
-      return;
+      return
     }
 
-    let packet = protocol.decodePacket(bytes) as any;
+    let packet = protocol.decodePacket(bytes) as any
 
     if (packet.isRequest) {
-      handleRequest(packet.id, packet.value);
+      handleRequest(packet.id, packet.value)
     }
 
     else {
-      let callback = responseCallbacks[packet.id]!;
-      delete responseCallbacks[packet.id];
-      if (packet.value.error) callback(packet.value.error, {});
-      else callback(null, packet.value);
+      let callback = responseCallbacks[packet.id]!
+      delete responseCallbacks[packet.id]
+      if (packet.value.error) callback(packet.value.error, {})
+      else callback(null, packet.value)
     }
-  };
+  }
 
-  let buildOrServe: StreamService['buildOrServe'] = ({ callName, refs, serveOptions, options, isTTY, defaultWD, callback }) => {
-    let refCount = 0;
-    const buildKey = nextBuildKey++;
-    const requestCallbacks: { [command: string]: RequestCallback } = {};
+  let buildOrContext: StreamService['buildOrContext'] = ({ callName, refs, options, isTTY, defaultWD, callback }) => {
+    let refCount = 0
+    const buildKey = nextBuildKey++
+    const requestCallbacks: { [command: string]: RequestCallback } = {}
     const buildRefs: Refs = {
       ref() {
         if (++refCount === 1) {
@@ -662,13 +651,13 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         }
       },
     }
-    requestCallbacksByKey[buildKey] = requestCallbacks;
+    requestCallbacksByKey[buildKey] = requestCallbacks
 
     // Guard the whole "build" request with a temporary ref count bump. We
     // don't want the ref count to be bumped above zero and then back down
     // to zero before the callback is called.
     buildRefs.ref()
-    buildOrServeImpl(
+    buildOrContextImpl(
       callName,
       buildKey,
       sendRequest,
@@ -677,10 +666,8 @@ export function createChannel(streamIn: StreamIn): StreamOut {
       streamIn,
       requestCallbacks,
       options,
-      serveOptions,
       isTTY,
       defaultWD,
-      closeData,
       (err, res) => {
         // Now that the initial "build" request is done, we can release our
         // temporary ref count bump. Any code that wants to extend the life
@@ -692,10 +679,10 @@ export function createChannel(streamIn: StreamIn): StreamOut {
         }
       },
     )
-  };
+  }
 
   let transform: StreamService['transform'] = ({ callName, refs, input, options, isTTY, fs, callback }) => {
-    const details = createObjectStash();
+    const details = createObjectStash()
 
     // Ideally the "transform()" API would be faster than calling "build()"
     // since it doesn't need to touch the file system. However, performance
@@ -715,11 +702,11 @@ export function createChannel(streamIn: StreamIn): StreamOut {
     let start = (inputPath: string | null) => {
       try {
         if (typeof input !== 'string' && !(input instanceof Uint8Array))
-          throw new Error('The input to "transform" must be a string or a Uint8Array');
+          throw new Error('The input to "transform" must be a string or a Uint8Array')
         let {
           flags,
           mangleCache,
-        } = flagsForTransformOptions(callName, options, isTTY, transformLogLevelDefault);
+        } = flagsForTransformOptions(callName, options, isTTY, transformLogLevelDefault)
         let request: protocol.TransformRequest = {
           command: 'transform',
           flags,
@@ -727,122 +714,128 @@ export function createChannel(streamIn: StreamIn): StreamOut {
           input: inputPath !== null ? protocol.encodeUTF8(inputPath)
             : typeof input === 'string' ? protocol.encodeUTF8(input)
               : input,
-        };
-        if (mangleCache) request.mangleCache = mangleCache;
+        }
+        if (mangleCache) request.mangleCache = mangleCache
         sendRequest<protocol.TransformRequest, protocol.TransformResponse>(refs, request, (error, response) => {
-          if (error) return callback(new Error(error), null);
-          let errors = replaceDetailsInMessages(response!.errors, details);
-          let warnings = replaceDetailsInMessages(response!.warnings, details);
-          let outstanding = 1;
+          if (error) return callback(new Error(error), null)
+          let errors = replaceDetailsInMessages(response!.errors, details)
+          let warnings = replaceDetailsInMessages(response!.warnings, details)
+          let outstanding = 1
           let next = () => {
             if (--outstanding === 0) {
-              let result: types.TransformResult = { warnings, code: response!.code, map: response!.map }
+              let result: types.TransformResult = {
+                warnings,
+                code: response!.code,
+                map: response!.map,
+                mangleCache: undefined,
+                legalComments: undefined,
+              }
               if ('legalComments' in response!) result.legalComments = response?.legalComments
               if (response!.mangleCache) result.mangleCache = response?.mangleCache
               callback(null, result)
             }
-          };
-          if (errors.length > 0) return callback(failureErrorWithLog('Transform failed', errors, warnings), null);
+          }
+          if (errors.length > 0) return callback(failureErrorWithLog('Transform failed', errors, warnings), null)
 
           // Read the JavaScript file from the file system
           if (response!.codeFS) {
-            outstanding++;
+            outstanding++
             fs.readFile(response!.code, (err, contents) => {
               if (err !== null) {
-                callback(err, null);
+                callback(err, null)
               } else {
-                response!.code = contents!;
-                next();
+                response!.code = contents!
+                next()
               }
-            });
+            })
           }
 
           // Read the source map file from the file system
           if (response!.mapFS) {
-            outstanding++;
+            outstanding++
             fs.readFile(response!.map, (err, contents) => {
               if (err !== null) {
-                callback(err, null);
+                callback(err, null)
               } else {
-                response!.map = contents!;
-                next();
+                response!.map = contents!
+                next()
               }
-            });
+            })
           }
 
-          next();
-        });
+          next()
+        })
       } catch (e) {
-        let flags: string[] = [];
+        let flags: string[] = []
         try { pushLogFlags(flags, options, {}, isTTY, transformLogLevelDefault) } catch { }
-        const error = extractErrorMessageV8(e, streamIn, details, void 0, '');
+        const error = extractErrorMessageV8(e, streamIn, details, void 0, '')
         sendRequest(refs, { command: 'error', flags, error }, () => {
-          error.detail = details.load(error.detail);
-          callback(failureErrorWithLog('Transform failed', [error], []), null);
-        });
+          error.detail = details.load(error.detail)
+          callback(failureErrorWithLog('Transform failed', [error], []), null)
+        })
       }
-    };
-    if ((typeof input === 'string' || input instanceof Uint8Array) && input.length > 1024 * 1024) {
-      let next = start;
-      start = () => fs.writeFile(input, next);
     }
-    start(null);
-  };
+    if ((typeof input === 'string' || input instanceof Uint8Array) && input.length > 1024 * 1024) {
+      let next = start
+      start = () => fs.writeFile(input, next)
+    }
+    start(null)
+  }
 
   let formatMessages: StreamService['formatMessages'] = ({ callName, refs, messages, options, callback }) => {
-    let result = sanitizeMessages(messages, 'messages', null, '');
-    if (!options) throw new Error(`Missing second argument in ${callName}() call`);
-    let keys: OptionKeys = {};
-    let kind = getFlag(options, keys, 'kind', mustBeString);
-    let color = getFlag(options, keys, 'color', mustBeBoolean);
-    let terminalWidth = getFlag(options, keys, 'terminalWidth', mustBeInteger);
-    checkForInvalidFlags(options, keys, `in ${callName}() call`);
-    if (kind === void 0) throw new Error(`Missing "kind" in ${callName}() call`);
-    if (kind !== 'error' && kind !== 'warning') throw new Error(`Expected "kind" to be "error" or "warning" in ${callName}() call`);
+    let result = sanitizeMessages(messages, 'messages', null, '')
+    if (!options) throw new Error(`Missing second argument in ${callName}() call`)
+    let keys: OptionKeys = {}
+    let kind = getFlag(options, keys, 'kind', mustBeString)
+    let color = getFlag(options, keys, 'color', mustBeBoolean)
+    let terminalWidth = getFlag(options, keys, 'terminalWidth', mustBeInteger)
+    checkForInvalidFlags(options, keys, `in ${callName}() call`)
+    if (kind === void 0) throw new Error(`Missing "kind" in ${callName}() call`)
+    if (kind !== 'error' && kind !== 'warning') throw new Error(`Expected "kind" to be "error" or "warning" in ${callName}() call`)
     let request: protocol.FormatMsgsRequest = {
       command: 'format-msgs',
       messages: result,
       isWarning: kind === 'warning',
     }
-    if (color !== void 0) request.color = color;
-    if (terminalWidth !== void 0) request.terminalWidth = terminalWidth;
+    if (color !== void 0) request.color = color
+    if (terminalWidth !== void 0) request.terminalWidth = terminalWidth
     sendRequest<protocol.FormatMsgsRequest, protocol.FormatMsgsResponse>(refs, request, (error, response) => {
-      if (error) return callback(new Error(error), null);
-      callback(null, response!.messages);
-    });
-  };
+      if (error) return callback(new Error(error), null)
+      callback(null, response!.messages)
+    })
+  }
 
   let analyzeMetafile: StreamService['analyzeMetafile'] = ({ callName, refs, metafile, options, callback }) => {
     if (options === void 0) options = {}
-    let keys: OptionKeys = {};
-    let color = getFlag(options, keys, 'color', mustBeBoolean);
-    let verbose = getFlag(options, keys, 'verbose', mustBeBoolean);
-    checkForInvalidFlags(options, keys, `in ${callName}() call`);
+    let keys: OptionKeys = {}
+    let color = getFlag(options, keys, 'color', mustBeBoolean)
+    let verbose = getFlag(options, keys, 'verbose', mustBeBoolean)
+    checkForInvalidFlags(options, keys, `in ${callName}() call`)
     let request: protocol.AnalyzeMetafileRequest = {
       command: 'analyze-metafile',
       metafile,
     }
-    if (color !== void 0) request.color = color;
-    if (verbose !== void 0) request.verbose = verbose;
+    if (color !== void 0) request.color = color
+    if (verbose !== void 0) request.verbose = verbose
     sendRequest<protocol.AnalyzeMetafileRequest, protocol.AnalyzeMetafileResponse>(refs, request, (error, response) => {
-      if (error) return callback(new Error(error), null);
-      callback(null, response!.result);
-    });
-  };
+      if (error) return callback(new Error(error), null)
+      callback(null, response!.result)
+    })
+  }
 
   return {
     readFromStdout,
     afterClose,
     service: {
-      buildOrServe,
+      buildOrContext,
       transform,
       formatMessages,
       analyzeMetafile,
     },
-  };
+  }
 }
 
-function buildOrServeImpl(
+function buildOrContextImpl(
   callName: string,
   buildKey: number,
   sendRequest: <Req, Res>(refs: Refs | null, value: Req, callback: (error: string | null, response: Res | null) => void) => void,
@@ -851,44 +844,34 @@ function buildOrServeImpl(
   streamIn: StreamIn,
   requestCallbacks: { [command: string]: RequestCallback },
   options: types.BuildOptions,
-  serveOptions: types.ServeOptions | null,
   isTTY: boolean,
   defaultWD: string,
-  closeData: CloseData,
-  callback: (err: Error | null, res: types.BuildResult | types.ServeResult | null) => void,
+  callback: (err: Error | null, res: types.BuildResult | types.BuildContext | null) => void,
 ): void {
-  const details = createObjectStash();
-
-  const logPluginError: LogPluginErrorCallback = (e, pluginName, note, done) => {
-    const flags: string[] = [];
-    try { pushLogFlags(flags, options, {}, isTTY, buildLogLevelDefault) } catch { }
-    const message = extractErrorMessageV8(e, streamIn, details, note, pluginName)
-    sendRequest(refs, { command: 'error', flags, error: message }, () => {
-      message.detail = details.load(message.detail);
-      done(message)
-    });
-  };
+  const details = createObjectStash()
+  const isContext = callName === 'context'
 
   const handleError = (e: any, pluginName: string): void => {
-    logPluginError(e, pluginName, void 0, error => {
-      callback(failureErrorWithLog('Build failed', [error], []), null);
+    const flags: string[] = []
+    try { pushLogFlags(flags, options, {}, isTTY, buildLogLevelDefault) } catch { }
+    const message = extractErrorMessageV8(e, streamIn, details, void 0, pluginName)
+    sendRequest(refs, { command: 'error', flags, error: message }, () => {
+      message.detail = details.load(message.detail)
+      callback(failureErrorWithLog(isContext ? 'Context failed' : 'Build failed', [message], []), null)
     })
-  };
+  }
 
-  let plugins: types.Plugin[] | undefined;
+  let plugins: types.Plugin[] | undefined
   if (typeof options === 'object') {
-    const value = options.plugins;
+    const value = options.plugins
     if (value !== void 0) {
-      if (!Array.isArray(value)) throw new Error(`"plugins" must be an array`);
-      plugins = value;
+      if (!Array.isArray(value)) return handleError(new Error(`"plugins" must be an array`), '')
+      plugins = value
     }
   }
 
   if (plugins && plugins.length > 0) {
-    if (streamIn.isSync) {
-      handleError(new Error('Cannot use plugins in synchronous API calls'), '');
-      return
-    }
+    if (streamIn.isSync) return handleError(new Error('Cannot use plugins in synchronous API calls'), '')
 
     // Plugins can use async/await because they can't be run with "buildSync"
     handlePlugins(
@@ -903,14 +886,11 @@ function buildOrServeImpl(
       details,
     ).then(
       result => {
-        if (!result.ok) {
-          handleError(result.error, result.pluginName);
-          return
-        }
+        if (!result.ok) return handleError(result.error, result.pluginName)
         try {
-          buildOrServeContinue(result.requestPlugins, result.runOnEndCallbacks)
+          buildOrContextContinue(result.requestPlugins, result.runOnEndCallbacks, result.scheduleOnDisposeCallbacks)
         } catch (e) {
-          handleError(e, '');
+          handleError(e, '')
         }
       },
       e => handleError(e, ''),
@@ -919,28 +899,29 @@ function buildOrServeImpl(
   }
 
   try {
-    buildOrServeContinue(null, (result, logPluginError, done) => done());
+    buildOrContextContinue(null, (result, done) => done([], []), () => { })
   } catch (e) {
-    handleError(e, '');
+    handleError(e, '')
   }
 
-  // "buildOrServe" cannot be written using async/await due to "buildSync"
+  // "buildOrContext" cannot be written using async/await due to "buildSync"
   // and must be written in continuation-passing style instead
-  function buildOrServeContinue(requestPlugins: protocol.BuildPlugin[] | null, runOnEndCallbacks: RunOnEndCallbacks) {
-    let writeDefault = !streamIn.isWriteUnavailable;
-    let {
+  function buildOrContextContinue(requestPlugins: protocol.BuildPlugin[] | null, runOnEndCallbacks: RunOnEndCallbacks, scheduleOnDisposeCallbacks: () => void) {
+    const writeDefault = streamIn.hasFS
+    const {
       entries,
       flags,
       write,
       stdinContents,
       stdinResolveDir,
       absWorkingDir,
-      incremental,
       nodePaths,
-      watch,
       mangleCache,
-    } = flagsForBuildOptions(callName, options, isTTY, buildLogLevelDefault, writeDefault);
-    let request: protocol.BuildRequest = {
+    } = flagsForBuildOptions(callName, options, isTTY, buildLogLevelDefault, writeDefault)
+    if (write && !streamIn.hasFS) throw new Error(`The "write" option is unavailable in this environment`)
+
+    // Construct the request
+    const request: protocol.BuildRequest = {
       command: 'build',
       key: buildKey,
       entries,
@@ -949,199 +930,222 @@ function buildOrServeImpl(
       stdinContents,
       stdinResolveDir,
       absWorkingDir: absWorkingDir || defaultWD,
-      incremental,
       nodePaths,
-    };
-    if (requestPlugins) request.plugins = requestPlugins;
-    if (mangleCache) request.mangleCache = mangleCache;
-    let serve = serveOptions && buildServeData(buildKey, sendRequest, sendResponse, refs, requestCallbacks, serveOptions, request);
+      context: isContext,
+    }
+    if (requestPlugins) request.plugins = requestPlugins
+    if (mangleCache) request.mangleCache = mangleCache
 
     // Factor out response handling so it can be reused for rebuilds
-    let rebuild: types.BuildResult['rebuild'] | undefined;
-    let stop: types.BuildResult['stop'] | undefined;
-    let copyResponseToResult = (response: protocol.BuildResponse, result: types.BuildResult) => {
-      if (response.outputFiles) result.outputFiles = response!.outputFiles.map(convertOutputFiles);
-      if (response.metafile) result.metafile = JSON.parse(response!.metafile);
-      if (response.mangleCache) result.mangleCache = response!.mangleCache;
-      if (response.writeToStdout !== void 0) console.log(protocol.decodeUTF8(response!.writeToStdout).replace(/\n$/, ''));
-    };
-    let buildResponseToResult = (
+    const buildResponseToResult = (
       response: protocol.BuildResponse | null,
-      callback: (error: types.BuildFailure | null, result: types.BuildResult | null) => void,
+      callback: (error: types.BuildFailure | null, result: types.BuildResult | null, onEndErrors: types.Message[], onEndWarnings: types.Message[]) => void,
     ): void => {
-      let result: types.BuildResult = {
+      const result: types.BuildResult = {
         errors: replaceDetailsInMessages(response!.errors, details),
         warnings: replaceDetailsInMessages(response!.warnings, details),
-      };
-      copyResponseToResult(response!, result);
-      runOnEndCallbacks(result, logPluginError, () => {
-        if (result.errors.length > 0) {
-          return callback(failureErrorWithLog('Build failed', result.errors, result.warnings), null);
+        outputFiles: undefined,
+        metafile: undefined,
+        mangleCache: undefined,
+      }
+      const originalErrors = result.errors.slice()
+      const originalWarnings = result.warnings.slice()
+      if (response!.outputFiles) result.outputFiles = response!.outputFiles.map(convertOutputFiles)
+      if (response!.metafile) result.metafile = JSON.parse(response!.metafile)
+      if (response!.mangleCache) result.mangleCache = response!.mangleCache
+      if (response!.writeToStdout !== void 0) console.log(protocol.decodeUTF8(response!.writeToStdout).replace(/\n$/, ''))
+      runOnEndCallbacks(result, (onEndErrors, onEndWarnings) => {
+        if (originalErrors.length > 0 || onEndErrors.length > 0) {
+          const error = failureErrorWithLog('Build failed', originalErrors.concat(onEndErrors), originalWarnings.concat(onEndWarnings))
+          return callback(error, null, onEndErrors, onEndWarnings)
         }
+        callback(null, result, onEndErrors, onEndWarnings)
+      })
+    }
 
-        // Handle incremental rebuilds
-        if (response!.rebuild) {
-          if (!rebuild) {
-            let isDisposed = false;
-            (rebuild as any) = () => new Promise<types.BuildResult>((resolve, reject) => {
-              if (isDisposed || closeData.didClose) throw new Error('Cannot rebuild');
-              sendRequest<protocol.RebuildRequest, protocol.BuildResponse>(refs, { command: 'rebuild', key: buildKey },
-                (error2, response2) => {
-                  if (error2) {
-                    const message: types.Message = { id: '', pluginName: '', text: error2, location: null, notes: [], detail: void 0 };
-                    return callback(failureErrorWithLog('Build failed', [message], []), null);
-                  }
-                  buildResponseToResult(response2, (error3, result3) => {
-                    if (error3) reject(error3);
-                    else resolve(result3!);
-                  });
-                });
-            });
-            refs.ref()
-            rebuild!.dispose = () => {
-              if (isDisposed) return;
-              isDisposed = true;
-              sendRequest<protocol.RebuildDisposeRequest, null>(refs, { command: 'rebuild-dispose', key: buildKey }, () => {
-                // We don't care about the result
-              });
-              refs.unref() // Do this after the callback so "sendRequest" can extend the lifetime
-            };
-          }
-          result.rebuild = rebuild;
-        }
-
-        // Handle watch mode
-        if (response!.watch) {
-          if (!stop) {
-            let isStopped = false;
-            refs.ref()
-            stop = () => {
-              if (isStopped) return;
-              isStopped = true;
-              delete requestCallbacks['watch-rebuild']
-              sendRequest<protocol.WatchStopRequest, null>(refs, { command: 'watch-stop', key: buildKey }, () => {
-                // We don't care about the result
-              });
-              refs.unref() // Do this after the callback so "sendRequest" can extend the lifetime
+    // In context mode, Go runs the "onEnd" callbacks instead of JavaScript
+    let latestResultPromise: Promise<types.BuildResult> | undefined
+    let provideLatestResult: ((error: types.BuildFailure | null, result: types.BuildResult | null) => void) | undefined
+    if (isContext)
+      requestCallbacks['on-end'] = (id, request: protocol.OnEndRequest) =>
+        new Promise(resolve => {
+          buildResponseToResult(request, (err, result, onEndErrors, onEndWarnings) => {
+            const response: protocol.OnEndResponse = {
+              errors: onEndErrors,
+              warnings: onEndWarnings,
             }
-            if (watch) {
-              requestCallbacks['watch-rebuild'] = (id, request: protocol.OnWatchRebuildRequest) => {
-                try {
-                  let watchResponse = request.args
-                  let result2: types.BuildResult = {
-                    errors: replaceDetailsInMessages(watchResponse.errors, details),
-                    warnings: replaceDetailsInMessages(watchResponse.warnings, details),
-                  };
+            if (provideLatestResult) provideLatestResult(err, result)
+            latestResultPromise = undefined
+            provideLatestResult = undefined
+            sendResponse(id, response as any)
+            resolve()
+          })
+        })
 
-                  // Note: "onEnd" callbacks should run even when there is no "onRebuild" callback
-                  copyResponseToResult(watchResponse, result2);
-                  runOnEndCallbacks(result2, logPluginError, () => {
-                    if (result2.errors.length > 0) {
-                      if (watch!.onRebuild) watch!.onRebuild(failureErrorWithLog('Build failed', result2.errors, result2.warnings), null);
-                      return;
-                    }
-                    result2.stop = stop;
-                    if (watch!.onRebuild) watch!.onRebuild(null, result2);
-                  });
-                } catch (err) {
-                  console.error(err);
+    sendRequest<protocol.BuildRequest, protocol.BuildResponse>(refs, request, (error, response) => {
+      if (error) return callback(new Error(error), null)
+      if (!isContext) {
+        return buildResponseToResult(response!, (err, res) => {
+          scheduleOnDisposeCallbacks()
+          return callback(err, res)
+        })
+      }
+
+      // Construct a context object
+      if (response!.errors.length > 0) {
+        return callback(failureErrorWithLog('Context failed', response!.errors, response!.warnings), null)
+      }
+      let didDispose = false
+      const result: types.BuildContext = {
+        rebuild: () => {
+          if (!latestResultPromise) latestResultPromise = new Promise((resolve, reject) => {
+            let settlePromise: (() => void) | undefined
+            provideLatestResult = (err, result) => {
+              if (!settlePromise) settlePromise = () => err ? reject(err) : resolve(result!)
+            }
+            const triggerAnotherBuild = (): void => {
+              const request: protocol.RebuildRequest = {
+                command: 'rebuild',
+                key: buildKey,
+              }
+              sendRequest<protocol.RebuildRequest, protocol.RebuildResponse>(refs, request, (error, response) => {
+                if (error) {
+                  reject(new Error(error))
+                } else if (settlePromise) {
+                  // It's possible to settle the promise that we returned from
+                  // this "rebuild()" function earlier than this point. However,
+                  // at that point the user could call "rebuild()" again which
+                  // would unexpectedly merge with the same build that's still
+                  // ongoing. To prevent that, we defer settling the promise
+                  // until now when we know that the build has finished.
+                  settlePromise()
+                } else {
+                  // When we call "rebuild()", we call out to the Go "Rebuild()"
+                  // API over IPC. That may trigger a build, but may also "join"
+                  // an existing build. At some point the Go code sends us an
+                  // "on-end" message with the build result to tell us to run
+                  // our "onEnd" plugins. We capture that build result and return
+                  // it here.
+                  //
+                  // However, there's a potential problem: For performance, the
+                  // Go code will only send us the result if it's needed, which
+                  // only happens if there are "onEnd" callbacks or if "rebuild"
+                  // was called. So there's a race where the following things
+                  // happen:
+                  //
+                  // 1. Go starts a rebuild (e.g. due to watch mode)
+                  // 2. JS calls "rebuild()"
+                  // 3. Go ends the build and starts Go's "OnEnd" callback
+                  // 4. Go's "OnEnd" callback sees no need to send the result
+                  // 5. JS asks Go to rebuild, which merges with the existing build
+                  // 6. Go's existing build ends
+                  // 7. The merged build ends, which wakes up JS and ends up here
+                  //
+                  // In that situation we didn't get an "on-end" message since
+                  // Go thought it wasn't necessary. In that situation, we
+                  // trigger another rebuild below so that Go will (almost
+                  // surely) send us an "on-end" message next time. I suspect
+                  // that this is a very rare case, so the performance impact
+                  // of building twice shouldn't really matter. It also only
+                  // happens when "rebuild()" is used with "watch()" and/or
+                  // "serve()".
+                  triggerAnotherBuild()
                 }
-                sendResponse(id, {});
+              })
+            }
+            triggerAnotherBuild()
+          })
+          return latestResultPromise
+        },
+
+        watch: (options = {}) => new Promise((resolve, reject) => {
+          if (!streamIn.hasFS) throw new Error(`Cannot use the "watch" API in this environment`)
+          const keys: OptionKeys = {}
+          checkForInvalidFlags(options, keys, `in watch() call`)
+          const request: protocol.WatchRequest = {
+            command: 'watch',
+            key: buildKey,
+          }
+          sendRequest<protocol.WatchRequest, null>(refs, request, error => {
+            if (error) reject(new Error(error))
+            else resolve(undefined)
+          })
+        }),
+
+        serve: (options = {}) => new Promise((resolve, reject) => {
+          if (!streamIn.hasFS) throw new Error(`Cannot use the "serve" API in this environment`)
+          const keys: OptionKeys = {}
+          const port = getFlag(options, keys, 'port', mustBeInteger)
+          const host = getFlag(options, keys, 'host', mustBeString)
+          const servedir = getFlag(options, keys, 'servedir', mustBeString)
+          const keyfile = getFlag(options, keys, 'keyfile', mustBeString)
+          const certfile = getFlag(options, keys, 'certfile', mustBeString)
+          const onRequest = getFlag(options, keys, 'onRequest', mustBeFunction)
+          checkForInvalidFlags(options, keys, `in serve() call`)
+
+          const request: protocol.ServeRequest = {
+            command: 'serve',
+            key: buildKey,
+            onRequest: !!onRequest,
+          }
+          if (port !== void 0) request.port = port
+          if (host !== void 0) request.host = host
+          if (servedir !== void 0) request.servedir = servedir
+          if (keyfile !== void 0) request.keyfile = keyfile
+          if (certfile !== void 0) request.certfile = certfile
+
+          sendRequest<protocol.ServeRequest, protocol.ServeResponse>(refs, request, (error, response) => {
+            if (error) return reject(new Error(error))
+            if (onRequest) {
+              requestCallbacks['serve-request'] = (id, request: protocol.OnServeRequest) => {
+                onRequest(request.args)
+                sendResponse(id, {})
               }
             }
+            resolve(response!)
+          })
+        }),
+
+        cancel: () => new Promise(resolve => {
+          if (didDispose) return resolve()
+          const request: protocol.CancelRequest = {
+            command: 'cancel',
+            key: buildKey,
           }
-          result.stop = stop;
-        }
+          sendRequest<protocol.CancelRequest, null>(refs, request, () => {
+            resolve(); // We don't care about errors here
+          })
+        }),
 
-        callback(null, result);
-      });
-    };
+        dispose: () => new Promise(resolve => {
+          if (didDispose) return resolve()
+          didDispose = true // Don't dispose more than once
+          const request: protocol.DisposeRequest = {
+            command: 'dispose',
+            key: buildKey,
+          }
+          sendRequest<protocol.DisposeRequest, null>(refs, request, () => {
+            resolve(); // We don't care about errors here
+            scheduleOnDisposeCallbacks()
 
-    if (write && streamIn.isWriteUnavailable) throw new Error(`The "write" option is unavailable in this environment`);
-    if (incremental && streamIn.isSync) throw new Error(`Cannot use "incremental" with a synchronous build`);
-    if (watch && streamIn.isSync) throw new Error(`Cannot use "watch" with a synchronous build`);
-    sendRequest<protocol.BuildRequest, protocol.BuildResponse>(refs, request, (error, response) => {
-      if (error) return callback(new Error(error), null);
-      if (serve) {
-        let serveResponse = response as any as protocol.ServeResponse;
-        let isStopped = false
-
-        // Add a ref/unref for "stop()"
-        refs.ref()
-        let result: types.ServeResult = {
-          port: serveResponse.port,
-          host: serveResponse.host,
-          wait: serve.wait,
-          stop() {
-            if (isStopped) return
-            isStopped = true
-            serve!.stop();
-            refs.unref() // Do this after the callback so "stop" can extend the lifetime
-          },
-        };
-
-        // Add a ref/unref for "wait". This must be done independently of
-        // "stop()" in case the response to "stop()" comes in first before
-        // the request for "wait". Without this ref/unref, node may close
-        // the child's stdin pipe after the "stop()" but before the "wait"
-        // which will cause things to break. This caused a test failure.
-        refs.ref()
-        serve.wait.then(refs.unref, refs.unref)
-
-        return callback(null, result);
+            // Only remove the reference here when we know the Go code has seen
+            // this "dispose" call. We don't want to remove any registered
+            // callbacks before that point because the Go code might still be
+            // sending us events. If we remove the reference earlier then we
+            // will return errors for those events, which may end up being
+            // printed to the terminal where the user can see them, which would
+            // be very confusing.
+            refs.unref()
+          })
+        }),
       }
-      return buildResponseToResult(response!, callback);
-    });
+      refs.ref(); // Keep a reference until "dispose" is called
+      callback(null, result)
+    })
   }
 }
 
-interface ServeData {
-  wait: Promise<void>
-  stop: () => void
-}
-
-let buildServeData = (
-  buildKey: number,
-  sendRequest: <Req, Res>(refs: Refs | null, value: Req, callback: (error: string | null, response: Res | null) => void) => void,
-  sendResponse: (id: number, value: protocol.Value) => void,
-  refs: Refs,
-  requestCallbacks: { [command: string]: RequestCallback },
-  options: types.ServeOptions,
-  request: protocol.BuildRequest,
-): ServeData => {
-  let keys: OptionKeys = {};
-  let port = getFlag(options, keys, 'port', mustBeInteger);
-  let host = getFlag(options, keys, 'host', mustBeString);
-  let servedir = getFlag(options, keys, 'servedir', mustBeString);
-  let onRequest = getFlag(options, keys, 'onRequest', mustBeFunction);
-  let wait = new Promise<void>((resolve, reject) => {
-    requestCallbacks['serve-wait'] = (id, request: protocol.OnWaitRequest) => {
-      if (request.error !== null) reject(new Error(request.error));
-      else resolve();
-      sendResponse(id, {})
-    }
-  });
-  request.serve = {};
-  checkForInvalidFlags(options, keys, `in serve() call`);
-  if (port !== void 0) request.serve.port = port;
-  if (host !== void 0) request.serve.host = host;
-  if (servedir !== void 0) request.serve.servedir = servedir;
-  requestCallbacks['serve-request'] = (id, request: protocol.OnRequestRequest) => {
-    if (onRequest) onRequest(request.args)
-    sendResponse(id, {})
-  }
-  return {
-    wait,
-    stop() {
-      sendRequest<protocol.ServeStopRequest, null>(refs, { command: 'serve-stop', key: buildKey }, () => {
-        // We don't care about the result
-      });
-    },
-  };
-};
-
-type LogPluginErrorCallback = (e: any, pluginName: string, note: types.Note | undefined, done: (message: types.Message) => void) => void;
-type RunOnEndCallbacks = (result: types.BuildResult, logPluginError: LogPluginErrorCallback, done: () => void) => void;
+type RunOnEndCallbacks = (result: types.BuildResult, done: (errors: types.Message[], warnings: types.Message[]) => void) => void
 
 let handlePlugins = async (
   buildKey: number,
@@ -1154,20 +1158,22 @@ let handlePlugins = async (
   plugins: types.Plugin[],
   details: ObjectStash,
 ): Promise<
-  | { ok: true, requestPlugins: protocol.BuildPlugin[], runOnEndCallbacks: RunOnEndCallbacks }
+  | { ok: true, requestPlugins: protocol.BuildPlugin[], runOnEndCallbacks: RunOnEndCallbacks, scheduleOnDisposeCallbacks: () => void }
   | { ok: false, error: any, pluginName: string }
 > => {
   let onStartCallbacks: {
     name: string,
     note: () => types.Note | undefined,
-    callback: () => (types.OnStartResult | null | void | Promise<types.OnStartResult | null | void>),
-  }[] = [];
+    callback: () =>
+      (types.OnStartResult | null | void | Promise<types.OnStartResult | null | void>),
+  }[] = []
 
   let onEndCallbacks: {
     name: string,
     note: () => types.Note | undefined,
-    callback: (result: types.BuildResult) => (void | Promise<void>),
-  }[] = [];
+    callback: (result: types.BuildResult) =>
+      (types.OnEndResult | null | void | Promise<types.OnEndResult | null | void>),
+  }[] = []
 
   let onResolveCallbacks: {
     [id: number]: {
@@ -1176,7 +1182,7 @@ let handlePlugins = async (
       callback: (args: types.OnResolveArgs) =>
         (types.OnResolveResult | null | undefined | Promise<types.OnResolveResult | null | undefined>),
     },
-  } = {};
+  } = {}
 
   let onLoadCallbacks: {
     [id: number]: {
@@ -1185,25 +1191,26 @@ let handlePlugins = async (
       callback: (args: types.OnLoadArgs) =>
         (types.OnLoadResult | null | undefined | Promise<types.OnLoadResult | null | undefined>),
     },
-  } = {};
+  } = {}
 
-  let nextCallbackID = 0;
-  let i = 0;
-  let requestPlugins: protocol.BuildPlugin[] = [];
-  let isSetupDone = false;
+  let onDisposeCallbacks: (() => void)[] = []
+  let nextCallbackID = 0
+  let i = 0
+  let requestPlugins: protocol.BuildPlugin[] = []
+  let isSetupDone = false
 
   // Clone the plugin array to guard against mutation during iteration
-  plugins = [...plugins];
+  plugins = [...plugins]
 
   for (let item of plugins) {
-    let keys: OptionKeys = {};
-    if (typeof item !== 'object') throw new Error(`Plugin at index ${i} must be an object`);
-    const name = getFlag(item, keys, 'name', mustBeString);
-    if (typeof name !== 'string' || name === '') throw new Error(`Plugin at index ${i} is missing a name`);
+    let keys: OptionKeys = {}
+    if (typeof item !== 'object') throw new Error(`Plugin at index ${i} must be an object`)
+    const name = getFlag(item, keys, 'name', mustBeString)
+    if (typeof name !== 'string' || name === '') throw new Error(`Plugin at index ${i} is missing a name`)
     try {
-      let setup = getFlag(item, keys, 'setup', mustBeFunction);
-      if (typeof setup !== 'function') throw new Error(`Plugin is missing a setup function`);
-      checkForInvalidFlags(item, keys, `on plugin ${quote(name)}`);
+      let setup = getFlag(item, keys, 'setup', mustBeFunction)
+      if (typeof setup !== 'function') throw new Error(`Plugin is missing a setup function`)
+      checkForInvalidFlags(item, keys, `on plugin ${quote(name)}`)
 
       let plugin: protocol.BuildPlugin = {
         name,
@@ -1211,20 +1218,20 @@ let handlePlugins = async (
         onEnd: false,
         onResolve: [],
         onLoad: [],
-      };
-      i++;
+      }
+      i++
 
       let resolve = (path: string, options: types.ResolveOptions = {}): Promise<types.ResolveResult> => {
-        if (!isSetupDone) throw new Error('Cannot call "resolve" before plugin setup has completed');
-        if (typeof path !== 'string') throw new Error(`The path to resolve must be a string`);
-        let keys: OptionKeys = Object.create(null);
-        let pluginName = getFlag(options, keys, 'pluginName', mustBeString);
-        let importer = getFlag(options, keys, 'importer', mustBeString);
-        let namespace = getFlag(options, keys, 'namespace', mustBeString);
-        let resolveDir = getFlag(options, keys, 'resolveDir', mustBeString);
-        let kind = getFlag(options, keys, 'kind', mustBeString);
-        let pluginData = getFlag(options, keys, 'pluginData', canBeAnything);
-        checkForInvalidFlags(options, keys, 'in resolve() call');
+        if (!isSetupDone) throw new Error('Cannot call "resolve" before plugin setup has completed')
+        if (typeof path !== 'string') throw new Error(`The path to resolve must be a string`)
+        let keys: OptionKeys = Object.create(null)
+        let pluginName = getFlag(options, keys, 'pluginName', mustBeString)
+        let importer = getFlag(options, keys, 'importer', mustBeString)
+        let namespace = getFlag(options, keys, 'namespace', mustBeString)
+        let resolveDir = getFlag(options, keys, 'resolveDir', mustBeString)
+        let kind = getFlag(options, keys, 'kind', mustBeString)
+        let pluginData = getFlag(options, keys, 'pluginData', canBeAnything)
+        checkForInvalidFlags(options, keys, 'in resolve() call')
 
         return new Promise((resolve, reject) => {
           const request: protocol.ResolveRequest = {
@@ -1264,88 +1271,92 @@ let handlePlugins = async (
 
         onStart(callback) {
           let registeredText = `This error came from the "onStart" callback registered here:`
-          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onStart');
-          onStartCallbacks.push({ name: name!, callback, note: registeredNote });
-          plugin.onStart = true;
+          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onStart')
+          onStartCallbacks.push({ name: name!, callback, note: registeredNote })
+          plugin.onStart = true
         },
 
         onEnd(callback) {
           let registeredText = `This error came from the "onEnd" callback registered here:`
-          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onEnd');
-          onEndCallbacks.push({ name: name!, callback, note: registeredNote });
-          plugin.onEnd = true;
+          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onEnd')
+          onEndCallbacks.push({ name: name!, callback, note: registeredNote })
+          plugin.onEnd = true
         },
 
         onResolve(options, callback) {
           let registeredText = `This error came from the "onResolve" callback registered here:`
-          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onResolve');
-          let keys: OptionKeys = {};
-          let filter = getFlag(options, keys, 'filter', mustBeRegExp);
-          let namespace = getFlag(options, keys, 'namespace', mustBeString);
-          checkForInvalidFlags(options, keys, `in onResolve() call for plugin ${quote(name)}`);
-          if (filter == null) throw new Error(`onResolve() call is missing a filter`);
-          let id = nextCallbackID++;
-          onResolveCallbacks[id] = { name: name!, callback, note: registeredNote };
-          plugin.onResolve.push({ id, filter: filter.source, namespace: namespace || '' });
+          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onResolve')
+          let keys: OptionKeys = {}
+          let filter = getFlag(options, keys, 'filter', mustBeRegExp)
+          let namespace = getFlag(options, keys, 'namespace', mustBeString)
+          checkForInvalidFlags(options, keys, `in onResolve() call for plugin ${quote(name)}`)
+          if (filter == null) throw new Error(`onResolve() call is missing a filter`)
+          let id = nextCallbackID++
+          onResolveCallbacks[id] = { name: name!, callback, note: registeredNote }
+          plugin.onResolve.push({ id, filter: filter.source, namespace: namespace || '' })
         },
 
         onLoad(options, callback) {
           let registeredText = `This error came from the "onLoad" callback registered here:`
-          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onLoad');
-          let keys: OptionKeys = {};
-          let filter = getFlag(options, keys, 'filter', mustBeRegExp);
-          let namespace = getFlag(options, keys, 'namespace', mustBeString);
-          checkForInvalidFlags(options, keys, `in onLoad() call for plugin ${quote(name)}`);
-          if (filter == null) throw new Error(`onLoad() call is missing a filter`);
-          let id = nextCallbackID++;
-          onLoadCallbacks[id] = { name: name!, callback, note: registeredNote };
-          plugin.onLoad.push({ id, filter: filter.source, namespace: namespace || '' });
+          let registeredNote = extractCallerV8(new Error(registeredText), streamIn, 'onLoad')
+          let keys: OptionKeys = {}
+          let filter = getFlag(options, keys, 'filter', mustBeRegExp)
+          let namespace = getFlag(options, keys, 'namespace', mustBeString)
+          checkForInvalidFlags(options, keys, `in onLoad() call for plugin ${quote(name)}`)
+          if (filter == null) throw new Error(`onLoad() call is missing a filter`)
+          let id = nextCallbackID++
+          onLoadCallbacks[id] = { name: name!, callback, note: registeredNote }
+          plugin.onLoad.push({ id, filter: filter.source, namespace: namespace || '' })
+        },
+
+        onDispose(callback) {
+          onDisposeCallbacks.push(callback)
         },
 
         esbuild: streamIn.esbuild,
-      });
+      })
 
       // Await a returned promise if there was one. This allows plugins to do
       // some asynchronous setup while still retaining the ability to modify
       // the build options. This deliberately serializes asynchronous plugin
       // setup instead of running them concurrently so that build option
       // modifications are easier to reason about.
-      if (promise) await promise;
+      if (promise) await promise
 
-      requestPlugins.push(plugin);
+      requestPlugins.push(plugin)
     } catch (e) {
       return { ok: false, error: e, pluginName: name }
     }
   }
 
-  requestCallbacks['on-start'] = async (id, request) => {
-    let response: protocol.OnStartResponse = { errors: [], warnings: [] };
+  requestCallbacks['on-start'] = async (id, request: protocol.OnStartRequest) => {
+    let response: protocol.OnStartResponse = { errors: [], warnings: [] }
     await Promise.all(onStartCallbacks.map(async ({ name, callback, note }) => {
       try {
-        let result = await callback();
+        let result = await callback()
 
         if (result != null) {
-          if (typeof result !== 'object') throw new Error(`Expected onStart() callback in plugin ${quote(name)} to return an object`);
-          let keys: OptionKeys = {};
-          let errors = getFlag(result, keys, 'errors', mustBeArray);
-          let warnings = getFlag(result, keys, 'warnings', mustBeArray);
-          checkForInvalidFlags(result, keys, `from onStart() callback in plugin ${quote(name)}`);
+          if (typeof result !== 'object') throw new Error(`Expected onStart() callback in plugin ${quote(name)} to return an object`)
+          let keys: OptionKeys = {}
+          let errors = getFlag(result, keys, 'errors', mustBeArray)
+          let warnings = getFlag(result, keys, 'warnings', mustBeArray)
+          checkForInvalidFlags(result, keys, `from onStart() callback in plugin ${quote(name)}`)
 
-          if (errors != null) response.errors!.push(...sanitizeMessages(errors, 'errors', details, name));
-          if (warnings != null) response.warnings!.push(...sanitizeMessages(warnings, 'warnings', details, name));
+          if (errors != null) response.errors!.push(...sanitizeMessages(errors, 'errors', details, name))
+          if (warnings != null) response.warnings!.push(...sanitizeMessages(warnings, 'warnings', details, name))
         }
       } catch (e) {
-        response.errors!.push(extractErrorMessageV8(e, streamIn, details, note && note(), name));
+        response.errors!.push(extractErrorMessageV8(e, streamIn, details, note && note(), name))
       }
     }))
     sendResponse(id, response as any)
   }
 
-  requestCallbacks['on-resolve'] = async (id, request) => {
-    let response: protocol.OnResolveResponse = {}, name = '', callback, note;
+  requestCallbacks['on-resolve'] = async (id, request: protocol.OnResolveRequest) => {
+    let response: protocol.OnResolveResponse = {}, name = '', callback, note
     for (let id of request.ids) {
       try {
-        ({ name, callback, note } = onResolveCallbacks[id]);
+        ({ name, callback, note } = onResolveCallbacks[id])
         let result = await callback({
           path: request.path,
           importer: request.importer,
@@ -1353,116 +1364,161 @@ let handlePlugins = async (
           resolveDir: request.resolveDir,
           kind: request.kind,
           pluginData: details.load(request.pluginData),
-        });
+        })
 
         if (result != null) {
-          if (typeof result !== 'object') throw new Error(`Expected onResolve() callback in plugin ${quote(name)} to return an object`);
-          let keys: OptionKeys = {};
-          let pluginName = getFlag(result, keys, 'pluginName', mustBeString);
-          let path = getFlag(result, keys, 'path', mustBeString);
-          let namespace = getFlag(result, keys, 'namespace', mustBeString);
-          let suffix = getFlag(result, keys, 'suffix', mustBeString);
-          let external = getFlag(result, keys, 'external', mustBeBoolean);
-          let sideEffects = getFlag(result, keys, 'sideEffects', mustBeBoolean);
-          let pluginData = getFlag(result, keys, 'pluginData', canBeAnything);
-          let errors = getFlag(result, keys, 'errors', mustBeArray);
-          let warnings = getFlag(result, keys, 'warnings', mustBeArray);
-          let watchFiles = getFlag(result, keys, 'watchFiles', mustBeArray);
-          let watchDirs = getFlag(result, keys, 'watchDirs', mustBeArray);
-          checkForInvalidFlags(result, keys, `from onResolve() callback in plugin ${quote(name)}`);
+          if (typeof result !== 'object') throw new Error(`Expected onResolve() callback in plugin ${quote(name)} to return an object`)
+          let keys: OptionKeys = {}
+          let pluginName = getFlag(result, keys, 'pluginName', mustBeString)
+          let path = getFlag(result, keys, 'path', mustBeString)
+          let namespace = getFlag(result, keys, 'namespace', mustBeString)
+          let suffix = getFlag(result, keys, 'suffix', mustBeString)
+          let external = getFlag(result, keys, 'external', mustBeBoolean)
+          let sideEffects = getFlag(result, keys, 'sideEffects', mustBeBoolean)
+          let pluginData = getFlag(result, keys, 'pluginData', canBeAnything)
+          let errors = getFlag(result, keys, 'errors', mustBeArray)
+          let warnings = getFlag(result, keys, 'warnings', mustBeArray)
+          let watchFiles = getFlag(result, keys, 'watchFiles', mustBeArray)
+          let watchDirs = getFlag(result, keys, 'watchDirs', mustBeArray)
+          checkForInvalidFlags(result, keys, `from onResolve() callback in plugin ${quote(name)}`)
 
-          response.id = id;
-          if (pluginName != null) response.pluginName = pluginName;
-          if (path != null) response.path = path;
-          if (namespace != null) response.namespace = namespace;
-          if (suffix != null) response.suffix = suffix;
-          if (external != null) response.external = external;
-          if (sideEffects != null) response.sideEffects = sideEffects;
-          if (pluginData != null) response.pluginData = details.store(pluginData);
-          if (errors != null) response.errors = sanitizeMessages(errors, 'errors', details, name);
-          if (warnings != null) response.warnings = sanitizeMessages(warnings, 'warnings', details, name);
-          if (watchFiles != null) response.watchFiles = sanitizeStringArray(watchFiles, 'watchFiles');
-          if (watchDirs != null) response.watchDirs = sanitizeStringArray(watchDirs, 'watchDirs');
-          break;
+          response.id = id
+          if (pluginName != null) response.pluginName = pluginName
+          if (path != null) response.path = path
+          if (namespace != null) response.namespace = namespace
+          if (suffix != null) response.suffix = suffix
+          if (external != null) response.external = external
+          if (sideEffects != null) response.sideEffects = sideEffects
+          if (pluginData != null) response.pluginData = details.store(pluginData)
+          if (errors != null) response.errors = sanitizeMessages(errors, 'errors', details, name)
+          if (warnings != null) response.warnings = sanitizeMessages(warnings, 'warnings', details, name)
+          if (watchFiles != null) response.watchFiles = sanitizeStringArray(watchFiles, 'watchFiles')
+          if (watchDirs != null) response.watchDirs = sanitizeStringArray(watchDirs, 'watchDirs')
+          break
         }
       } catch (e) {
-        response = { id, errors: [extractErrorMessageV8(e, streamIn, details, note && note(), name)] };
+        response = { id, errors: [extractErrorMessageV8(e, streamIn, details, note && note(), name)] }
         break
       }
     }
     sendResponse(id, response as any)
   }
 
-  requestCallbacks['on-load'] = async (id, request) => {
-    let response: protocol.OnLoadResponse = {}, name = '', callback, note;
+  requestCallbacks['on-load'] = async (id, request: protocol.OnLoadRequest) => {
+    let response: protocol.OnLoadResponse = {}, name = '', callback, note
     for (let id of request.ids) {
       try {
-        ({ name, callback, note } = onLoadCallbacks[id]);
+        ({ name, callback, note } = onLoadCallbacks[id])
         let result = await callback({
           path: request.path,
           namespace: request.namespace,
           suffix: request.suffix,
           pluginData: details.load(request.pluginData),
-        });
+        })
 
         if (result != null) {
-          if (typeof result !== 'object') throw new Error(`Expected onLoad() callback in plugin ${quote(name)} to return an object`);
-          let keys: OptionKeys = {};
-          let pluginName = getFlag(result, keys, 'pluginName', mustBeString);
-          let contents = getFlag(result, keys, 'contents', mustBeStringOrUint8Array);
-          let resolveDir = getFlag(result, keys, 'resolveDir', mustBeString);
-          let pluginData = getFlag(result, keys, 'pluginData', canBeAnything);
-          let loader = getFlag(result, keys, 'loader', mustBeString);
-          let errors = getFlag(result, keys, 'errors', mustBeArray);
-          let warnings = getFlag(result, keys, 'warnings', mustBeArray);
-          let watchFiles = getFlag(result, keys, 'watchFiles', mustBeArray);
-          let watchDirs = getFlag(result, keys, 'watchDirs', mustBeArray);
-          checkForInvalidFlags(result, keys, `from onLoad() callback in plugin ${quote(name)}`);
+          if (typeof result !== 'object') throw new Error(`Expected onLoad() callback in plugin ${quote(name)} to return an object`)
+          let keys: OptionKeys = {}
+          let pluginName = getFlag(result, keys, 'pluginName', mustBeString)
+          let contents = getFlag(result, keys, 'contents', mustBeStringOrUint8Array)
+          let resolveDir = getFlag(result, keys, 'resolveDir', mustBeString)
+          let pluginData = getFlag(result, keys, 'pluginData', canBeAnything)
+          let loader = getFlag(result, keys, 'loader', mustBeString)
+          let errors = getFlag(result, keys, 'errors', mustBeArray)
+          let warnings = getFlag(result, keys, 'warnings', mustBeArray)
+          let watchFiles = getFlag(result, keys, 'watchFiles', mustBeArray)
+          let watchDirs = getFlag(result, keys, 'watchDirs', mustBeArray)
+          checkForInvalidFlags(result, keys, `from onLoad() callback in plugin ${quote(name)}`)
 
-          response.id = id;
-          if (pluginName != null) response.pluginName = pluginName;
-          if (contents instanceof Uint8Array) response.contents = contents;
-          else if (contents != null) response.contents = protocol.encodeUTF8(contents);
-          if (resolveDir != null) response.resolveDir = resolveDir;
-          if (pluginData != null) response.pluginData = details.store(pluginData);
-          if (loader != null) response.loader = loader;
-          if (errors != null) response.errors = sanitizeMessages(errors, 'errors', details, name);
-          if (warnings != null) response.warnings = sanitizeMessages(warnings, 'warnings', details, name);
-          if (watchFiles != null) response.watchFiles = sanitizeStringArray(watchFiles, 'watchFiles');
-          if (watchDirs != null) response.watchDirs = sanitizeStringArray(watchDirs, 'watchDirs');
-          break;
+          response.id = id
+          if (pluginName != null) response.pluginName = pluginName
+          if (contents instanceof Uint8Array) response.contents = contents
+          else if (contents != null) response.contents = protocol.encodeUTF8(contents)
+          if (resolveDir != null) response.resolveDir = resolveDir
+          if (pluginData != null) response.pluginData = details.store(pluginData)
+          if (loader != null) response.loader = loader
+          if (errors != null) response.errors = sanitizeMessages(errors, 'errors', details, name)
+          if (warnings != null) response.warnings = sanitizeMessages(warnings, 'warnings', details, name)
+          if (watchFiles != null) response.watchFiles = sanitizeStringArray(watchFiles, 'watchFiles')
+          if (watchDirs != null) response.watchDirs = sanitizeStringArray(watchDirs, 'watchDirs')
+          break
         }
       } catch (e) {
-        response = { id, errors: [extractErrorMessageV8(e, streamIn, details, note && note(), name)] };
+        response = { id, errors: [extractErrorMessageV8(e, streamIn, details, note && note(), name)] }
         break
       }
     }
     sendResponse(id, response as any)
   }
 
-  let runOnEndCallbacks: RunOnEndCallbacks = (result, logPluginError, done) => done();
+  let runOnEndCallbacks: RunOnEndCallbacks = (result, done) => done([], [])
 
   if (onEndCallbacks.length > 0) {
-    runOnEndCallbacks = (result, logPluginError, done) => {
+    runOnEndCallbacks = (result, done) => {
       (async () => {
+        const onEndErrors: types.Message[] = []
+        const onEndWarnings: types.Message[] = []
+
         for (const { name, callback, note } of onEndCallbacks) {
+          let newErrors: types.Message[] | undefined
+          let newWarnings: types.Message[] | undefined
+
           try {
-            await callback(result)
+            const value = await callback(result)
+
+            if (value != null) {
+              if (typeof value !== 'object') throw new Error(`Expected onEnd() callback in plugin ${quote(name)} to return an object`)
+              let keys: OptionKeys = {}
+              let errors = getFlag(value, keys, 'errors', mustBeArray)
+              let warnings = getFlag(value, keys, 'warnings', mustBeArray)
+              checkForInvalidFlags(value, keys, `from onEnd() callback in plugin ${quote(name)}`)
+
+              if (errors != null) newErrors = sanitizeMessages(errors, 'errors', details, name)
+              if (warnings != null) newWarnings = sanitizeMessages(warnings, 'warnings', details, name)
+            }
           } catch (e) {
-            result.errors.push(await new Promise<types.Message>(resolve => logPluginError(e, name, note && note(), resolve)))
+            newErrors = [extractErrorMessageV8(e, streamIn, details, note && note(), name)]
+          }
+
+          // Try adding the errors and warnings to the result object, but
+          // continue if something goes wrong. If error-reporting has errors
+          // then nothing can help us...
+          if (newErrors) {
+            onEndErrors.push(...newErrors)
+            try {
+              result.errors.push(...newErrors)
+            } catch {
+            }
+          }
+          if (newWarnings) {
+            onEndWarnings.push(...newWarnings)
+            try {
+              result.warnings.push(...newWarnings)
+            } catch {
+            }
           }
         }
-      })().then(done)
+
+        done(onEndErrors, onEndWarnings)
+      })()
     }
   }
 
-  isSetupDone = true;
+  let scheduleOnDisposeCallbacks = (): void => {
+    // Run each "onDispose" callback with its own call stack
+    for (const cb of onDisposeCallbacks) {
+      setTimeout(() => cb(), 0)
+    }
+  }
+
+  isSetupDone = true
   return {
     ok: true,
     requestPlugins,
     runOnEndCallbacks,
+    scheduleOnDisposeCallbacks,
   }
-};
+}
 
 // This stores JavaScript objects on the JavaScript side and temporarily
 // substitutes them with an integer that can be passed through the Go side
@@ -1470,24 +1526,24 @@ let handlePlugins = async (
 // even if the JavaScript objects aren't serializable. And we also avoid
 // the overhead of serializing large JavaScript objects.
 interface ObjectStash {
-  load(id: number): any;
-  store(value: any): number;
+  load(id: number): any
+  store(value: any): number
 }
 
 function createObjectStash(): ObjectStash {
-  const map = new Map<number, any>();
-  let nextID = 0;
+  const map = new Map<number, any>()
+  let nextID = 0
   return {
     load(id) {
-      return map.get(id);
+      return map.get(id)
     },
     store(value) {
-      if (value === void 0) return -1;
-      const id = nextID++;
-      map.set(id, value);
-      return id;
+      if (value === void 0) return -1
+      const id = nextID++
+      map.set(id, value)
+      return id
     },
-  };
+  }
 }
 
 function extractCallerV8(e: Error, streamIn: StreamIn, ident: string): () => types.Note | undefined {
@@ -1514,7 +1570,7 @@ function extractErrorMessageV8(e: any, streamIn: StreamIn, stash: ObjectStash | 
   let location: types.Location | null = null
 
   try {
-    text = ((e && e.message) || e) + '';
+    text = ((e && e.message) || e) + ''
   } catch {
   }
 
@@ -1578,44 +1634,44 @@ function parseStackLinesV8(streamIn: StreamIn, lines: string[], ident: string): 
     }
   }
 
-  return null;
+  return null
 }
 
 function failureErrorWithLog(text: string, errors: types.Message[], warnings: types.Message[]): types.BuildFailure {
   let limit = 5
   let summary = errors.length < 1 ? '' : ` with ${errors.length} error${errors.length < 2 ? '' : 's'}:` +
     errors.slice(0, limit + 1).map((e, i) => {
-      if (i === limit) return '\n...';
-      if (!e.location) return `\nerror: ${e.text}`;
-      let { file, line, column } = e.location;
-      let pluginText = e.pluginName ? `[plugin: ${e.pluginName}] ` : '';
-      return `\n${file}:${line}:${column}: ERROR: ${pluginText}${e.text}`;
-    }).join('');
-  let error: any = new Error(`${text}${summary}`);
-  error.errors = errors;
-  error.warnings = warnings;
-  return error;
+      if (i === limit) return '\n...'
+      if (!e.location) return `\nerror: ${e.text}`
+      let { file, line, column } = e.location
+      let pluginText = e.pluginName ? `[plugin: ${e.pluginName}] ` : ''
+      return `\n${file}:${line}:${column}: ERROR: ${pluginText}${e.text}`
+    }).join('')
+  let error: any = new Error(`${text}${summary}`)
+  error.errors = errors
+  error.warnings = warnings
+  return error
 }
 
 function replaceDetailsInMessages(messages: types.Message[], stash: ObjectStash): types.Message[] {
   for (const message of messages) {
-    message.detail = stash.load(message.detail);
+    message.detail = stash.load(message.detail)
   }
-  return messages;
+  return messages
 }
 
 function sanitizeLocation(location: types.PartialMessage['location'], where: string): types.Message['location'] {
-  if (location == null) return null;
+  if (location == null) return null
 
-  let keys: OptionKeys = {};
-  let file = getFlag(location, keys, 'file', mustBeString);
-  let namespace = getFlag(location, keys, 'namespace', mustBeString);
-  let line = getFlag(location, keys, 'line', mustBeInteger);
-  let column = getFlag(location, keys, 'column', mustBeInteger);
-  let length = getFlag(location, keys, 'length', mustBeInteger);
-  let lineText = getFlag(location, keys, 'lineText', mustBeString);
-  let suggestion = getFlag(location, keys, 'suggestion', mustBeString);
-  checkForInvalidFlags(location, keys, where);
+  let keys: OptionKeys = {}
+  let file = getFlag(location, keys, 'file', mustBeString)
+  let namespace = getFlag(location, keys, 'namespace', mustBeString)
+  let line = getFlag(location, keys, 'line', mustBeInteger)
+  let column = getFlag(location, keys, 'column', mustBeInteger)
+  let length = getFlag(location, keys, 'length', mustBeInteger)
+  let lineText = getFlag(location, keys, 'lineText', mustBeString)
+  let suggestion = getFlag(location, keys, 'suggestion', mustBeString)
+  checkForInvalidFlags(location, keys, where)
 
   return {
     file: file || '',
@@ -1625,35 +1681,35 @@ function sanitizeLocation(location: types.PartialMessage['location'], where: str
     length: length || 0,
     lineText: lineText || '',
     suggestion: suggestion || '',
-  };
+  }
 }
 
 function sanitizeMessages(messages: types.PartialMessage[], property: string, stash: ObjectStash | null, fallbackPluginName: string): types.Message[] {
-  let messagesClone: types.Message[] = [];
-  let index = 0;
+  let messagesClone: types.Message[] = []
+  let index = 0
 
   for (const message of messages) {
-    let keys: OptionKeys = {};
-    let id = getFlag(message, keys, 'id', mustBeString);
-    let pluginName = getFlag(message, keys, 'pluginName', mustBeString);
-    let text = getFlag(message, keys, 'text', mustBeString);
-    let location = getFlag(message, keys, 'location', mustBeObjectOrNull);
-    let notes = getFlag(message, keys, 'notes', mustBeArray);
-    let detail = getFlag(message, keys, 'detail', canBeAnything);
-    let where = `in element ${index} of "${property}"`;
-    checkForInvalidFlags(message, keys, where);
+    let keys: OptionKeys = {}
+    let id = getFlag(message, keys, 'id', mustBeString)
+    let pluginName = getFlag(message, keys, 'pluginName', mustBeString)
+    let text = getFlag(message, keys, 'text', mustBeString)
+    let location = getFlag(message, keys, 'location', mustBeObjectOrNull)
+    let notes = getFlag(message, keys, 'notes', mustBeArray)
+    let detail = getFlag(message, keys, 'detail', canBeAnything)
+    let where = `in element ${index} of "${property}"`
+    checkForInvalidFlags(message, keys, where)
 
-    let notesClone: types.Note[] = [];
+    let notesClone: types.Note[] = []
     if (notes) {
       for (const note of notes) {
-        let noteKeys: OptionKeys = {};
-        let noteText = getFlag(note, noteKeys, 'text', mustBeString);
-        let noteLocation = getFlag(note, noteKeys, 'location', mustBeObjectOrNull);
-        checkForInvalidFlags(note, noteKeys, where);
+        let noteKeys: OptionKeys = {}
+        let noteText = getFlag(note, noteKeys, 'text', mustBeString)
+        let noteLocation = getFlag(note, noteKeys, 'location', mustBeObjectOrNull)
+        checkForInvalidFlags(note, noteKeys, where)
         notesClone.push({
           text: noteText || '',
           location: sanitizeLocation(noteLocation, where),
-        });
+        })
       }
     }
 
@@ -1664,26 +1720,26 @@ function sanitizeMessages(messages: types.PartialMessage[], property: string, st
       location: sanitizeLocation(location, where),
       notes: notesClone,
       detail: stash ? stash.store(detail) : -1,
-    });
-    index++;
+    })
+    index++
   }
 
-  return messagesClone;
+  return messagesClone
 }
 
 function sanitizeStringArray(values: any[], property: string): string[] {
-  const result: string[] = [];
+  const result: string[] = []
   for (const value of values) {
-    if (typeof value !== 'string') throw new Error(`${quote(property)} must be an array of strings`);
-    result.push(value);
+    if (typeof value !== 'string') throw new Error(`${quote(property)} must be an array of strings`)
+    result.push(value)
   }
-  return result;
+  return result
 }
 
 function convertOutputFiles({ path, contents }: protocol.BuildOutputFile): types.OutputFile {
   // The text is lazily-generated for performance reasons. If no one asks for
   // it, then it never needs to be generated.
-  let text: string | null = null;
+  let text: string | null = null
   return {
     path,
     contents,
@@ -1691,7 +1747,7 @@ function convertOutputFiles({ path, contents }: protocol.BuildOutputFile): types
       // People want to be able to set "contents" and have esbuild automatically
       // derive "text" for them, so grab the contents off of this object instead
       // of using our original value.
-      const binary = this.contents;
+      const binary = this.contents
 
       // This deliberately doesn't do bidirectional derivation because that could
       // result in the inefficiency. For example, if we did do this and then you
@@ -1700,10 +1756,10 @@ function convertOutputFiles({ path, contents }: protocol.BuildOutputFile): types
       // need to regenerate it again. Instead, "contents" is unambiguously the
       // primary value and "text" is unambiguously the derived value.
       if (text === null || binary !== contents) {
-        contents = binary;
-        text = protocol.decodeUTF8(binary);
+        contents = binary
+        text = protocol.decodeUTF8(binary)
       }
-      return text;
+      return text
     },
   }
 }

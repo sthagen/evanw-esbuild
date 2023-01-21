@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.19\.4 ' || (echo 'Please install Go version 1.19.4' && false)
+	@go version | grep ' go1\.19\.5 ' || (echo 'Please install Go version 1.19.5' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -66,6 +66,7 @@ test-wasm-browser: platform-wasm | scripts/browser/node_modules
 
 test-deno: esbuild platform-deno
 	ESBUILD_BINARY_PATH="$(shell pwd)/esbuild" deno test --allow-run --allow-env --allow-net --allow-read --allow-write --no-check scripts/deno-tests.js
+	@echo '✅ deno tests passed' # I couldn't find a Deno API for telling when tests have failed, so I'm doing this here instead
 	deno eval 'import { transform, stop } from "file://$(shell pwd)/deno/mod.js"; console.log((await transform("1+2")).code); stop()' | grep "1 + 2;"
 	deno eval 'import { transform, stop } from "file://$(shell pwd)/deno/wasm.js"; console.log((await transform("1+2")).code); stop()' | grep "1 + 2;"
 

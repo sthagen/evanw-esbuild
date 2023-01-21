@@ -44,6 +44,13 @@ func expectParseErrorTarget(t *testing.T, esVersion int, contents string, expect
 	})
 }
 
+func expectPrintedWithUnsupportedFeatures(t *testing.T, unsupportedJSFeatures compat.JSFeature, contents string, expected string) {
+	t.Helper()
+	expectPrintedCommon(t, contents, expected, config.Options{
+		UnsupportedJSFeatures: unsupportedJSFeatures,
+	})
+}
+
 func expectParseErrorWithUnsupportedFeatures(t *testing.T, unsupportedJSFeatures compat.JSFeature, contents string, expected string) {
 	t.Helper()
 	expectParseErrorCommon(t, contents, expected, config.Options{
@@ -678,6 +685,15 @@ func TestAwait(t *testing.T) {
 <stdin>: NOTE: This file is considered to be an ECMAScript module because of the top-level "await" keyword here:
 `)
 	expectPrinted(t, "async function f() { await delete x }", "async function f() {\n  await delete x;\n}\n")
+
+	// Can't use await at the top-level without top-level await
+	err := "<stdin>: ERROR: Top-level await is not available in the configured target environment\n"
+	expectParseErrorWithUnsupportedFeatures(t, compat.TopLevelAwait, "await x;", err)
+	expectParseErrorWithUnsupportedFeatures(t, compat.TopLevelAwait, "if (true) await x;", err)
+	expectPrintedWithUnsupportedFeatures(t, compat.TopLevelAwait, "if (false) await x;", "if (false)\n  x;\n")
+	expectParseErrorWithUnsupportedFeatures(t, compat.TopLevelAwait, "with (x) y; if (false) await x;",
+		"<stdin>: ERROR: With statements cannot be used in an ECMAScript module\n"+
+			"<stdin>: NOTE: This file is considered to be an ECMAScript module because of the top-level \"await\" keyword here:\n")
 }
 
 func TestRegExp(t *testing.T) {
@@ -5755,4 +5771,20 @@ func TestAutoPureForWeakMap(t *testing.T) {
 	expectPrinted(t, "new WeakMap([x])", "new WeakMap([x]);\n")
 	expectPrinted(t, "new WeakMap([x, []])", "new WeakMap([x, []]);\n")
 	expectPrinted(t, "new WeakMap([[], x])", "new WeakMap([[], x]);\n")
+}
+
+func TestAutoPureForDate(t *testing.T) {
+	expectPrinted(t, "new Date", "/* @__PURE__ */ new Date();\n")
+	expectPrinted(t, "new Date(0)", "/* @__PURE__ */ new Date(0);\n")
+	expectPrinted(t, "new Date('')", "/* @__PURE__ */ new Date(\"\");\n")
+	expectPrinted(t, "new Date(null)", "/* @__PURE__ */ new Date(null);\n")
+	expectPrinted(t, "new Date(true)", "/* @__PURE__ */ new Date(true);\n")
+	expectPrinted(t, "new Date(false)", "/* @__PURE__ */ new Date(false);\n")
+	expectPrinted(t, "new Date(undefined)", "/* @__PURE__ */ new Date(void 0);\n")
+	expectPrinted(t, "new Date(`${foo}`)", "/* @__PURE__ */ new Date(`${foo}`);\n")
+	expectPrinted(t, "new Date(foo ? 'x' : 'y')", "/* @__PURE__ */ new Date(foo ? \"x\" : \"y\");\n")
+
+	expectPrinted(t, "new Date(foo)", "new Date(foo);\n")
+	expectPrinted(t, "new Date(foo``)", "new Date(foo``);\n")
+	expectPrinted(t, "new Date(foo ? x : y)", "new Date(foo ? x : y);\n")
 }

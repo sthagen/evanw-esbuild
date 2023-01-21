@@ -1,74 +1,74 @@
-import * as types from "../shared/types"
+import type * as types from "../shared/types"
 import * as common from "../shared/common"
 import * as ourselves from "./browser"
 
-declare const ESBUILD_VERSION: string;
+declare const ESBUILD_VERSION: string
 declare let WEB_WORKER_SOURCE_CODE: string
 declare let WEB_WORKER_FUNCTION: (postMessage: (data: Uint8Array) => void) => (event: { data: Uint8Array | ArrayBuffer | WebAssembly.Module }) => void
 
-export let version = ESBUILD_VERSION;
+export let version = ESBUILD_VERSION
 
-export let build: typeof types.build = (options: types.BuildOptions): Promise<any> =>
-  ensureServiceIsRunning().build(options);
+export let build: typeof types.build = (options: types.BuildOptions) =>
+  ensureServiceIsRunning().build(options)
 
-export const serve: typeof types.serve = () => {
-  throw new Error(`The "serve" API only works in node`);
-};
+export let context: typeof types.context = (options: types.BuildOptions) =>
+  ensureServiceIsRunning().context(options)
 
-export const transform: typeof types.transform = (input, options) =>
-  ensureServiceIsRunning().transform(input, options);
+export const transform: typeof types.transform = (input: string | Uint8Array, options?: types.TransformOptions) =>
+  ensureServiceIsRunning().transform(input, options)
 
 export const formatMessages: typeof types.formatMessages = (messages, options) =>
-  ensureServiceIsRunning().formatMessages(messages, options);
+  ensureServiceIsRunning().formatMessages(messages, options)
 
 export const analyzeMetafile: typeof types.analyzeMetafile = (metafile, options) =>
-  ensureServiceIsRunning().analyzeMetafile(metafile, options);
+  ensureServiceIsRunning().analyzeMetafile(metafile, options)
 
 export const buildSync: typeof types.buildSync = () => {
-  throw new Error(`The "buildSync" API only works in node`);
-};
-
-export const transformSync: typeof types.transformSync = () => {
-  throw new Error(`The "transformSync" API only works in node`);
-};
-
-export const formatMessagesSync: typeof types.formatMessagesSync = () => {
-  throw new Error(`The "formatMessagesSync" API only works in node`);
-};
-
-export const analyzeMetafileSync: typeof types.analyzeMetafileSync = () => {
-  throw new Error(`The "analyzeMetafileSync" API only works in node`);
-};
-
-interface Service {
-  build: typeof types.build;
-  transform: typeof types.transform;
-  formatMessages: typeof types.formatMessages;
-  analyzeMetafile: typeof types.analyzeMetafile;
+  throw new Error(`The "buildSync" API only works in node`)
 }
 
-let initializePromise: Promise<void> | undefined;
-let longLivedService: Service | undefined;
+export const transformSync: typeof types.transformSync = () => {
+  throw new Error(`The "transformSync" API only works in node`)
+}
+
+export const formatMessagesSync: typeof types.formatMessagesSync = () => {
+  throw new Error(`The "formatMessagesSync" API only works in node`)
+}
+
+export const analyzeMetafileSync: typeof types.analyzeMetafileSync = () => {
+  throw new Error(`The "analyzeMetafileSync" API only works in node`)
+}
+
+interface Service {
+  build: typeof types.build
+  context: typeof types.context
+  transform: typeof types.transform
+  formatMessages: typeof types.formatMessages
+  analyzeMetafile: typeof types.analyzeMetafile
+}
+
+let initializePromise: Promise<void> | undefined
+let longLivedService: Service | undefined
 
 let ensureServiceIsRunning = (): Service => {
-  if (longLivedService) return longLivedService;
-  if (initializePromise) throw new Error('You need to wait for the promise returned from "initialize" to be resolved before calling this');
-  throw new Error('You need to call "initialize" before calling this');
+  if (longLivedService) return longLivedService
+  if (initializePromise) throw new Error('You need to wait for the promise returned from "initialize" to be resolved before calling this')
+  throw new Error('You need to call "initialize" before calling this')
 }
 
 export const initialize: typeof types.initialize = options => {
-  options = common.validateInitializeOptions(options || {});
-  let wasmURL = options.wasmURL;
-  let wasmModule = options.wasmModule;
-  let useWorker = options.worker !== false;
-  if (!wasmURL && !wasmModule) throw new Error('Must provide either the "wasmURL" option or the "wasmModule" option');
-  if (initializePromise) throw new Error('Cannot call "initialize" more than once');
-  initializePromise = startRunningService(wasmURL || '', wasmModule, useWorker);
+  options = common.validateInitializeOptions(options || {})
+  let wasmURL = options.wasmURL
+  let wasmModule = options.wasmModule
+  let useWorker = options.worker !== false
+  if (!wasmURL && !wasmModule) throw new Error('Must provide either the "wasmURL" option or the "wasmModule" option')
+  if (initializePromise) throw new Error('Cannot call "initialize" more than once')
+  initializePromise = startRunningService(wasmURL || '', wasmModule, useWorker)
   initializePromise.catch(() => {
     // Let the caller try again if this fails
-    initializePromise = void 0;
-  });
-  return initializePromise;
+    initializePromise = void 0
+  })
+  return initializePromise
 }
 
 const startRunningService = async (wasmURL: string | URL, wasmModule: WebAssembly.Module | undefined, useWorker: boolean): Promise<void> => {
@@ -114,7 +114,7 @@ const startRunningService = async (wasmURL: string | URL, wasmModule: WebAssembl
       worker.postMessage(bytes)
     },
     isSync: false,
-    isWriteUnavailable: true,
+    hasFS: false,
     esbuild: ourselves,
   })
 
@@ -122,19 +122,30 @@ const startRunningService = async (wasmURL: string | URL, wasmModule: WebAssembl
   await firstMessagePromise
 
   longLivedService = {
-    build: (options: types.BuildOptions): Promise<any> =>
+    build: (options: types.BuildOptions) =>
       new Promise<types.BuildResult>((resolve, reject) =>
-        service.buildOrServe({
+        service.buildOrContext({
           callName: 'build',
           refs: null,
-          serveOptions: null,
           options,
           isTTY: false,
           defaultWD: '/',
           callback: (err, res) => err ? reject(err) : resolve(res as types.BuildResult),
         })),
-    transform: (input, options) =>
-      new Promise((resolve, reject) =>
+
+    context: (options: types.BuildOptions) =>
+      new Promise<types.BuildContext>((resolve, reject) =>
+        service.buildOrContext({
+          callName: 'context',
+          refs: null,
+          options,
+          isTTY: false,
+          defaultWD: '/',
+          callback: (err, res) => err ? reject(err) : resolve(res as types.BuildContext),
+        })),
+
+    transform: (input: string | Uint8Array, options?: types.TransformOptions) =>
+      new Promise<types.TransformResult>((resolve, reject) =>
         service.transform({
           callName: 'transform',
           refs: null,
@@ -147,6 +158,7 @@ const startRunningService = async (wasmURL: string | URL, wasmModule: WebAssembl
           },
           callback: (err, res) => err ? reject(err) : resolve(res!),
         })),
+
     formatMessages: (messages, options) =>
       new Promise((resolve, reject) =>
         service.formatMessages({
@@ -156,6 +168,7 @@ const startRunningService = async (wasmURL: string | URL, wasmModule: WebAssembl
           options,
           callback: (err, res) => err ? reject(err) : resolve(res!),
         })),
+
     analyzeMetafile: (metafile, options) =>
       new Promise((resolve, reject) =>
         service.analyzeMetafile({

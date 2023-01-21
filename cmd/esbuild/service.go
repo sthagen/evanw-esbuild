@@ -25,24 +25,24 @@ import (
 )
 
 type responseCallback func(interface{})
-type rebuildCallback func(uint32) []byte
-type watchStopCallback func()
-type serveStopCallback func()
 type pluginResolveCallback func(uint32, map[string]interface{}) []byte
 
 type activeBuild struct {
-	rebuild       rebuildCallback
-	watchStop     watchStopCallback
-	serveStop     serveStopCallback
-	pluginResolve pluginResolveCallback
-	mutex         sync.Mutex
-	refCount      int
+	ctx              api.BuildContext
+	pluginResolve    pluginResolveCallback
+	mutex            sync.Mutex
+	disposeWaitGroup sync.WaitGroup // Allows "dispose" to wait for all active tasks
+
+	// These are guarded by the mutex
+	rebuildWaitGroup   *sync.WaitGroup // Allows "cancel" to wait for all active rebuilds (within mutex because "sync.WaitGroup" isn't thread-safe)
+	withinRebuildCount int
+	didGetCancel       bool
 }
 
 type serviceType struct {
 	callbacks          map[uint32]responseCallback
 	activeBuilds       map[int]*activeBuild
-	outgoingPackets    chan outgoingPacket
+	outgoingPackets    chan []byte // Always use "sendPacket" instead of sending on this channel
 	keepAliveWaitGroup *helpers.ThreadSafeWaitGroup
 	mutex              sync.Mutex
 	nextRequestID      uint32
@@ -55,13 +55,13 @@ func (service *serviceType) getActiveBuild(key int) *activeBuild {
 	return activeBuild
 }
 
-func (service *serviceType) trackActiveBuild(key int) *activeBuild {
+func (service *serviceType) createActiveBuild(key int) *activeBuild {
 	service.mutex.Lock()
 	defer service.mutex.Unlock()
 	if service.activeBuilds[key] != nil {
 		panic("Internal error")
 	}
-	activeBuild := &activeBuild{refCount: 1}
+	activeBuild := &activeBuild{}
 	service.activeBuilds[key] = activeBuild
 
 	// This pairs with "Done()" in "decRefCount"
@@ -69,28 +69,16 @@ func (service *serviceType) trackActiveBuild(key int) *activeBuild {
 	return activeBuild
 }
 
-func (service *serviceType) decRefCount(key int, activeBuild *activeBuild) {
-	activeBuild.mutex.Lock()
-	activeBuild.refCount--
-	remaining := activeBuild.refCount
-	activeBuild.mutex.Unlock()
-
-	if remaining < 0 {
+func (service *serviceType) destroyActiveBuild(key int) {
+	service.mutex.Lock()
+	if service.activeBuilds[key] == nil {
 		panic("Internal error")
 	}
+	delete(service.activeBuilds, key)
+	service.mutex.Unlock()
 
-	if remaining == 0 {
-		service.mutex.Lock()
-		delete(service.activeBuilds, key)
-		service.mutex.Unlock()
-
-		// This pairs with "Add()" in "trackActiveBuild"
-		service.keepAliveWaitGroup.Done()
-	}
-}
-
-type outgoingPacket struct {
-	bytes []byte
+	// This pairs with "Add()" in "trackActiveBuild"
+	service.keepAliveWaitGroup.Done()
 }
 
 func runService(sendPings bool) {
@@ -99,7 +87,7 @@ func runService(sendPings bool) {
 	service := serviceType{
 		callbacks:          make(map[uint32]responseCallback),
 		activeBuilds:       make(map[int]*activeBuild),
-		outgoingPackets:    make(chan outgoingPacket),
+		outgoingPackets:    make(chan []byte),
 		keepAliveWaitGroup: helpers.MakeThreadSafeWaitGroup(),
 	}
 	buffer := make([]byte, 16*1024)
@@ -107,9 +95,8 @@ func runService(sendPings bool) {
 
 	// Write packets on a single goroutine so they aren't interleaved
 	go func() {
-		for {
-			packet := <-service.outgoingPackets
-			if _, err := os.Stdout.Write(packet.bytes); err != nil {
+		for packet := range service.outgoingPackets {
+			if _, err := os.Stdout.Write(packet); err != nil {
 				os.Exit(1) // I/O error
 			}
 			service.keepAliveWaitGroup.Done() // This pairs with the "Add()" when putting stuff into "outgoingPackets"
@@ -162,22 +149,20 @@ func runService(sendPings bool) {
 			}
 			bytes = afterPacket
 
-			// Clone the input and run it on another goroutine
+			// Clone the input since slices into it may be used on another goroutine
 			clone := append([]byte{}, packet...)
-			service.keepAliveWaitGroup.Add(1)
-			go func() {
-				out := service.handleIncomingPacket(clone)
-				if out.bytes != nil {
-					service.keepAliveWaitGroup.Add(1) // The writer thread will call "Done()"
-					service.outgoingPackets <- out
-				}
-				service.keepAliveWaitGroup.Done() // This pairs with the "Add()" in the stdin thread
-			}()
+			service.handleIncomingPacket(clone)
 		}
 
 		// Move the remaining partial packet to the end to avoid reallocating
 		stream = append(stream[:0], bytes...)
 	}
+}
+
+// Each packet added to "outgoingPackets" must also add to the wait group
+func (service *serviceType) sendPacket(packet []byte) {
+	service.keepAliveWaitGroup.Add(1) // The writer thread will call "Done()"
+	service.outgoingPackets <- packet
 }
 
 // This will either block until the request has been sent and a response has
@@ -199,203 +184,383 @@ func (service *serviceType) sendRequest(request interface{}) interface{} {
 		return id
 	}()
 
-	service.keepAliveWaitGroup.Add(1) // The writer thread will call "Done()"
-	service.outgoingPackets <- outgoingPacket{
-		bytes: encodePacket(packet{
-			id:        id,
-			isRequest: true,
-			value:     request,
-		}),
-	}
+	service.sendPacket(encodePacket(packet{
+		id:        id,
+		isRequest: true,
+		value:     request,
+	}))
 	return <-result
 }
 
-func (service *serviceType) handleIncomingPacket(bytes []byte) (result outgoingPacket) {
+// This function deliberately processes incoming packets sequentially on the
+// same goroutine as the caller. We want calling "dispose" on a context to take
+// effect immediately and to fail all future calls on that context. We don't
+// want "dispose" to accidentally be reordered after any future calls on that
+// context, since those future calls are supposed to fail.
+//
+// If processing a packet could potentially take a while, then the remainder of
+// the work should be run on another goroutine after decoding the command.
+func (service *serviceType) handleIncomingPacket(bytes []byte) {
 	p, ok := decodePacket(bytes)
 	if !ok {
-		return outgoingPacket{}
+		return
 	}
 
-	if p.isRequest {
-		// Catch panics in the code below so they get passed to the caller
-		defer func() {
-			if r := recover(); r != nil {
-				result = outgoingPacket{
-					bytes: encodePacket(packet{
-						id: p.id,
-						value: map[string]interface{}{
-							"error": fmt.Sprintf("panic: %v\n\n%s", r, helpers.PrettyPrintedStack()),
-						},
-					}),
-				}
-			}
+	if !p.isRequest {
+		service.mutex.Lock()
+		callback := service.callbacks[p.id]
+		delete(service.callbacks, p.id)
+		service.mutex.Unlock()
+
+		if callback == nil {
+			panic(fmt.Sprintf("callback nil for id %d, value %v", p.id, p.value))
+		}
+
+		service.keepAliveWaitGroup.Add(1)
+		go func() {
+			defer service.keepAliveWaitGroup.Done()
+			callback(p.value)
+		}()
+		return
+	}
+
+	// Handle the request
+	request := p.value.(map[string]interface{})
+	command := request["command"].(string)
+	switch command {
+	case "build":
+		service.keepAliveWaitGroup.Add(1)
+		go func() {
+			defer service.keepAliveWaitGroup.Done()
+			service.sendPacket(service.handleBuildRequest(p.id, request))
 		}()
 
-		// Handle the request
-		request := p.value.(map[string]interface{})
-		command := request["command"].(string)
-		switch command {
-		case "build":
-			return service.handleBuildRequest(p.id, request)
+	case "transform":
+		service.keepAliveWaitGroup.Add(1)
+		go func() {
+			defer service.keepAliveWaitGroup.Done()
+			service.sendPacket(service.handleTransformRequest(p.id, request))
+		}()
 
-		case "transform":
-			return outgoingPacket{
-				bytes: service.handleTransformRequest(p.id, request),
+	case "resolve":
+		key := request["key"].(int)
+		if build := service.getActiveBuild(key); build != nil {
+			build.mutex.Lock()
+			ctx := build.ctx
+			pluginResolve := build.pluginResolve
+			if ctx != nil && pluginResolve != nil {
+				build.disposeWaitGroup.Add(1)
 			}
-
-		case "resolve":
-			key := request["key"].(int)
-			if build := service.getActiveBuild(key); build != nil {
-				build.mutex.Lock()
-				pluginResolve := build.pluginResolve
-				build.mutex.Unlock()
-				if pluginResolve != nil {
-					return outgoingPacket{
-						bytes: pluginResolve(p.id, request),
+			build.mutex.Unlock()
+			if pluginResolve != nil {
+				service.keepAliveWaitGroup.Add(1)
+				go func() {
+					defer service.keepAliveWaitGroup.Done()
+					if ctx != nil {
+						defer build.disposeWaitGroup.Done()
 					}
-				}
+					service.sendPacket(pluginResolve(p.id, request))
+				}()
+				return
 			}
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id: p.id,
-					value: map[string]interface{}{
-						"error": "Cannot call \"resolve\" on an inactive build",
-					},
-				}),
-			}
+		}
+		service.sendPacket(encodePacket(packet{
+			id: p.id,
+			value: map[string]interface{}{
+				"error": "Cannot call \"resolve\" on an inactive build",
+			},
+		}))
 
-		case "rebuild":
-			key := request["key"].(int)
-			if build := service.getActiveBuild(key); build != nil {
-				build.mutex.Lock()
-				rebuild := build.rebuild
-				build.mutex.Unlock()
-				if rebuild != nil {
-					return outgoingPacket{
-						bytes: rebuild(p.id),
+	case "rebuild":
+		key := request["key"].(int)
+		if build := service.getActiveBuild(key); build != nil {
+			build.mutex.Lock()
+			ctx := build.ctx
+			if ctx != nil {
+				build.withinRebuildCount++
+				if build.rebuildWaitGroup == nil {
+					build.rebuildWaitGroup = &sync.WaitGroup{}
+				}
+				build.rebuildWaitGroup.Add(1)
+				build.disposeWaitGroup.Add(1)
+			}
+			build.mutex.Unlock()
+			if ctx != nil {
+				service.keepAliveWaitGroup.Add(1)
+				go func() {
+					defer service.keepAliveWaitGroup.Done()
+					defer build.disposeWaitGroup.Done()
+					result := ctx.Rebuild()
+					build.mutex.Lock()
+					build.withinRebuildCount--
+					build.rebuildWaitGroup.Done()
+					if build.withinRebuildCount == 0 {
+						// Clear the cancel flag now that the last rebuild has finished
+						build.didGetCancel = false
+
+						// Clear this to avoid confusion with the next group of rebuilds
+						build.rebuildWaitGroup = nil
 					}
-				}
+					build.mutex.Unlock()
+					service.sendPacket(encodePacket(packet{
+						id: p.id,
+						value: map[string]interface{}{
+							"errors":   encodeMessages(result.Errors),
+							"warnings": encodeMessages(result.Warnings),
+						},
+					}))
+				}()
+				return
 			}
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id: p.id,
-					value: map[string]interface{}{
-						"error": "Cannot rebuild",
-					},
-				}),
-			}
+		}
+		service.sendPacket(encodePacket(packet{
+			id: p.id,
+			value: map[string]interface{}{
+				"error": "Cannot rebuild",
+			},
+		}))
 
-		case "watch-stop":
-			key := request["key"].(int)
-			if build := service.getActiveBuild(key); build != nil {
-				build.mutex.Lock()
-				watchStop := build.watchStop
-				build.watchStop = nil
-				build.mutex.Unlock()
-
-				// Stop watch mode and release this ref count if it was held
-				if watchStop != nil {
-					watchStop()
-					service.decRefCount(key, build)
-				}
+	case "watch":
+		key := request["key"].(int)
+		if build := service.getActiveBuild(key); build != nil {
+			build.mutex.Lock()
+			ctx := build.ctx
+			if ctx != nil {
+				build.disposeWaitGroup.Add(1)
 			}
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id:    p.id,
-					value: make(map[string]interface{}),
-				}),
+			build.mutex.Unlock()
+			if ctx != nil {
+				service.keepAliveWaitGroup.Add(1)
+				go func() {
+					defer service.keepAliveWaitGroup.Done()
+					defer build.disposeWaitGroup.Done()
+					if err := ctx.Watch(api.WatchOptions{}); err != nil {
+						service.sendPacket(encodeErrorPacket(p.id, err))
+					} else {
+						service.sendPacket(encodePacket(packet{
+							id:    p.id,
+							value: make(map[string]interface{}),
+						}))
+					}
+				}()
+				return
 			}
+		}
+		service.sendPacket(encodePacket(packet{
+			id: p.id,
+			value: map[string]interface{}{
+				"error": "Cannot watch",
+			},
+		}))
 
-		case "serve-stop":
-			key := request["key"].(int)
-			if build := service.getActiveBuild(key); build != nil {
-				build.mutex.Lock()
-				serveStop := build.serveStop
-				build.serveStop = nil
-				build.mutex.Unlock()
-
-				// Stop serving but do not release the ref count (that's done elsewhere)
-				if serveStop != nil {
-					serveStop()
-				}
+	case "serve":
+		key := request["key"].(int)
+		if build := service.getActiveBuild(key); build != nil {
+			build.mutex.Lock()
+			ctx := build.ctx
+			if ctx != nil {
+				build.disposeWaitGroup.Add(1)
 			}
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id:    p.id,
-					value: make(map[string]interface{}),
-				}),
+			build.mutex.Unlock()
+			if ctx != nil {
+				service.keepAliveWaitGroup.Add(1)
+				go func() {
+					defer service.keepAliveWaitGroup.Done()
+					defer build.disposeWaitGroup.Done()
+					var options api.ServeOptions
+					if value, ok := request["host"]; ok {
+						options.Host = value.(string)
+					}
+					if value, ok := request["port"]; ok {
+						options.Port = uint16(value.(int))
+					}
+					if value, ok := request["servedir"]; ok {
+						options.Servedir = value.(string)
+					}
+					if value, ok := request["keyfile"]; ok {
+						options.Keyfile = value.(string)
+					}
+					if value, ok := request["certfile"]; ok {
+						options.Certfile = value.(string)
+					}
+					if request["onRequest"].(bool) {
+						options.OnRequest = func(args api.ServeOnRequestArgs) {
+							// This could potentially be called after we return from
+							// "Dispose()". If it does, then make sure we don't call into
+							// JavaScript because we'll get an error. Also make sure that
+							// if we do call into JavaScript, we wait to call "Dispose()"
+							// until JavaScript has returned back to us.
+							build.mutex.Lock()
+							ctx := build.ctx
+							if ctx != nil {
+								build.disposeWaitGroup.Add(1)
+							}
+							build.mutex.Unlock()
+							if ctx != nil {
+								service.sendRequest(map[string]interface{}{
+									"command": "serve-request",
+									"key":     key,
+									"args": map[string]interface{}{
+										"remoteAddress": args.RemoteAddress,
+										"method":        args.Method,
+										"path":          args.Path,
+										"status":        args.Status,
+										"timeInMS":      args.TimeInMS,
+									},
+								})
+								build.disposeWaitGroup.Done()
+							}
+						}
+					}
+					if result, err := ctx.Serve(options); err != nil {
+						service.sendPacket(encodeErrorPacket(p.id, err))
+					} else {
+						service.sendPacket(encodePacket(packet{
+							id: p.id,
+							value: map[string]interface{}{
+								"port": int(result.Port),
+								"host": result.Host,
+							},
+						}))
+					}
+				}()
+				return
 			}
+		}
+		service.sendPacket(encodePacket(packet{
+			id: p.id,
+			value: map[string]interface{}{
+				"error": "Cannot serve",
+			},
+		}))
 
-		case "rebuild-dispose":
-			key := request["key"].(int)
-			if build := service.getActiveBuild(key); build != nil {
-				build.mutex.Lock()
-				rebuild := build.rebuild
-				build.rebuild = nil
-				build.mutex.Unlock()
-
-				// Release this ref count if it was held
-				if rebuild != nil {
-					service.decRefCount(key, build)
-				}
+	case "cancel":
+		key := request["key"].(int)
+		if build := service.getActiveBuild(key); build != nil {
+			build.mutex.Lock()
+			ctx := build.ctx
+			rebuildWaitGroup := build.rebuildWaitGroup
+			if build.withinRebuildCount > 0 {
+				// If Go got a "rebuild" message from JS before this, there's a chance
+				// that Go hasn't run "ctx.Rebuild()" by the time our "ctx.Cancel()"
+				// runs below because both of them are on separate goroutines. To
+				// handle this, we set this flag to tell our "OnStart" plugin to cancel
+				// the build in case things happen in that order.
+				build.didGetCancel = true
 			}
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id:    p.id,
-					value: make(map[string]interface{}),
-				}),
-			}
+			build.mutex.Unlock()
+			if ctx != nil {
+				service.keepAliveWaitGroup.Add(1)
+				go func() {
+					defer service.keepAliveWaitGroup.Done()
+					ctx.Cancel()
 
-		case "error":
+					// Block until all manual rebuilds that were active at the time the
+					// "cancel" packet was originally processed have finished. That way
+					// JS can wait for "cancel" to end and be assured that it can call
+					// "rebuild" and have it not merge with any other ongoing rebuilds.
+					if rebuildWaitGroup != nil {
+						rebuildWaitGroup.Wait()
+					}
+
+					// Only return control to JavaScript once the cancel operation has succeeded
+					service.sendPacket(encodePacket(packet{
+						id:    p.id,
+						value: make(map[string]interface{}),
+					}))
+				}()
+				return
+			}
+		}
+		service.sendPacket(encodePacket(packet{
+			id:    p.id,
+			value: make(map[string]interface{}),
+		}))
+
+	case "dispose":
+		key := request["key"].(int)
+		if build := service.getActiveBuild(key); build != nil {
+			build.mutex.Lock()
+			ctx := build.ctx
+			build.ctx = nil
+			build.mutex.Unlock()
+
+			// Release this ref count if it was held
+			if ctx != nil {
+				service.keepAliveWaitGroup.Add(1)
+				go func() {
+					defer service.keepAliveWaitGroup.Done()
+
+					// While "Dispose()" will wait for any existing operations on the
+					// context to finish, we also don't want to start any new operations.
+					// That can happen because operations (e.g. "Rebuild()") are started
+					// from a separate goroutine without locking the build mutex. This
+					// uses a WaitGroup to handle this case. If that happened, then we'll
+					// wait for it here before disposing. Once the wait is over, no more
+					// operations can happen on the context because we have already
+					// zeroed out the shared context pointer above.
+					build.disposeWaitGroup.Done()
+					build.disposeWaitGroup.Wait()
+
+					ctx.Dispose()
+					service.destroyActiveBuild(key)
+
+					// Only return control to JavaScript once everything relating to this
+					// build has gracefully ended. Otherwise JavaScript will unregister
+					// everything related to this build and any calls an ongoing build
+					// makes into JavaScript will cause errors, which may be observable.
+					service.sendPacket(encodePacket(packet{
+						id:    p.id,
+						value: make(map[string]interface{}),
+					}))
+				}()
+				return
+			}
+		}
+		service.sendPacket(encodePacket(packet{
+			id:    p.id,
+			value: make(map[string]interface{}),
+		}))
+
+	case "error":
+		service.keepAliveWaitGroup.Add(1)
+		go func() {
+			defer service.keepAliveWaitGroup.Done()
+
 			// This just exists so that errors during JavaScript API setup get printed
 			// nicely to the console. This matters if the JavaScript API setup code
 			// swallows thrown errors. We still want to be able to see the error.
 			flags := decodeStringArray(request["flags"].([]interface{}))
 			msg := decodeMessageToPrivate(request["error"].(map[string]interface{}))
 			logger.PrintMessageToStderr(flags, msg)
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id:    p.id,
-					value: make(map[string]interface{}),
-				}),
-			}
+			service.sendPacket(encodePacket(packet{
+				id:    p.id,
+				value: make(map[string]interface{}),
+			}))
+		}()
 
-		case "format-msgs":
-			return outgoingPacket{
-				bytes: service.handleFormatMessagesRequest(p.id, request),
-			}
+	case "format-msgs":
+		service.keepAliveWaitGroup.Add(1)
+		go func() {
+			defer service.keepAliveWaitGroup.Done()
+			service.sendPacket(service.handleFormatMessagesRequest(p.id, request))
+		}()
 
-		case "analyze-metafile":
-			return outgoingPacket{
-				bytes: service.handleAnalyzeMetafileRequest(p.id, request),
-			}
+	case "analyze-metafile":
+		service.keepAliveWaitGroup.Add(1)
+		go func() {
+			defer service.keepAliveWaitGroup.Done()
+			service.sendPacket(service.handleAnalyzeMetafileRequest(p.id, request))
+		}()
 
-		default:
-			return outgoingPacket{
-				bytes: encodePacket(packet{
-					id: p.id,
-					value: map[string]interface{}{
-						"error": fmt.Sprintf("Invalid command: %s", command),
-					},
-				}),
-			}
-		}
+	default:
+		service.sendPacket(encodePacket(packet{
+			id: p.id,
+			value: map[string]interface{}{
+				"error": fmt.Sprintf("Invalid command: %s", command),
+			},
+		}))
 	}
-
-	callback := func() responseCallback {
-		service.mutex.Lock()
-		defer service.mutex.Unlock()
-		callback := service.callbacks[p.id]
-		delete(service.callbacks, p.id)
-		return callback
-	}()
-
-	if callback == nil {
-		panic(fmt.Sprintf("callback nil for id %d, value %v", p.id, p.value))
-	}
-
-	callback(p.value)
-	return outgoingPacket{}
 }
 
 func encodeErrorPacket(id uint32, err error) []byte {
@@ -407,11 +572,10 @@ func encodeErrorPacket(id uint32, err error) []byte {
 	})
 }
 
-func (service *serviceType) handleBuildRequest(id uint32, request map[string]interface{}) outgoingPacket {
+func (service *serviceType) handleBuildRequest(id uint32, request map[string]interface{}) []byte {
+	isContext := request["context"].(bool)
 	key := request["key"].(int)
 	write := request["write"].(bool)
-	incremental := request["incremental"].(bool)
-	serveObj, isServe := request["serve"].(interface{})
 	entries := request["entries"].([]interface{})
 	flags := decodeStringArray(request["flags"].([]interface{}))
 
@@ -435,10 +599,10 @@ func (service *serviceType) handleBuildRequest(id uint32, request map[string]int
 	// stdout as a communication channel and writing the build output to stdout
 	// would corrupt our protocol. Special-case this to channel this back to the
 	// host process and write it to stdout there.
-	writeToStdout := err == nil && !isServe && write && options.Outfile == "" && options.Outdir == ""
+	writeToStdout := err == nil && write && options.Outfile == "" && options.Outdir == ""
 
 	if err != nil {
-		return outgoingPacket{bytes: encodeErrorPacket(id, err)}
+		return encodeErrorPacket(id, err)
 	}
 
 	// Optionally allow input from the stdin channel
@@ -452,27 +616,22 @@ func (service *serviceType) handleBuildRequest(id uint32, request map[string]int
 		}
 	}
 
-	activeBuild := service.trackActiveBuild(key)
-	defer service.decRefCount(key, activeBuild)
+	activeBuild := service.createActiveBuild(key)
 
+	hasOnEndCallbacks := false
 	if plugins, ok := request["plugins"]; ok {
-		if plugins, err := service.convertPlugins(key, plugins, activeBuild); err != nil {
-			return outgoingPacket{bytes: encodeErrorPacket(id, err)}
+		if plugins, hasOnEnd, err := service.convertPlugins(key, plugins, activeBuild); err != nil {
+			return encodeErrorPacket(id, err)
 		} else {
 			options.Plugins = plugins
+			hasOnEndCallbacks = hasOnEnd
 		}
-	}
-
-	if isServe {
-		return service.handleServeRequest(id, options, serveObj, key, activeBuild)
 	}
 
 	resultToResponse := func(result api.BuildResult) map[string]interface{} {
 		response := map[string]interface{}{
 			"errors":   encodeMessages(result.Errors),
 			"warnings": encodeMessages(result.Warnings),
-			"rebuild":  incremental,
-			"watch":    options.Watch != nil,
 		}
 		if !write {
 			// Pass the output files back to the caller
@@ -490,114 +649,123 @@ func (service *serviceType) handleBuildRequest(id uint32, request map[string]int
 		return response
 	}
 
-	if options.Watch != nil {
-		options.Watch.OnRebuild = func(result api.BuildResult) {
-			service.sendRequest(map[string]interface{}{
-				"command": "watch-rebuild",
-				"key":     key,
-				"args":    resultToResponse(result),
-			})
-		}
-	}
-
 	if !writeToStdout {
 		options.Write = write
 	}
-	options.Incremental = incremental
-	result := api.Build(options)
-	response := resultToResponse(result)
 
-	if incremental {
-		activeBuild.rebuild = func(id uint32) []byte {
-			result := result.Rebuild()
-			response := resultToResponse(result)
+	if isContext {
+		options.Plugins = append(options.Plugins, api.Plugin{
+			Name: "onEnd",
+			Setup: func(build api.PluginBuild) {
+				build.OnStart(func() (api.OnStartResult, error) {
+					activeBuild.mutex.Lock()
+					if currentWaitGroup := activeBuild.rebuildWaitGroup; currentWaitGroup != nil && activeBuild.didGetCancel {
+						// Cancel the current build now that the current build is active.
+						// This catches the case where JS does "rebuild()" then "cancel()"
+						// but Go's scheduler runs the original "ctx.Cancel()" goroutine
+						// before it runs the "ctx.Rebuild()" goroutine.
+						//
+						// This adds to the rebuild wait group that other cancel operations
+						// are waiting on because we also want those other cancel operations
+						// to wait on this cancel operation. Go might schedule this new
+						// goroutine after all currently-active rebuilds end. We don't want
+						// the user's cancel operation to return to the user and for them
+						// to start another rebuild before our "ctx.Cancel" below runs
+						// because our cancel is supposed to cancel the current build, not
+						// some independent future build.
+						activeBuild.rebuildWaitGroup.Add(1)
+						go func() {
+							activeBuild.ctx.Cancel()
+
+							// Lock the mutex because "sync.WaitGroup" isn't thread-safe.
+							// But use the wait group that was active at the time the
+							// "OnStart" callback ran instead of the latest one on the
+							// active build in case this goroutine is delayed.
+							activeBuild.mutex.Lock()
+							currentWaitGroup.Done()
+							activeBuild.mutex.Unlock()
+						}()
+					}
+					activeBuild.mutex.Unlock()
+					return api.OnStartResult{}, nil
+				})
+
+				build.OnEnd(func(result *api.BuildResult) (api.OnEndResult, error) {
+					// For performance, we only send JavaScript an "onEnd" message if
+					// it's needed. It's only needed if one of the following is true:
+					//
+					// - There are any "onEnd" callbacks registered
+					// - JavaScript has called our "rebuild()" function
+					// - We are writing build output to JavaScript's stdout
+					//
+					// This is especially important if "write" is false since otherwise
+					// we'd unnecessarily send the entire contents of all output files!
+					//
+					//          "If a tree falls in a forest and no one is
+					//           around to hear it, does it make a sound?"
+					//
+					activeBuild.mutex.Lock()
+					isWithinRebuild := activeBuild.withinRebuildCount > 0
+					activeBuild.mutex.Unlock()
+					if !hasOnEndCallbacks && !isWithinRebuild && !writeToStdout {
+						return api.OnEndResult{}, nil
+					}
+					request := resultToResponse(*result)
+					request["command"] = "on-end"
+					request["key"] = key
+					response, ok := service.sendRequest(request).(map[string]interface{})
+					if !ok {
+						return api.OnEndResult{}, errors.New("The service was stopped")
+					}
+					var errors []api.Message
+					var warnings []api.Message
+					if value, ok := response["errors"].([]interface{}); ok {
+						errors = decodeMessages(value)
+					}
+					if value, ok := response["warnings"].([]interface{}); ok {
+						warnings = decodeMessages(value)
+					}
+					return api.OnEndResult{
+						Errors:   errors,
+						Warnings: warnings,
+					}, nil
+				})
+			},
+		})
+
+		ctx, err := api.Context(options)
+		if err != nil {
 			return encodePacket(packet{
-				id:    id,
-				value: response,
+				id: id,
+				value: map[string]interface{}{
+					"errors":   encodeMessages(err.Errors),
+					"warnings": []interface{}{},
+				},
 			})
 		}
 
-		// Make sure the build doesn't finish until "dispose" has been called
-		activeBuild.refCount++
-	}
+		// Keep the build alive until "dispose" has been called
+		activeBuild.disposeWaitGroup.Add(1)
+		activeBuild.ctx = ctx
 
-	if options.Watch != nil {
-		activeBuild.watchStop = func() {
-			result.Stop()
-		}
-
-		// Make sure the build doesn't finish until "stop" has been called
-		activeBuild.refCount++
-	}
-
-	return outgoingPacket{
-		bytes: encodePacket(packet{
-			id:    id,
-			value: response,
-		}),
-	}
-}
-
-func (service *serviceType) handleServeRequest(id uint32, options api.BuildOptions, serveObj interface{}, key int, activeBuild *activeBuild) outgoingPacket {
-	var serveOptions api.ServeOptions
-	serve := serveObj.(map[string]interface{})
-	if port, ok := serve["port"]; ok {
-		serveOptions.Port = uint16(port.(int))
-	}
-	if host, ok := serve["host"]; ok {
-		serveOptions.Host = host.(string)
-	}
-	if servedir, ok := serve["servedir"]; ok {
-		serveOptions.Servedir = servedir.(string)
-	}
-	serveOptions.OnRequest = func(args api.ServeOnRequestArgs) {
-		service.sendRequest(map[string]interface{}{
-			"command": "serve-request",
-			"key":     key,
-			"args": map[string]interface{}{
-				"remoteAddress": args.RemoteAddress,
-				"method":        args.Method,
-				"path":          args.Path,
-				"status":        args.Status,
-				"timeInMS":      args.TimeInMS,
+		return encodePacket(packet{
+			id: id,
+			value: map[string]interface{}{
+				"errors":   []interface{}{},
+				"warnings": []interface{}{},
 			},
 		})
 	}
-	result, err := api.Serve(serveOptions, options)
-	if err != nil {
-		return outgoingPacket{bytes: encodeErrorPacket(id, err)}
-	}
-	response := map[string]interface{}{
-		"port": int(result.Port),
-		"host": result.Host,
-	}
 
-	activeBuild.refCount++ // Make sure the serve doesn't finish until "Wait" finishes
-	activeBuild.serveStop = result.Stop
+	result := api.Build(options)
+	response := resultToResponse(result)
 
-	// Asynchronously wait for the server to stop, then fulfill the "wait" promise
-	go func() {
-		request := map[string]interface{}{
-			"command": "serve-wait",
-			"key":     key,
-		}
-		if err := result.Wait(); err != nil {
-			request["error"] = err.Error()
-		} else {
-			request["error"] = nil
-		}
-		service.sendRequest(request)
+	service.destroyActiveBuild(key)
 
-		// Release the ref count now that the server has shut down
-		service.decRefCount(key, activeBuild)
-	}()
-
-	return outgoingPacket{
-		bytes: encodePacket(packet{
-			id:    id,
-			value: response,
-		}),
-	}
+	return encodePacket(packet{
+		id:    id,
+		value: response,
+	})
 }
 
 func resolveKindToString(kind api.ResolveKind) string {
@@ -651,7 +819,7 @@ func stringToResolveKind(kind string) (api.ResolveKind, bool) {
 	return api.ResolveNone, false
 }
 
-func (service *serviceType) convertPlugins(key int, jsPlugins interface{}, activeBuild *activeBuild) ([]api.Plugin, error) {
+func (service *serviceType) convertPlugins(key int, jsPlugins interface{}, activeBuild *activeBuild) ([]api.Plugin, bool, error) {
 	type filteredCallback struct {
 		filter     *regexp.Regexp
 		pluginName string
@@ -662,6 +830,7 @@ func (service *serviceType) convertPlugins(key int, jsPlugins interface{}, activ
 	var onResolveCallbacks []filteredCallback
 	var onLoadCallbacks []filteredCallback
 	hasOnStart := false
+	hasOnEnd := false
 
 	filteredCallbacks := func(pluginName string, kind string, items []interface{}) (result []filteredCallback, err error) {
 		for _, item := range items {
@@ -688,14 +857,18 @@ func (service *serviceType) convertPlugins(key int, jsPlugins interface{}, activ
 			hasOnStart = true
 		}
 
+		if p["onEnd"].(bool) {
+			hasOnEnd = true
+		}
+
 		if callbacks, err := filteredCallbacks(pluginName, "onResolve", p["onResolve"].([]interface{})); err != nil {
-			return nil, err
+			return nil, false, err
 		} else {
 			onResolveCallbacks = append(onResolveCallbacks, callbacks...)
 		}
 
 		if callbacks, err := filteredCallbacks(pluginName, "onLoad", p["onLoad"].([]interface{})); err != nil {
-			return nil, err
+			return nil, false, err
 		} else {
 			onLoadCallbacks = append(onLoadCallbacks, callbacks...)
 		}
@@ -760,24 +933,17 @@ func (service *serviceType) convertPlugins(key int, jsPlugins interface{}, activ
 			// Only register "OnStart" if needed
 			if hasOnStart {
 				build.OnStart(func() (api.OnStartResult, error) {
-					result := api.OnStartResult{}
-
 					response, ok := service.sendRequest(map[string]interface{}{
 						"command": "on-start",
 						"key":     key,
 					}).(map[string]interface{})
 					if !ok {
-						return result, errors.New("The service was stopped")
+						return api.OnStartResult{}, errors.New("The service was stopped")
 					}
-
-					if value, ok := response["errors"]; ok {
-						result.Errors = decodeMessages(value.([]interface{}))
-					}
-					if value, ok := response["warnings"]; ok {
-						result.Warnings = decodeMessages(value.([]interface{}))
-					}
-
-					return result, nil
+					return api.OnStartResult{
+						Errors:   decodeMessages(response["errors"].([]interface{})),
+						Warnings: decodeMessages(response["warnings"].([]interface{})),
+					}, nil
 				})
 			}
 
@@ -944,7 +1110,7 @@ func (service *serviceType) convertPlugins(key int, jsPlugins interface{}, activ
 				})
 			}
 		},
-	}}, nil
+	}}, hasOnEnd, nil
 }
 
 func (service *serviceType) handleTransformRequest(id uint32, request map[string]interface{}) []byte {
