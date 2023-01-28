@@ -47,6 +47,7 @@ type parser struct {
 	tsUseCounts                []uint32
 	injectedDefineSymbols      []js_ast.Ref
 	injectedSymbolSources      map[js_ast.Ref]injectedSymbolSource
+	injectedDotNames           map[string][]injectedDotName
 	exprComments               map[logger.Loc][]string
 	mangledProps               map[string]js_ast.Ref
 	reservedProps              map[string]bool
@@ -58,6 +59,7 @@ type parser struct {
 	duplicateCaseChecker       duplicateCaseChecker
 	unrepresentableIdentifiers map[string]bool
 	legacyOctalLiterals        map[js_ast.E]logger.Range
+	scopesInOrderForEnum       map[logger.Loc][]scopeOrder
 
 	// For strict mode handling
 	hoistedRefForSloppyModeBlockFn map[js_ast.Ref]js_ast.Ref
@@ -332,9 +334,34 @@ type parser struct {
 	// Relevant issue: https://github.com/evanw/esbuild/issues/1158
 	hasNonLocalExportDeclareInsideNamespace bool
 
-	// The "shouldFoldNumericConstants" flag is enabled inside each enum body block
-	// since TypeScript requires numeric constant folding in enum definitions.
-	shouldFoldNumericConstants bool
+	// When this flag is enabled, we attempt to fold all expressions that
+	// TypeScript would consider to be "constant expressions". This flag is
+	// enabled inside each enum body block since TypeScript requires numeric
+	// constant folding in enum definitions.
+	//
+	// We also enable this flag in certain cases in JavaScript files such as when
+	// parsing "const" declarations at the top of a non-ESM file, but we still
+	// reuse TypeScript's notion of "constant expressions" for our own convenience.
+	//
+	// As of TypeScript 5.0, a "constant expression" is defined as follows:
+	//
+	//   An expression is considered a constant expression if it is
+	//
+	//   * a number or string literal,
+	//   * a unary +, -, or ~ applied to a numeric constant expression,
+	//   * a binary +, -, *, /, %, **, <<, >>, >>>, |, &, ^ applied to two numeric constant expressions,
+	//   * a binary + applied to two constant expressions whereof at least one is a string,
+	//   * a template expression where each substitution expression is a constant expression,
+	//   * a parenthesized constant expression,
+	//   * a dotted name (e.g. x.y.z) that references a const variable with a constant expression initializer and no type annotation,
+	//   * a dotted name that references an enum member with an enum literal type, or
+	//   * a dotted name indexed by a string literal (e.g. x.y["z"]) that references an enum member with an enum literal type.
+	//
+	// More detail: https://github.com/microsoft/TypeScript/pull/50528. Note that
+	// we don't implement certain items in this list. For example, we don't do all
+	// number-to-string conversions since ours might differ from how JavaScript
+	// would do it, which would be a correctness issue.
+	shouldFoldTypeScriptConstantExpressions bool
 
 	allowIn                     bool
 	allowPrivateIdentifiers     bool
@@ -357,6 +384,11 @@ type stringLocalForYarnPnP struct {
 type injectedSymbolSource struct {
 	source logger.Source
 	loc    logger.Loc
+}
+
+type injectedDotName struct {
+	parts               []string
+	injectedDefineIndex uint32
 }
 
 type importNamespaceCallKind uint8
@@ -2130,22 +2162,33 @@ func (p *parser) parseProperty(startLoc logger.Loc, kind js_ast.PropertyKind, op
 		}
 	}
 
+	hasTypeParameters := false
+	hasDefiniteAssignmentAssertionOperator := false
+
 	if p.options.ts.Parse {
-		// "class X { foo?: number }"
-		// "class X { foo!: number }"
-		if opts.isClass && (p.lexer.Token == js_lexer.TQuestion ||
-			(p.lexer.Token == js_lexer.TExclamation && !p.lexer.HasNewlineBefore)) {
-			p.lexer.Next()
+		if opts.isClass {
+			if p.lexer.Token == js_lexer.TQuestion {
+				// "class X { foo?: number }"
+				// "class X { foo?(): number }"
+				p.lexer.Next()
+			} else if p.lexer.Token == js_lexer.TExclamation && !p.lexer.HasNewlineBefore &&
+				kind == js_ast.PropertyNormal && !opts.isAsync && !opts.isGenerator {
+				// "class X { foo!: number }"
+				p.lexer.Next()
+				hasDefiniteAssignmentAssertionOperator = true
+			}
 		}
 
 		// "class X { foo?<T>(): T }"
 		// "const x = { foo<T>(): T {} }"
-		p.skipTypeScriptTypeParameters(typeParametersNormal)
+		if !hasDefiniteAssignmentAssertionOperator {
+			hasTypeParameters = p.skipTypeScriptTypeParameters(allowConstModifier) != didNotSkipAnything
+		}
 	}
 
 	// Parse a class field with an optional initial value
-	if opts.isClass && kind == js_ast.PropertyNormal && !opts.isAsync &&
-		!opts.isGenerator && p.lexer.Token != js_lexer.TOpenParen {
+	if opts.isClass && kind == js_ast.PropertyNormal && !opts.isAsync && !opts.isGenerator &&
+		!hasTypeParameters && (p.lexer.Token != js_lexer.TOpenParen || hasDefiniteAssignmentAssertionOperator) {
 		var initializerOrNil js_ast.Expr
 
 		// Forbid the names "constructor" and "prototype" in some cases
@@ -2701,9 +2744,14 @@ func (p *parser) parseAsyncPrefixExpr(asyncRange logger.Range, level js_ast.L, f
 		// "async<T>()"
 		// "async <T>() => {}"
 		case js_lexer.TLessThan:
-			if p.options.ts.Parse && p.trySkipTypeScriptTypeParametersThenOpenParenWithBacktracking() {
-				p.lexer.Next()
-				return p.parseParenExpr(asyncRange.Loc, level, parenExprOpts{asyncRange: asyncRange})
+			if p.options.ts.Parse && (!p.options.jsx.Parse || p.isTSArrowFnJSX()) {
+				if result := p.trySkipTypeScriptTypeParametersThenOpenParenWithBacktracking(); result != didNotSkipAnything {
+					p.lexer.Next()
+					return p.parseParenExpr(asyncRange.Loc, level, parenExprOpts{
+						asyncRange:   asyncRange,
+						forceArrowFn: result == definitelyTypeParameters,
+					})
+				}
 			}
 		}
 	}
@@ -2746,7 +2794,7 @@ func (p *parser) parseFnExpr(loc logger.Loc, isAsync bool, asyncRange logger.Ran
 
 	// Even anonymous functions can have TypeScript type parameters
 	if p.options.ts.Parse {
-		p.skipTypeScriptTypeParameters(typeParametersNormal)
+		p.skipTypeScriptTypeParameters(allowConstModifier)
 	}
 
 	await := allowIdent
@@ -3422,7 +3470,7 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 
 		// Even anonymous classes can have TypeScript type parameters
 		if p.options.ts.Parse {
-			p.skipTypeScriptTypeParameters(typeParametersNormal)
+			p.skipTypeScriptTypeParameters(allowInOutVarianceAnnotations | allowConstModifier)
 		}
 
 		class := p.parseClass(classKeyword, name, parseClassOpts{})
@@ -3613,12 +3661,15 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		//     <A>(x)
 		//     <[]>(x)
 		//     <A[]>(x)
+		//     <const>(x)
 		//
 		//   An arrow function with type parameters:
 		//     <A>(x) => {}
 		//     <A, B>(x) => {}
 		//     <A = B>(x) => {}
 		//     <A extends B>(x) => {}
+		//     <const A>(x) => {}
+		//     <const A extends B>(x) => {}
 		//
 		// TSX:
 		//
@@ -3626,10 +3677,13 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		//     <A>(x) => {}</A>
 		//     <A extends>(x) => {}</A>
 		//     <A extends={false}>(x) => {}</A>
+		//     <const A extends>(x) => {}</const>
 		//
 		//   An arrow function with type parameters:
 		//     <A, B>(x) => {}
 		//     <A extends B>(x) => {}
+		//     <const>(x)</const>
+		//     <const A extends B>(x) => {}
 		//
 		//   A syntax error:
 		//     <[]>(x)
@@ -3638,7 +3692,7 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		//     <A = B>(x) => {}
 
 		if p.options.ts.Parse && p.options.jsx.Parse && p.isTSArrowFnJSX() {
-			p.skipTypeScriptTypeParameters(typeParametersNormal)
+			p.skipTypeScriptTypeParameters(allowConstModifier)
 			p.lexer.Expect(js_lexer.TOpenParen)
 			return p.parseParenExpr(loc, level, parenExprOpts{forceArrowFn: true})
 		}
@@ -3685,9 +3739,11 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 
 			// "<T>(x)"
 			// "<T>(x) => {}"
-			if p.trySkipTypeScriptTypeParametersThenOpenParenWithBacktracking() {
+			if result := p.trySkipTypeScriptTypeParametersThenOpenParenWithBacktracking(); result != didNotSkipAnything {
 				p.lexer.Expect(js_lexer.TOpenParen)
-				return p.parseParenExpr(loc, level, parenExprOpts{})
+				return p.parseParenExpr(loc, level, parenExprOpts{
+					forceArrowFn: result == definitelyTypeParameters,
+				})
 			}
 
 			// "<T>x"
@@ -5796,7 +5852,7 @@ func (p *parser) parseClassStmt(loc logger.Loc, opts parseStmtOpts) js_ast.Stmt 
 
 	// Even anonymous classes can have TypeScript type parameters
 	if p.options.ts.Parse {
-		p.skipTypeScriptTypeParameters(typeParametersWithInOutVarianceAnnotations)
+		p.skipTypeScriptTypeParameters(allowInOutVarianceAnnotations | allowConstModifier)
 	}
 
 	classOpts := parseClassOpts{
@@ -6074,7 +6130,7 @@ func (p *parser) parseFnStmt(loc logger.Loc, opts parseStmtOpts, isAsync bool, a
 
 	// Even anonymous functions can have TypeScript type parameters
 	if p.options.ts.Parse {
-		p.skipTypeScriptTypeParameters(typeParametersNormal)
+		p.skipTypeScriptTypeParameters(allowConstModifier)
 	}
 
 	// Introduce a fake block scope for function declarations inside if statements
@@ -7842,7 +7898,29 @@ func (p *parser) visitStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt {
 	visited := make([]js_ast.Stmt, 0, len(stmts))
 	var before []js_ast.Stmt
 	var after []js_ast.Stmt
-	for _, stmt := range stmts {
+	var preprocessedEnums map[int][]js_ast.Stmt
+	if p.scopesInOrderForEnum != nil {
+		// Preprocess TypeScript enums to improve code generation. Otherwise
+		// uses of an enum before that enum has been declared won't be inlined:
+		//
+		//   console.log(Foo.FOO) // We want "FOO" to be inlined here
+		//   const enum Foo { FOO = 0 }
+		//
+		// The TypeScript compiler itself contains code with this pattern, so
+		// it's important to implement this optimization.
+		for i, stmt := range stmts {
+			if _, ok := stmt.Data.(*js_ast.SEnum); ok {
+				if preprocessedEnums == nil {
+					preprocessedEnums = make(map[int][]js_ast.Stmt)
+				}
+				oldScopesInOrder := p.scopesInOrder
+				p.scopesInOrder = p.scopesInOrderForEnum[stmt.Loc]
+				preprocessedEnums[i] = p.visitAndAppendStmt(nil, stmt)
+				p.scopesInOrder = oldScopesInOrder
+			}
+		}
+	}
+	for i, stmt := range stmts {
 		switch s := stmt.Data.(type) {
 		case *js_ast.SExportEquals:
 			// TypeScript "export = value;" becomes "module.exports = value;". This
@@ -7860,6 +7938,11 @@ func (p *parser) visitStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt {
 				before = p.visitAndAppendStmt(before, stmt)
 				continue
 			}
+
+		case *js_ast.SEnum:
+			visited = append(visited, preprocessedEnums[i]...)
+			p.scopesInOrder = p.scopesInOrder[len(p.scopesInOrderForEnum[stmt.Loc]):]
+			continue
 		}
 		visited = p.visitAndAppendStmt(visited, stmt)
 	}
@@ -8795,9 +8878,10 @@ func (p *parser) substituteSingleUseSymbolInExpr(
 			if value, status := p.substituteSingleUseSymbolInExpr(part.Value, ref, replacement, replacementCanBeRemoved); status != substituteContinue {
 				e.Parts[i].Value = value
 
-				// If we substituted a string, merge the string into the template
-				if _, ok := value.Data.(*js_ast.EString); ok {
-					expr = js_ast.InlineStringsIntoTemplate(expr.Loc, e)
+				// If we substituted a string or number, merge it into the template
+				switch value.Data.(type) {
+				case *js_ast.EString, *js_ast.ENumber:
+					expr = js_ast.InlineStringsAndNumbersIntoTemplate(expr.Loc, e)
 				}
 				return expr, status
 			}
@@ -9522,12 +9606,12 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 				wasAnonymousNamedExpr := p.isAnonymousNamedExpr(d.ValueOrNil)
 
 				// Fold numeric constants in the initializer
-				oldShouldFoldNumericConstants := p.shouldFoldNumericConstants
-				p.shouldFoldNumericConstants = p.options.minifySyntax && !p.currentScope.IsAfterConstLocalPrefix
+				oldShouldFoldTypeScriptConstantExpressions := p.shouldFoldTypeScriptConstantExpressions
+				p.shouldFoldTypeScriptConstantExpressions = p.options.minifySyntax && !p.currentScope.IsAfterConstLocalPrefix
 
 				d.ValueOrNil = p.visitExpr(d.ValueOrNil)
 
-				p.shouldFoldNumericConstants = oldShouldFoldNumericConstants
+				p.shouldFoldTypeScriptConstantExpressions = oldShouldFoldTypeScriptConstantExpressions
 
 				// Optionally preserve the name
 				if id, ok := d.Binding.Data.(*js_ast.BIdentifier); ok {
@@ -10034,6 +10118,11 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		return stmts
 
 	case *js_ast.SEnum:
+		// Do not end the const local prefix after TypeScript enums. We process
+		// them first within their scope so that they are inlined into all code in
+		// that scope. We don't want that to cause the const local prefix to end.
+		p.currentScope.IsAfterConstLocalPrefix = wasAfterAfterConstLocalPrefix
+
 		// Track cross-module enum constants during bundling
 		var tsTopLevelEnumValues map[string]js_ast.TSEnumValue
 		if p.currentScope == p.moduleScope && p.options.mode == config.ModeBundle {
@@ -10068,8 +10157,8 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		// We normally don't fold numeric constants because they might increase code
 		// size, but it's important to fold numeric constants inside enums since
 		// that's what the TypeScript compiler does.
-		oldShouldFoldNumericConstants := p.shouldFoldNumericConstants
-		p.shouldFoldNumericConstants = true
+		oldShouldFoldTypeScriptConstantExpressions := p.shouldFoldTypeScriptConstantExpressions
+		p.shouldFoldTypeScriptConstantExpressions = true
 
 		// Create an assignment for each enum value
 		for _, value := range s.Values {
@@ -10167,7 +10256,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		}
 
 		p.popScope()
-		p.shouldFoldNumericConstants = oldShouldFoldNumericConstants
+		p.shouldFoldTypeScriptConstantExpressions = oldShouldFoldTypeScriptConstantExpressions
 
 		// Track all exported top-level enums for cross-module inlining
 		if tsTopLevelEnumValues != nil {
@@ -10997,21 +11086,21 @@ func (p *parser) instantiateDefineExpr(loc logger.Loc, expr config.DefineExpr, o
 		// Make sure define resolution is not recursive
 		opts.matchAgainstDefines = false
 
+		// Substitute user-specified defines
 		if defines, ok := p.options.defines.DotDefines[parts[len(parts)-1]]; ok {
-		next:
 			for _, define := range defines {
-				if len(define.Parts) == len(parts) {
-					for i := range parts {
-						if parts[i] != define.Parts[i] {
-							continue next
-						}
-					}
-
-					// Substitute user-specified defines
-					if define.Data.DefineExpr != nil {
-						return p.instantiateDefineExpr(loc, *define.Data.DefineExpr, opts)
-					}
+				if define.Data.DefineExpr != nil && helpers.StringSlicesAreEqual(define.Parts, parts) {
+					return p.instantiateDefineExpr(loc, *define.Data.DefineExpr, opts)
 				}
+			}
+		}
+	}
+
+	// Check injected dot names
+	if names, ok := p.injectedDotNames[parts[len(parts)-1]]; ok {
+		for _, name := range names {
+			if helpers.StringSlicesAreEqual(name.parts, parts) {
+				return p.instantiateInjectDotName(loc, name, opts.assignTarget)
 			}
 		}
 	}
@@ -11083,6 +11172,27 @@ func (p *parser) instantiateDefineExpr(loc logger.Loc, expr config.DefineExpr, o
 	}
 
 	return value
+}
+
+func (p *parser) instantiateInjectDotName(loc logger.Loc, name injectedDotName, assignTarget js_ast.AssignTarget) js_ast.Expr {
+	// Note: We don't need to "ignoreRef" on the underlying identifier
+	// because we have only parsed it but not visited it yet
+	ref := p.injectedDefineSymbols[name.injectedDefineIndex]
+	p.recordUsage(ref)
+
+	if assignTarget != js_ast.AssignTargetNone {
+		if where, ok := p.injectedSymbolSources[ref]; ok {
+			r := js_lexer.RangeOfIdentifier(p.source, loc)
+			tracker := logger.MakeLineColumnTracker(&where.source)
+			joined := strings.Join(name.parts, ".")
+			p.log.AddErrorWithNotes(&p.tracker, r,
+				fmt.Sprintf("Cannot assign to %q because it's an import from an injected file", joined),
+				[]logger.MsgData{tracker.MsgData(js_lexer.RangeOfIdentifier(where.source, where.loc),
+					fmt.Sprintf("The symbol %q was exported from %q here:", joined, where.source.PrettyPath))})
+		}
+	}
+
+	return js_ast.Expr{Loc: loc, Data: &js_ast.EIdentifier{Ref: ref}}
 }
 
 func (p *parser) checkForUnrepresentableIdentifier(loc logger.Loc, name string) {
@@ -11914,6 +12024,17 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
+		// Check injected dot names
+		if names, ok := p.injectedDotNames["meta"]; ok {
+			for _, name := range names {
+				if p.isDotOrIndexDefineMatch(expr, name.parts) {
+					// Note: We don't need to "ignoreRef" on the underlying identifier
+					// because we have only parsed it but not visited it yet
+					return p.instantiateInjectDotName(expr.Loc, name, in.assignTarget), exprOut{}
+				}
+			}
+		}
+
 		// Warn about "import.meta" if it's not replaced by a define
 		if p.options.unsupportedJSFeatures.Has(compat.ImportMeta) {
 			r := logger.Range{Loc: expr.Loc, Len: e.RangeLen}
@@ -12358,8 +12479,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		// When mangling, inline string values into the template literal. Note that
 		// it may no longer be a template literal after this point (it may turn into
 		// a plain string literal instead).
-		if p.options.minifySyntax {
-			expr = js_ast.InlineStringsIntoTemplate(expr.Loc, e)
+		if p.shouldFoldTypeScriptConstantExpressions || p.options.minifySyntax {
+			expr = js_ast.InlineStringsAndNumbersIntoTemplate(expr.Loc, e)
 		}
 
 		shouldLowerTemplateLiteral := p.options.unsupportedJSFeatures.Has(compat.TemplateLiteral)
@@ -12491,7 +12612,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
-		if p.shouldFoldNumericConstants || (p.options.minifySyntax && js_ast.ShouldFoldBinaryArithmeticWhenMinifying(e.Op)) {
+		if p.shouldFoldTypeScriptConstantExpressions || (p.options.minifySyntax && js_ast.ShouldFoldBinaryArithmeticWhenMinifying(e.Op)) {
 			if result := js_ast.FoldBinaryArithmetic(expr.Loc, e); result.Data != nil {
 				return result, exprOut{}
 			}
@@ -12668,13 +12789,13 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 
 		case js_ast.BinOpAdd:
 			// "'abc' + 'xyz'" => "'abcxyz'"
-			if result := js_ast.FoldStringAddition(e.Left, e.Right); result.Data != nil {
+			if result := js_ast.FoldStringAddition(e.Left, e.Right, js_ast.StringAdditionNormal); result.Data != nil {
 				return result, exprOut{}
 			}
 
 			if left, ok := e.Left.Data.(*js_ast.EBinary); ok && left.Op == js_ast.BinOpAdd {
 				// "x + 'abc' + 'xyz'" => "x + 'abcxyz'"
-				if result := js_ast.FoldStringAddition(left.Right, e.Right); result.Data != nil {
+				if result := js_ast.FoldStringAddition(left.Right, e.Right, js_ast.StringAdditionWithNestedLeft); result.Data != nil {
 					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBinary{Op: left.Op, Left: left.Left, Right: result}}, exprOut{}
 				}
 			}
@@ -12907,6 +13028,17 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 						e.CallCanBeUnwrappedIfUnused = true
 					}
 					break
+				}
+			}
+		}
+
+		// Check injected dot names
+		if names, ok := p.injectedDotNames[e.Name]; ok {
+			for _, name := range names {
+				if p.isDotOrIndexDefineMatch(expr, name.parts) {
+					// Note: We don't need to "ignoreRef" on the underlying identifier
+					// because we have only parsed it but not visited it yet
+					return p.instantiateInjectDotName(expr.Loc, name, in.assignTarget), exprOut{}
 				}
 			}
 		}
@@ -13250,7 +13382,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 
 			case js_ast.UnOpCpl:
-				if p.shouldFoldNumericConstants || p.options.minifySyntax {
+				if p.shouldFoldTypeScriptConstantExpressions || p.options.minifySyntax {
 					// Minification folds complement operations since they are unlikely to result in larger output
 					if number, ok := js_ast.ToNumberWithoutSideEffects(e.Value.Data); ok {
 						return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(^js_ast.ToInt32(number))}}, exprOut{}
@@ -15361,6 +15493,7 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	for _, file := range p.options.injectedFiles {
 		exportsNoConflict := make([]string, 0, len(file.Exports))
 		symbols := make(map[string]js_ast.LocRef)
+
 		if file.DefineName != "" {
 			ref := p.newSymbol(js_ast.SymbolOther, file.DefineName)
 			p.moduleScope.Generated = append(p.moduleScope.Generated, ref)
@@ -15368,22 +15501,55 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 			exportsNoConflict = append(exportsNoConflict, "default")
 			p.injectedDefineSymbols = append(p.injectedDefineSymbols, ref)
 		} else {
+		nextExport:
 			for _, export := range file.Exports {
-				if _, ok := p.moduleScope.Members[export.Alias]; !ok {
-					ref := p.newSymbol(js_ast.SymbolInjected, export.Alias)
+				// Skip injecting this symbol if it's already declared locally (i.e. it's not a reference to a global)
+				if _, ok := p.moduleScope.Members[export.Alias]; ok {
+					continue
+				}
+
+				parts := strings.Split(export.Alias, ".")
+
+				// The key must be a dot-separated identifier list
+				for _, part := range parts {
+					if !js_ast.IsIdentifier(part) {
+						continue nextExport
+					}
+				}
+
+				ref := p.newSymbol(js_ast.SymbolInjected, export.Alias)
+				symbols[export.Alias] = js_ast.LocRef{Ref: ref}
+				if len(parts) == 1 {
+					// Handle the identifier case by generating an injected symbol directly
 					p.moduleScope.Members[export.Alias] = js_ast.ScopeMember{Ref: ref}
-					symbols[export.Alias] = js_ast.LocRef{Ref: ref}
-					exportsNoConflict = append(exportsNoConflict, export.Alias)
-					if p.injectedSymbolSources == nil {
-						p.injectedSymbolSources = make(map[js_ast.Ref]injectedSymbolSource)
+				} else {
+					// Handle the dot case using a map. This map is similar to the map
+					// "options.defines.DotDefines" but is kept separate instead of being
+					// implemented using the same mechanism because we allow you to use
+					// "define" to rewrite something to an injected symbol (i.e. we allow
+					// two levels of mappings). This was historically necessary to be able
+					// to map a dot name to an injected symbol because we previously didn't
+					// support dot names as injected symbols. But now dot names as injected
+					// symbols has been implemented, so supporting two levels of mappings
+					// is only for backward-compatibility.
+					if p.injectedDotNames == nil {
+						p.injectedDotNames = make(map[string][]injectedDotName)
 					}
-					p.injectedSymbolSources[ref] = injectedSymbolSource{
-						source: file.Source,
-						loc:    export.Loc,
-					}
+					tail := parts[len(parts)-1]
+					p.injectedDotNames[tail] = append(p.injectedDotNames[tail], injectedDotName{parts: parts, injectedDefineIndex: uint32(len(p.injectedDefineSymbols))})
+					p.injectedDefineSymbols = append(p.injectedDefineSymbols, ref)
+				}
+				exportsNoConflict = append(exportsNoConflict, export.Alias)
+				if p.injectedSymbolSources == nil {
+					p.injectedSymbolSources = make(map[js_ast.Ref]injectedSymbolSource)
+				}
+				p.injectedSymbolSources[ref] = injectedSymbolSource{
+					source: file.Source,
+					loc:    export.Loc,
 				}
 			}
 		}
+
 		before = p.generateImportStmt(file.Source.KeyPath.Text, exportsNoConflict, &file.Source.Index, before, symbols)
 	}
 
@@ -15395,8 +15561,31 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 		// When tree shaking is disabled, everything comes in a single part
 		parts = p.appendPart(parts, stmts)
 	} else {
+		var preprocessedEnums map[int][]js_ast.Part
+		if p.scopesInOrderForEnum != nil {
+			// Preprocess TypeScript enums to improve code generation. Otherwise
+			// uses of an enum before that enum has been declared won't be inlined:
+			//
+			//   console.log(Foo.FOO) // We want "FOO" to be inlined here
+			//   const enum Foo { FOO = 0 }
+			//
+			// The TypeScript compiler itself contains code with this pattern, so
+			// it's important to implement this optimization.
+			for i, stmt := range stmts {
+				if _, ok := stmt.Data.(*js_ast.SEnum); ok {
+					if preprocessedEnums == nil {
+						preprocessedEnums = make(map[int][]js_ast.Part)
+					}
+					oldScopesInOrder := p.scopesInOrder
+					p.scopesInOrder = p.scopesInOrderForEnum[stmt.Loc]
+					preprocessedEnums[i] = p.appendPart(nil, []js_ast.Stmt{stmt})
+					p.scopesInOrder = oldScopesInOrder
+				}
+			}
+		}
+
 		// When tree shaking is enabled, each top-level statement is potentially a separate part
-		for _, stmt := range stmts {
+		for i, stmt := range stmts {
 			switch s := stmt.Data.(type) {
 			case *js_ast.SLocal:
 				// Split up top-level multi-declaration variable statements
@@ -15429,6 +15618,10 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 				// must happen at the end after everything is parsed because TypeScript
 				// moves this statement to the end when it generates code.
 				after = p.appendPart(after, []js_ast.Stmt{stmt})
+
+			case *js_ast.SEnum:
+				parts = append(parts, preprocessedEnums[i]...)
+				p.scopesInOrder = p.scopesInOrder[len(p.scopesInOrderForEnum[stmt.Loc]):]
 
 			default:
 				parts = p.appendPart(parts, []js_ast.Stmt{stmt})

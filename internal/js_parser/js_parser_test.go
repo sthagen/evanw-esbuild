@@ -2419,7 +2419,8 @@ func TestTemplate(t *testing.T) {
 	expectParseError(t, "a?.(b).c\n`${d}`", "<stdin>: ERROR: Template literals cannot have an optional chain as a tag\n")
 	expectParseError(t, "a?.[b].c\n`${d}`", "<stdin>: ERROR: Template literals cannot have an optional chain as a tag\n")
 
-	expectPrinted(t, "`a${1 + `b${2}c` + 3}d`", "`a${1 + `b${2}c` + 3}d`;\n")
+	expectPrinted(t, "`a${1 + `b${2}c` + 3}d`", "`a${`1b${2}c3`}d`;\n")
+	expectPrintedMangle(t, "x = `a${1 + `b${2}c` + 3}d`", "x = `a1b2c3d`;\n")
 
 	expectPrinted(t, "`a\nb`", "`a\nb`;\n")
 	expectPrinted(t, "`a\rb`", "`a\nb`;\n")
@@ -2584,7 +2585,7 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = x + 'a' + 'b'", "x = x + \"ab\";\n")
 	expectPrinted(t, "x = x + 'a' + 'bc'", "x = x + \"abc\";\n")
 	expectPrinted(t, "x = x + 'ab' + 'c'", "x = x + \"abc\";\n")
-	expectPrinted(t, "x = 'a' + 1", "x = \"a\" + 1;\n")
+	expectPrinted(t, "x = 'a' + 1", "x = \"a1\";\n")
 	expectPrinted(t, "x = x * 'a' + 'b'", "x = x * \"a\" + \"b\";\n")
 
 	expectPrinted(t, "x = 'string' + `template`", "x = `stringtemplate`;\n")
@@ -2620,6 +2621,17 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = Infinity === -Infinity", "x = false;\n")
 
 	expectPrinted(t, "x = 123n === 1_2_3n", "x = true;\n")
+
+	// We support folding strings from sibling AST nodes since that ends up being
+	// equivalent with string addition. For example, "(x + 'a') + 'b'" is the
+	// same as "x + 'ab'". However, this is not true for numbers. We can't turn
+	// "(x + 1) + '2'" into "x + '12'". These tests check for this edge case.
+	expectPrinted(t, "x = 'a' + 'b' + y", "x = \"ab\" + y;\n")
+	expectPrinted(t, "x = y + 'a' + 'b'", "x = y + \"ab\";\n")
+	expectPrinted(t, "x = '3' + 4 + y", "x = \"34\" + y;\n")
+	expectPrinted(t, "x = y + 4 + '5'", "x = y + 4 + \"5\";\n")
+	expectPrinted(t, "x = '3' + 4 + 5", "x = \"345\";\n")
+	expectPrinted(t, "x = 3 + 4 + '5'", "x = 3 + 4 + \"5\";\n")
 }
 
 func TestConstantFoldingScopes(t *testing.T) {
@@ -3142,8 +3154,8 @@ func TestMangleSwitch(t *testing.T) {
 }
 
 func TestMangleAddEmptyString(t *testing.T) {
-	expectPrintedNormalAndMangle(t, "a = '' + 0", "a = \"\" + 0;\n", "a = \"\" + 0;\n")
-	expectPrintedNormalAndMangle(t, "a = 0 + ''", "a = 0 + \"\";\n", "a = 0 + \"\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 0", "a = \"0\";\n", "a = \"0\";\n")
+	expectPrintedNormalAndMangle(t, "a = 0 + ''", "a = \"0\";\n", "a = \"0\";\n")
 	expectPrintedNormalAndMangle(t, "a = '' + b", "a = \"\" + b;\n", "a = \"\" + b;\n")
 	expectPrintedNormalAndMangle(t, "a = b + ''", "a = b + \"\";\n", "a = b + \"\";\n")
 

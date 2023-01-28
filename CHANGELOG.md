@@ -2,6 +2,152 @@
 
 ## Unreleased
 
+* Inline TypeScript enums that are referenced before their declaration
+
+    Previously esbuild inlined enums within a TypeScript file from top to bottom, which meant that references to TypeScript enum members were only inlined within the same file if they came after the enum declaration. With this release, esbuild will now inline enums even when they are referenced before they are declared:
+
+    ```ts
+    // Original input
+    export const foo = () => Foo.FOO
+    const enum Foo { FOO = 0 }
+
+    // Old output (with --tree-shaking=true)
+    export const foo = () => Foo.FOO;
+    var Foo = /* @__PURE__ */ ((Foo2) => {
+      Foo2[Foo2["FOO"] = 0] = "FOO";
+      return Foo2;
+    })(Foo || {});
+
+    // New output (with --tree-shaking=true)
+    export const foo = () => 0 /* FOO */;
+    ```
+
+    This makes esbuild's TypeScript output smaller and faster when processing code that does this. I noticed this issue when I ran the TypeScript compiler's source code through esbuild's bundler. Now that the TypeScript compiler is going to be bundled with esbuild in the upcoming TypeScript 5.0 release, improvements like this will also improve the TypeScript compiler itself!
+
+## 0.17.5
+
+* Parse `const` type parameters from TypeScript 5.0
+
+    The TypeScript 5.0 beta announcement adds [`const` type parameters](https://devblogs.microsoft.com/typescript/announcing-typescript-5-0-beta/#const-type-parameters) to the language. You can now add the `const` modifier on a type parameter of a function, method, or class like this:
+
+    ```ts
+    type HasNames = { names: readonly string[] };
+    const getNamesExactly = <const T extends HasNames>(arg: T): T["names"] => arg.names;
+    const names = getNamesExactly({ names: ["Alice", "Bob", "Eve"] });
+    ```
+
+    The type of `names` in the above example is `readonly ["Alice", "Bob", "Eve"]`. Marking the type parameter as `const` behaves as if you had written `as const` at every use instead. The above code is equivalent to the following TypeScript, which was the only option before TypeScript 5.0:
+
+    ```ts
+    type HasNames = { names: readonly string[] };
+    const getNamesExactly = <T extends HasNames>(arg: T): T["names"] => arg.names;
+    const names = getNamesExactly({ names: ["Alice", "Bob", "Eve"] } as const);
+    ```
+
+    You can read [the announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-5-0-beta/#const-type-parameters) for more information.
+
+* Make parsing generic `async` arrow functions more strict in `.tsx` files
+
+    Previously esbuild's TypeScript parser incorrectly accepted the following code as valid:
+
+    ```tsx
+    let fn = async <T> () => {};
+    ```
+
+    The official TypeScript parser rejects this code because it thinks it's the identifier `async` followed by a JSX element starting with `<T>`. So with this release, esbuild will now reject this syntax in `.tsx` files too. You'll now have to add a comma after the type parameter to get generic arrow functions like this to parse in `.tsx` files:
+
+    ```tsx
+    let fn = async <T,> () => {};
+    ```
+
+* Allow the `in` and `out` type parameter modifiers on class expressions
+
+    TypeScript 4.7 added the `in` and `out` modifiers on the type parameters of classes, interfaces, and type aliases. However, while TypeScript supported them on both class expressions and class statements, previously esbuild only supported them on class statements due to an oversight. This release now allows these modifiers on class expressions too:
+
+    ```ts
+    declare let Foo: any;
+    Foo = class <in T> { };
+    Foo = class <out T> { };
+    ```
+
+* Update `enum` constant folding for TypeScript 5.0
+
+    TypeScript 5.0 contains an [updated definition of what it considers a constant expression](https://github.com/microsoft/TypeScript/pull/50528):
+
+    > An expression is considered a *constant expression* if it is
+    >
+    > * a number or string literal,
+    > * a unary `+`, `-`, or `~` applied to a numeric constant expression,
+    > * a binary `+`, `-`, `*`, `/`, `%`, `**`, `<<`, `>>`, `>>>`, `|`, `&`, `^` applied to two numeric constant expressions,
+    > * a binary `+` applied to two constant expressions whereof at least one is a string,
+    > * a template expression where each substitution expression is a constant expression,
+    > * a parenthesized constant expression,
+    > * a dotted name (e.g. `x.y.z`) that references a `const` variable with a constant expression initializer and no type annotation,
+    > * a dotted name that references an enum member with an enum literal type, or
+    > * a dotted name indexed by a string literal (e.g. `x.y["z"]`) that references an enum member with an enum literal type.
+
+    This impacts esbuild's implementation of TypeScript's `const enum` feature. With this release, esbuild will now attempt to follow these new rules. For example, you can now initialize an `enum` member with a template literal expression that contains a numeric constant:
+
+    ```ts
+    // Original input
+    const enum Example {
+      COUNT = 100,
+      ERROR = `Expected ${COUNT} items`,
+    }
+    console.log(
+      Example.COUNT,
+      Example.ERROR,
+    )
+
+    // Old output (with --tree-shaking=true)
+    var Example = /* @__PURE__ */ ((Example2) => {
+      Example2[Example2["COUNT"] = 100] = "COUNT";
+      Example2[Example2["ERROR"] = `Expected ${100 /* COUNT */} items`] = "ERROR";
+      return Example2;
+    })(Example || {});
+    console.log(
+      100 /* COUNT */,
+      Example.ERROR
+    );
+
+    // New output (with --tree-shaking=true)
+    console.log(
+      100 /* COUNT */,
+      "Expected 100 items" /* ERROR */
+    );
+    ```
+
+    These rules are not followed exactly due to esbuild's limitations. The rule about dotted references to `const` variables is not followed both because esbuild's enum processing is done in an isolated module setting and because doing so would potentially require esbuild to use a type system, which it doesn't have. For example:
+
+    ```ts
+    // The TypeScript compiler inlines this but esbuild doesn't:
+    declare const x = 'foo'
+    const enum Foo { X = x }
+    console.log(Foo.X)
+    ```
+
+    Also, the rule that requires converting numbers to a string currently only followed for 32-bit signed integers and non-finite numbers. This is done to avoid accidentally introducing a bug if esbuild's number-to-string operation doesn't exactly match the behavior of a real JavaScript VM. Currently esbuild's number-to-string constant folding is conservative for safety.
+
+* Forbid definite assignment assertion operators on class methods
+
+    In TypeScript, class methods can use the `?` optional property operator but not the `!` definite assignment assertion operator (while class fields can use both):
+
+    ```ts
+    class Foo {
+      // These are valid TypeScript
+      a?
+      b!
+      x?() {}
+
+      // This is invalid TypeScript
+      y!() {}
+    }
+    ```
+
+    Previously esbuild incorrectly allowed the definite assignment assertion operator with class methods. This will no longer be allowed starting with this release.
+
+## 0.17.4
+
 * Implement HTTP `HEAD` requests in serve mode ([#2851](https://github.com/evanw/esbuild/issues/2851))
 
     Previously esbuild's serve mode only responded to HTTP `GET` requests. With this release, esbuild's serve mode will also respond to HTTP `HEAD` requests, which are just like HTTP `GET` requests except that the body of the response is omitted.
@@ -15,6 +161,84 @@
     3. Doing this will prevent you from using `require()` on this file or on any file that imports this file (even indirectly), since the `require()` function doesn't return a promise and so can't represent top-level await.
 
     This release relaxes these rules slightly: rules 2 and 3 will now no longer apply when esbuild has identified the code branch as dead code, such as when it's behind an `if (false)` check. This should make it possible to use esbuild to convert code into different output formats that only uses top-level await conditionally. This release does not relax rule 1. Top-level await will still cause esbuild to unconditionally consider the input module format to be ESM, even when the top-level `await` is in a dead code branch. This is necessary because whether the input format is ESM or not affects the whole file, not just the dead code branch.
+
+* Fix entry points where the entire file name is the extension ([#2861](https://github.com/evanw/esbuild/issues/2861))
+
+    Previously if you passed esbuild an entry point where the file extension is the entire file name, esbuild would use the parent directory name to derive the name of the output file. For example, if you passed esbuild a file `./src/.ts` then the output name would be `src.js`. This bug happened because esbuild first strips the file extension to get `./src/` and then joins the path with the working directory to get the absolute path (e.g. `join("/working/dir", "./src/")` gives `/working/dir/src`). However, the join operation also canonicalizes the path which strips the trailing `/`. Later esbuild uses the "base name" operation to extract the name of the output file. Since there is no trailing `/`, esbuild returns `"src"` as the base name instead of `""`, which causes esbuild to incorrectly include the directory name in the output file name. This release fixes this bug by deferring the stripping of the file extension until after all path manipulations have been completed. So now the file `./src/.ts` will generate an output file named `.js`.
+
+* Support replacing property access expressions with inject
+
+    At a high level, this change means the `inject` feature can now replace all of the same kinds of names as the `define` feature. So `inject` is basically now a more powerful version of `define`, instead of previously only being able to do some of the things that `define` could do.
+
+    Soem background is necessary to understand this change if you aren't already familiar with the `inject` feature. The `inject` feature lets you replace references to global variable with a shim. It works like this:
+
+    1. Put the shim in its own file
+    2. Export the shim as the name of the global variable you intend to replace
+    3. Pass the file to esbuild using the `inject` feature
+
+    For example, if you inject the following file using `--inject:./injected.js`:
+
+    ```js
+    // injected.js
+    let processShim = { cwd: () => '/' }
+    export { processShim as process }
+    ```
+
+    Then esbuild will replace all references to `process` with the `processShim` variable, which will cause `process.cwd()` to return `'/'`. This feature is sort of abusing the ESM export alias syntax to specify the mapping of global variables to shims. But esbuild works this way because using this syntax for that purpose is convenient and terse.
+
+    However, if you wanted to replace a property access expression, the process was more complicated and not as nice. You would have to:
+
+    1. Put the shim in its own file
+    2. Export the shim as some random name
+    3. Pass the file to esbuild using the `inject` feature
+    4. Use esbuild's `define` feature to map the property access expression to the random name you made in step 2
+
+    For example, if you inject the following file using `--inject:./injected2.js --define:process.cwd=someRandomName`:
+
+    ```js
+    // injected2.js
+    let cwdShim = () => '/'
+    export { cwdShim as someRandomName }
+    ```
+
+    Then esbuild will replace all references to `process.cwd` with the `cwdShim` variable, which will also cause `process.cwd()` to return `'/'` (but which this time will not mess with other references to `process`, which might be desirable).
+
+    With this release, using the inject feature to replace a property access expression is now as simple as using it to replace an identifier. You can now use JavaScript's ["arbitrary module namespace identifier names"](https://github.com/tc39/ecma262/pull/2154) feature to specify the property access expression directly using a string literal. For example, if you inject the following file using `--inject:./injected3.js`:
+
+    ```js
+    // injected3.js
+    let cwdShim = () => '/'
+    export { cwdShim as 'process.cwd' }
+    ```
+
+    Then esbuild will now replace all references to `process.cwd` with the `cwdShim` variable, which will also cause `process.cwd()` to return `'/'` (but which will also not mess with other references to `process`).
+
+    In addition to inserting a shim for a global variable that doesn't exist, another use case is replacing references to static methods on global objects with cached versions to both minify them better and to make access to them potentially faster. For example:
+
+    ```js
+    // Injected file
+    let cachedMin = Math.min
+    let cachedMax = Math.max
+    export {
+      cachedMin as 'Math.min',
+      cachedMax as 'Math.max',
+    }
+
+    // Original input
+    function clampRGB(r, g, b) {
+      return {
+        r: Math.max(0, Math.min(1, r)),
+        g: Math.max(0, Math.min(1, g)),
+        b: Math.max(0, Math.min(1, b)),
+      }
+    }
+
+    // Old output (with --minify)
+    function clampRGB(a,t,m){return{r:Math.max(0,Math.min(1,a)),g:Math.max(0,Math.min(1,t)),b:Math.max(0,Math.min(1,m))}}
+
+    // New output (with --minify)
+    var a=Math.min,t=Math.max;function clampRGB(h,M,m){return{r:t(0,a(1,h)),g:t(0,a(1,M)),b:t(0,a(1,m))}}
+    ```
 
 ## 0.17.3
 
