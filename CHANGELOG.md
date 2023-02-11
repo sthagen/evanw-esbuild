@@ -1,6 +1,76 @@
 # Changelog
 
-## Unreleased
+## 0.17.7
+
+* Change esbuild's parsing of TypeScript instantiation expressions to match TypeScript 4.8+ ([#2907](https://github.com/evanw/esbuild/issues/2907))
+
+    This release updates esbuild's implementation of instantiation expression erasure to match [microsoft/TypeScript#49353](https://github.com/microsoft/TypeScript/pull/49353). The new rules are as follows (copied from TypeScript's PR description):
+
+    > When a potential type argument list is followed by
+    >
+    > * a line break,
+    > * an `(` token,
+    > * a template literal string, or
+    > * any token except `<` or `>` that isn't the start of an expression,
+    >
+    > we consider that construct to be a type argument list. Otherwise we consider the construct to be a `<` relational expression followed by a `>` relational expression.
+
+* Ignore `sideEffects: false` for imported CSS files ([#1370](https://github.com/evanw/esbuild/issues/1370), [#1458](https://github.com/evanw/esbuild/pull/1458), [#2905](https://github.com/evanw/esbuild/issues/2905))
+
+    This release ignores the `sideEffects` annotation in `package.json` for CSS files that are imported into JS files using esbuild's `css` loader. This means that these CSS files are no longer be tree-shaken.
+
+    Importing CSS into JS causes esbuild to automatically create a CSS entry point next to the JS entry point containing the bundled CSS. Previously packages that specified some form of `"sideEffects": false` could potentially cause esbuild to consider one or more of the JS files on the import path to the CSS file to be side-effect free, which would result in esbuild removing that CSS file from the bundle. This was problematic because the removal of that CSS is outwardly observable, since all CSS is global, so it was incorrect for previous versions of esbuild to tree-shake CSS files imported into JS files.
+
+* Add constant folding for certain additional equality cases ([#2394](https://github.com/evanw/esbuild/issues/2394), [#2895](https://github.com/evanw/esbuild/issues/2895))
+
+    This release adds constant folding for expressions similar to the following:
+
+    ```js
+    // Original input
+    console.log(
+      null === 'foo',
+      null === undefined,
+      null == undefined,
+      false === 0,
+      false == 0,
+      1 === true,
+      1 == true,
+    )
+
+    // Old output
+    console.log(
+      null === "foo",
+      null === void 0,
+      null == void 0,
+      false === 0,
+      false == 0,
+      1 === true,
+      1 == true
+    );
+
+    // New output
+    console.log(
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true
+    );
+    ```
+
+## 0.17.6
+
+* Fix a CSS parser crash on invalid CSS ([#2892](https://github.com/evanw/esbuild/issues/2892))
+
+    Previously the following invalid CSS caused esbuild's parser to crash:
+
+    ```css
+    @media screen
+    ```
+
+    The crash was caused by trying to construct a helpful error message assuming that there was an opening `{` token, which is not the case here. This release fixes the crash.
 
 * Inline TypeScript enums that are referenced before their declaration
 
@@ -23,6 +93,12 @@
     ```
 
     This makes esbuild's TypeScript output smaller and faster when processing code that does this. I noticed this issue when I ran the TypeScript compiler's source code through esbuild's bundler. Now that the TypeScript compiler is going to be bundled with esbuild in the upcoming TypeScript 5.0 release, improvements like this will also improve the TypeScript compiler itself!
+
+* Fix esbuild installation on Arch Linux ([#2785](https://github.com/evanw/esbuild/issues/2785), [#2812](https://github.com/evanw/esbuild/issues/2812), [#2865](https://github.com/evanw/esbuild/issues/2865))
+
+    Someone made an unofficial `esbuild` package for Linux that adds the `ESBUILD_BINARY_PATH=/usr/bin/esbuild` environment variable to the user's default environment. This breaks all npm installations of esbuild for users with this unofficial Linux package installed, which has affected many people. Most (all?) people who encounter this problem haven't even installed this unofficial package themselves; instead it was installed for them as a dependency of another Linux package. The problematic change to add the `ESBUILD_BINARY_PATH` environment variable was reverted in the latest version of this unofficial package. However, old versions of this unofficial package are still there and will be around forever. With this release, `ESBUILD_BINARY_PATH` is now ignored by esbuild's install script when it's set to the value `/usr/bin/esbuild`. This should unbreak using npm to install `esbuild` in these problematic Linux environments.
+
+    Note: The `ESBUILD_BINARY_PATH` variable is an undocumented way to override the location of esbuild's binary when esbuild's npm package is installed, which is necessary to substitute your own locally-built esbuild binary when debugging esbuild's npm package. It's only meant for very custom situations and should absolutely not be forced on others by default, especially without their knowledge. I may remove the code in esbuild's installer that reads `ESBUILD_BINARY_PATH` in the future to prevent these kinds of issues. It will unfortunately make debugging esbuild harder. If `ESBUILD_BINARY_PATH` is ever removed, it will be done in a "breaking change" release.
 
 ## 0.17.5
 

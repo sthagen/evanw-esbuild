@@ -2175,10 +2175,14 @@ func TestLabels(t *testing.T) {
 
 	expectPrinted(t, "x: break x", "x:\n  break x;\n")
 	expectPrinted(t, "x: { break x; foo() }", "x: {\n  break x;\n  foo();\n}\n")
+	expectPrinted(t, "x: { y: { z: { foo(); break x; } } }", "x: {\n  y: {\n    z: {\n      foo();\n      break x;\n    }\n  }\n}\n")
+	expectPrinted(t, "x: { class X { static { new X } } }", "x: {\n  class X {\n    static {\n      new X();\n    }\n  }\n}\n")
 	expectPrintedMangle(t, "x: break x", "")
 	expectPrintedMangle(t, "x: { break x; foo() }", "")
 	expectPrintedMangle(t, "y: while (foo()) x: { break x; foo() }", "y:\n  for (; foo(); )\n    ;\n")
 	expectPrintedMangle(t, "y: while (foo()) x: { break y; foo() }", "y:\n  for (; foo(); )\n    x:\n      break y;\n")
+	expectPrintedMangle(t, "x: { y: { z: { foo(); break x; } } }", "x:\n  y:\n    z: {\n      foo();\n      break x;\n    }\n")
+	expectPrintedMangle(t, "x: { class X { static { new X } } }", "x: {\n  class X {\n    static {\n      new X();\n    }\n  }\n}\n")
 }
 
 func TestArrow(t *testing.T) {
@@ -2538,10 +2542,15 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = null == null", "x = true;\n")
 	expectPrinted(t, "x = null != null", "x = false;\n")
 
-	expectPrinted(t, "x = undefined === null", "x = void 0 === null;\n")
-	expectPrinted(t, "x = undefined !== null", "x = void 0 !== null;\n")
-	expectPrinted(t, "x = undefined == null", "x = void 0 == null;\n")
-	expectPrinted(t, "x = undefined != null", "x = void 0 != null;\n")
+	expectPrinted(t, "x = null === undefined", "x = false;\n")
+	expectPrinted(t, "x = null !== undefined", "x = true;\n")
+	expectPrinted(t, "x = null == undefined", "x = true;\n")
+	expectPrinted(t, "x = null != undefined", "x = false;\n")
+
+	expectPrinted(t, "x = undefined === null", "x = false;\n")
+	expectPrinted(t, "x = undefined !== null", "x = true;\n")
+	expectPrinted(t, "x = undefined == null", "x = true;\n")
+	expectPrinted(t, "x = undefined != null", "x = false;\n")
 
 	expectPrinted(t, "x = true === true", "x = true;\n")
 	expectPrinted(t, "x = true === false", "x = false;\n")
@@ -2632,6 +2641,40 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = y + 4 + '5'", "x = y + 4 + \"5\";\n")
 	expectPrinted(t, "x = '3' + 4 + 5", "x = \"345\";\n")
 	expectPrinted(t, "x = 3 + 4 + '5'", "x = 3 + 4 + \"5\";\n")
+
+	expectPrinted(t, "x = null == 0", "x = false;\n")
+	expectPrinted(t, "x = 0 == null", "x = false;\n")
+	expectPrinted(t, "x = undefined == 0", "x = false;\n")
+	expectPrinted(t, "x = 0 == undefined", "x = false;\n")
+
+	expectPrinted(t, "x = null == NaN", "x = false;\n")
+	expectPrinted(t, "x = NaN == null", "x = false;\n")
+	expectPrinted(t, "x = undefined == NaN", "x = false;\n")
+	expectPrinted(t, "x = NaN == undefined", "x = false;\n")
+
+	expectPrinted(t, "x = null == ''", "x = false;\n")
+	expectPrinted(t, "x = '' == null", "x = false;\n")
+	expectPrinted(t, "x = undefined == ''", "x = false;\n")
+	expectPrinted(t, "x = '' == undefined", "x = false;\n")
+
+	expectPrinted(t, "x = null == 'null'", "x = false;\n")
+	expectPrinted(t, "x = 'null' == null", "x = false;\n")
+	expectPrinted(t, "x = undefined == 'undefined'", "x = false;\n")
+	expectPrinted(t, "x = 'undefined' == undefined", "x = false;\n")
+
+	expectPrinted(t, "x = false === 0", "x = false;\n")
+	expectPrinted(t, "x = true === 1", "x = false;\n")
+	expectPrinted(t, "x = false == 0", "x = true;\n")
+	expectPrinted(t, "x = false == -0", "x = true;\n")
+	expectPrinted(t, "x = true == 1", "x = true;\n")
+	expectPrinted(t, "x = true == 2", "x = false;\n")
+
+	expectPrinted(t, "x = 0 === false", "x = false;\n")
+	expectPrinted(t, "x = 1 === true", "x = false;\n")
+	expectPrinted(t, "x = 0 == false", "x = true;\n")
+	expectPrinted(t, "x = -0 == false", "x = true;\n")
+	expectPrinted(t, "x = 1 == true", "x = true;\n")
+	expectPrinted(t, "x = 2 == true", "x = false;\n")
 }
 
 func TestConstantFoldingScopes(t *testing.T) {
@@ -4275,6 +4318,8 @@ func TestMangleUnused(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "a + '' != b", "a + \"\" != b;\n", "a + \"\" != b;\n")
 	expectPrintedNormalAndMangle(t, "a + '' == b + ''", "a + \"\" == b + \"\";\n", "a + \"\", b + \"\";\n")
 	expectPrintedNormalAndMangle(t, "a + '' != b + ''", "a + \"\" != b + \"\";\n", "a + \"\", b + \"\";\n")
+	expectPrintedNormalAndMangle(t, "a + '' == (b | c)", "a + \"\" == (b | c);\n", "a + \"\", b | c;\n")
+	expectPrintedNormalAndMangle(t, "a + '' != (b | c)", "a + \"\" != (b | c);\n", "a + \"\", b | c;\n")
 	expectPrintedNormalAndMangle(t, "typeof a == b + ''", "typeof a == b + \"\";\n", "b + \"\";\n")
 	expectPrintedNormalAndMangle(t, "typeof a != b + ''", "typeof a != b + \"\";\n", "b + \"\";\n")
 	expectPrintedNormalAndMangle(t, "typeof a == 'b'", "typeof a == \"b\";\n", "")
@@ -4948,11 +4993,11 @@ func TestJSX(t *testing.T) {
 
 	expectParseErrorJSX(t, "<a b=true/>", "<stdin>: ERROR: Expected \"{\" but found \"true\"\n")
 	expectParseErrorJSX(t, "</a>", "<stdin>: ERROR: Expected identifier but found \"/\"\n")
-	expectParseErrorJSX(t, "<></b>", "<stdin>: ERROR: Expected closing tag \"b\" to match opening tag \"\"\n<stdin>: NOTE: The opening tag \"\" is here:\n")
-	expectParseErrorJSX(t, "<a></>", "<stdin>: ERROR: Expected closing tag \"\" to match opening tag \"a\"\n<stdin>: NOTE: The opening tag \"a\" is here:\n")
-	expectParseErrorJSX(t, "<a></b>", "<stdin>: ERROR: Expected closing tag \"b\" to match opening tag \"a\"\n<stdin>: NOTE: The opening tag \"a\" is here:\n")
+	expectParseErrorJSX(t, "<></b>", "<stdin>: ERROR: Expected closing \"b\" tag to match opening \"\" tag\n<stdin>: NOTE: The opening \"\" tag is here:\n")
+	expectParseErrorJSX(t, "<a></>", "<stdin>: ERROR: Expected closing \"\" tag to match opening \"a\" tag\n<stdin>: NOTE: The opening \"a\" tag is here:\n")
+	expectParseErrorJSX(t, "<a></b>", "<stdin>: ERROR: Expected closing \"b\" tag to match opening \"a\" tag\n<stdin>: NOTE: The opening \"a\" tag is here:\n")
 	expectParseErrorJSX(t, "<\na\n.\nb\n>\n<\n/\nc\n.\nd\n>",
-		"<stdin>: ERROR: Expected closing tag \"c.d\" to match opening tag \"a.b\"\n<stdin>: NOTE: The opening tag \"a.b\" is here:\n")
+		"<stdin>: ERROR: Expected closing \"c.d\" tag to match opening \"a.b\" tag\n<stdin>: NOTE: The opening \"a.b\" tag is here:\n")
 	expectParseErrorJSX(t, "<a-b.c>", "<stdin>: ERROR: Expected \">\" but found \".\"\n")
 	expectParseErrorJSX(t, "<a.b-c>", "<stdin>: ERROR: Unexpected \"-\"\n")
 
@@ -4982,13 +5027,13 @@ func TestJSX(t *testing.T) {
 	expectParseErrorJSX(t, "<a /* />", "<stdin>: ERROR: Expected \"*/\" to terminate multi-line comment\n<stdin>: NOTE: The multi-line comment starts here:\n")
 	expectParseErrorJSX(t, "<a /*/ />", "<stdin>: ERROR: Expected \"*/\" to terminate multi-line comment\n<stdin>: NOTE: The multi-line comment starts here:\n")
 	expectParseErrorJSX(t, "<a // />", "<stdin>: ERROR: Expected \">\" but found end of file\n")
-	expectParseErrorJSX(t, "<a /**/>", "<stdin>: ERROR: Unexpected end of file\n")
+	expectParseErrorJSX(t, "<a /**/>", "<stdin>: ERROR: Unexpected end of file before a closing \"a\" tag\n<stdin>: NOTE: The opening \"a\" tag is here:\n")
 	expectParseErrorJSX(t, "<a /**/ />", "")
 	expectParseErrorJSX(t, "<a // \n />", "")
 	expectParseErrorJSX(t, "<a b/* />", "<stdin>: ERROR: Expected \"*/\" to terminate multi-line comment\n<stdin>: NOTE: The multi-line comment starts here:\n")
 	expectParseErrorJSX(t, "<a b/*/ />", "<stdin>: ERROR: Expected \"*/\" to terminate multi-line comment\n<stdin>: NOTE: The multi-line comment starts here:\n")
 	expectParseErrorJSX(t, "<a b// />", "<stdin>: ERROR: Expected \">\" but found end of file\n")
-	expectParseErrorJSX(t, "<a b/**/>", "<stdin>: ERROR: Unexpected end of file\n")
+	expectParseErrorJSX(t, "<a b/**/>", "<stdin>: ERROR: Unexpected end of file before a closing \"a\" tag\n<stdin>: NOTE: The opening \"a\" tag is here:\n")
 	expectParseErrorJSX(t, "<a b/**/ />", "")
 	expectParseErrorJSX(t, "<a b// \n />", "")
 

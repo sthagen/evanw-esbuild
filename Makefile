@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.19\.5 ' || (echo 'Please install Go version 1.19.5' && false)
+	@go version | grep ' go1\.20 ' || (echo 'Please install Go version 1.20.0' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -556,7 +556,8 @@ validate-builds:
 	@$(MAKE) --no-print-directory TARGET=platform-win32-x64      SCOPE=@esbuild/ PACKAGE=win32-x64       SUBPATH=esbuild.exe  validate-build
 
 clean:
-	go clean -testcache ./internal/...
+	go clean -cache
+	go clean -testcache
 	rm -f esbuild
 	rm -f npm/@esbuild/win32-arm64/esbuild.exe
 	rm -f npm/@esbuild/win32-ia32/esbuild.exe

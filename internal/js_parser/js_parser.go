@@ -3675,12 +3675,16 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		//
 		//   A JSX element:
 		//     <A>(x) => {}</A>
+		//     <A extends/>
 		//     <A extends>(x) => {}</A>
 		//     <A extends={false}>(x) => {}</A>
+		//     <const A extends/>
 		//     <const A extends>(x) => {}</const>
 		//
 		//   An arrow function with type parameters:
+		//     <A,>(x) => {}
 		//     <A, B>(x) => {}
+		//     <A = B>(x) => {}
 		//     <A extends B>(x) => {}
 		//     <const>(x)</const>
 		//     <const A extends B>(x) => {}
@@ -3689,7 +3693,6 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		//     <[]>(x)
 		//     <A[]>(x)
 		//     <A>(x) => {}
-		//     <A = B>(x) => {}
 
 		if p.options.ts.Parse && p.options.jsx.Parse && p.isTSArrowFnJSX() {
 			p.skipTypeScriptTypeParameters(allowConstModifier)
@@ -5016,8 +5019,8 @@ func (p *parser) parseJSXElement(loc logger.Loc) js_ast.Expr {
 			if startText != endText {
 				msg := logger.Msg{
 					Kind:  logger.Error,
-					Data:  p.tracker.MsgData(endRange, fmt.Sprintf("Expected closing tag %q to match opening tag %q", endText, startText)),
-					Notes: []logger.MsgData{p.tracker.MsgData(startRange, fmt.Sprintf("The opening tag %q is here:", startText))},
+					Data:  p.tracker.MsgData(endRange, fmt.Sprintf("Expected closing %q tag to match opening %q tag", endText, startText)),
+					Notes: []logger.MsgData{p.tracker.MsgData(startRange, fmt.Sprintf("The opening %q tag is here:", startText))},
 				}
 				msg.Data.Location.Suggestion = startText
 				p.log.AddMsg(msg)
@@ -5033,6 +5036,16 @@ func (p *parser) parseJSXElement(loc logger.Loc) js_ast.Expr {
 				CloseLoc:        lessThanLoc,
 				IsTagSingleLine: isSingleLine,
 			}}
+
+		case js_lexer.TEndOfFile:
+			msg := logger.Msg{
+				Kind:  logger.Error,
+				Data:  p.tracker.MsgData(p.lexer.Range(), fmt.Sprintf("Unexpected end of file before a closing %q tag", startText)),
+				Notes: []logger.MsgData{p.tracker.MsgData(startRange, fmt.Sprintf("The opening %q tag is here:", startText))},
+			}
+			msg.Data.Location.Suggestion = fmt.Sprintf("</%s>", startText)
+			p.log.AddMsg(msg)
+			panic(js_lexer.LexerPanic{})
 
 		default:
 			p.lexer.Unexpected()
@@ -8516,20 +8529,14 @@ func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt 
 						left, right = right, left
 					}
 
-					// Handle the returned values being the same
-					if boolean, ok := js_ast.CheckEqualityIfNoSideEffects(left.Data, right.Data); ok && boolean {
-						// "if (a) return b; return b;" => "return a, b;"
-						lastReturn = &js_ast.SReturn{ValueOrNil: js_ast.JoinWithComma(prevS.Test, left)}
+					if comma, ok := prevS.Test.Data.(*js_ast.EBinary); ok && comma.Op == js_ast.BinOpComma {
+						// "if (a, b) return c; return d;" => "return a, b ? c : d;"
+						lastReturn = &js_ast.SReturn{ValueOrNil: js_ast.JoinWithComma(comma.Left,
+							js_ast.MangleIfExpr(comma.Right.Loc, &js_ast.EIf{Test: comma.Right, Yes: left, No: right}, p.options.unsupportedJSFeatures, p.isUnbound))}
 					} else {
-						if comma, ok := prevS.Test.Data.(*js_ast.EBinary); ok && comma.Op == js_ast.BinOpComma {
-							// "if (a, b) return c; return d;" => "return a, b ? c : d;"
-							lastReturn = &js_ast.SReturn{ValueOrNil: js_ast.JoinWithComma(comma.Left,
-								js_ast.MangleIfExpr(comma.Right.Loc, &js_ast.EIf{Test: comma.Right, Yes: left, No: right}, p.options.unsupportedJSFeatures, p.isUnbound))}
-						} else {
-							// "if (a) return b; return c;" => "return a ? b : c;"
-							lastReturn = &js_ast.SReturn{ValueOrNil: js_ast.MangleIfExpr(
-								prevS.Test.Loc, &js_ast.EIf{Test: prevS.Test, Yes: left, No: right}, p.options.unsupportedJSFeatures, p.isUnbound)}
-						}
+						// "if (a) return b; return c;" => "return a ? b : c;"
+						lastReturn = &js_ast.SReturn{ValueOrNil: js_ast.MangleIfExpr(
+							prevS.Test.Loc, &js_ast.EIf{Test: prevS.Test, Yes: left, No: right}, p.options.unsupportedJSFeatures, p.isUnbound)}
 					}
 
 					// Merge the last two statements
@@ -8913,6 +8920,17 @@ func (p *parser) visitLoopBody(stmt js_ast.Stmt) js_ast.Stmt {
 }
 
 func (p *parser) visitSingleStmt(stmt js_ast.Stmt, kind stmtsKind) js_ast.Stmt {
+	// To reduce stack depth, special-case blocks and process their children directly
+	if block, ok := stmt.Data.(*js_ast.SBlock); ok {
+		p.pushScopeForVisitPass(js_ast.ScopeBlock, stmt.Loc)
+		block.Stmts = p.visitStmts(block.Stmts, kind)
+		p.popScope()
+		if p.options.minifySyntax {
+			stmt = stmtsToSingleStmt(stmt.Loc, block.Stmts)
+		}
+		return stmt
+	}
+
 	// Introduce a fake block scope for function declarations inside if statements
 	fn, ok := stmt.Data.(*js_ast.SFunction)
 	hasIfScope := ok && fn.Fn.HasIfScope
@@ -8938,11 +8956,8 @@ func stmtsToSingleStmt(loc logger.Loc, stmts []js_ast.Stmt) js_ast.Stmt {
 	if len(stmts) == 0 {
 		return js_ast.Stmt{Loc: loc, Data: js_ast.SEmptyShared}
 	}
-	if len(stmts) == 1 {
-		// "let" and "const" must be put in a block when in a single-statement context
-		if s, ok := stmts[0].Data.(*js_ast.SLocal); !ok || s.Kind == js_ast.LocalVar {
-			return stmts[0]
-		}
+	if len(stmts) == 1 && !statementCaresAboutScope(stmts[0]) {
+		return stmts[0]
 	}
 	return js_ast.Stmt{Loc: loc, Data: &js_ast.SBlock{Stmts: stmts}}
 }
@@ -9056,7 +9071,7 @@ func statementCaresAboutScope(stmt js_ast.Stmt) bool {
 	case *js_ast.SBlock, *js_ast.SEmpty, *js_ast.SDebugger, *js_ast.SExpr, *js_ast.SIf,
 		*js_ast.SFor, *js_ast.SForIn, *js_ast.SForOf, *js_ast.SDoWhile, *js_ast.SWhile,
 		*js_ast.SWith, *js_ast.STry, *js_ast.SSwitch, *js_ast.SReturn, *js_ast.SThrow,
-		*js_ast.SBreak, *js_ast.SContinue, *js_ast.SDirective:
+		*js_ast.SBreak, *js_ast.SContinue, *js_ast.SDirective, *js_ast.SLabel:
 		return false
 
 	case *js_ast.SLocal:
@@ -12631,7 +12646,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 		case js_ast.BinOpLooseEq:
-			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data); ok {
+			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data, js_ast.LooseEquality); ok {
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: result}}, exprOut{}
 			}
 			afterOpLoc := locAfterOp(e)
@@ -12654,7 +12669,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 		case js_ast.BinOpStrictEq:
-			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data); ok {
+			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data, js_ast.StrictEquality); ok {
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: result}}, exprOut{}
 			}
 			afterOpLoc := locAfterOp(e)
@@ -12675,7 +12690,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 		case js_ast.BinOpLooseNe:
-			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data); ok {
+			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data, js_ast.LooseEquality); ok {
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: !result}}, exprOut{}
 			}
 			afterOpLoc := locAfterOp(e)
@@ -12698,7 +12713,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 
 		case js_ast.BinOpStrictNe:
-			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data); ok {
+			if result, ok := js_ast.CheckEqualityIfNoSideEffects(e.Left.Data, e.Right.Data, js_ast.StrictEquality); ok {
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: !result}}, exprOut{}
 			}
 			afterOpLoc := locAfterOp(e)
@@ -14542,7 +14557,7 @@ func (p *parser) maybeMarkKnownGlobalConstructorAsPure(e *js_ast.ENew) {
 				}
 
 				if n == 1 {
-					switch js_ast.KnownPrimitiveType(e.Args[0]) {
+					switch js_ast.KnownPrimitiveType(e.Args[0].Data) {
 					case js_ast.PrimitiveNull, js_ast.PrimitiveUndefined, js_ast.PrimitiveBoolean, js_ast.PrimitiveNumber, js_ast.PrimitiveString:
 						// "new Date('')" is pure
 						// "new Date(0)" is pure
