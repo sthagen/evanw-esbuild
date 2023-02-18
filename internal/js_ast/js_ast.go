@@ -170,13 +170,13 @@ const (
 	BinOpLogicalAndAssign
 )
 
-type opTableEntry struct {
+type OpTableEntry struct {
 	Text      string
 	Level     L
 	IsKeyword bool
 }
 
-var OpTable = []opTableEntry{
+var OpTable = []OpTableEntry{
 	// Prefix
 	{"+", LPrefix, false},
 	{"-", LPrefix, false},
@@ -703,9 +703,28 @@ type EMangledProp struct {
 }
 
 type EJSXElement struct {
-	TagOrNil        Expr
-	Properties      []Property
-	Children        []Expr
+	TagOrNil   Expr
+	Properties []Property
+
+	// Note: This array may contain nil entries. Be careful about nil entries
+	// when iterating over this array.
+	//
+	// Each nil entry corresponds to the "JSXChildExpression_opt" part of the
+	// grammar (https://facebook.github.io/jsx/#prod-JSXChild):
+	//
+	//   JSXChild :
+	//       JSXText
+	//       JSXElement
+	//       JSXFragment
+	//       { JSXChildExpression_opt }
+	//
+	// This is the "{}" part in "<a>{}</a>". We allow this because some people
+	// put comments there and then expect to be able to process them from
+	// esbuild's output. These absent AST nodes are completely omitted when
+	// JSX is transformed to JS. They are only present when JSX preservation is
+	// enabled.
+	NullableChildren []Expr
+
 	CloseLoc        logger.Loc
 	IsTagSingleLine bool
 }

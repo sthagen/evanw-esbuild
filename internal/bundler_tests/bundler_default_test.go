@@ -8054,6 +8054,20 @@ func TestCommentPreservationTransformJSX(t *testing.T) {
 					<div {/*before*/...x} />,
 					<div>{/*before*/x}</div>,
 					<>{/*before*/x}</>,
+
+					// Comments on absent AST nodes
+					<div>before{}after</div>,
+					<div>before{/* comment 1 *//* comment 2 */}after</div>,
+					<div>before{
+						// comment 1
+						// comment 2
+					}after</div>,
+					<>before{}after</>,
+					<>before{/* comment 1 *//* comment 2 */}after</>,
+					<>before{
+						// comment 1
+						// comment 2
+					}after</>,
 				)
 			`,
 		},
@@ -8076,6 +8090,20 @@ func TestCommentPreservationPreserveJSX(t *testing.T) {
 					<div {/*before*/...x} />,
 					<div>{/*before*/x}</div>,
 					<>{/*before*/x}</>,
+
+					// Comments on absent AST nodes
+					<div>before{}after</div>,
+					<div>before{/* comment 1 *//* comment 2 */}after</div>,
+					<div>before{
+						// comment 1
+						// comment 2
+					}after</div>,
+					<>before{}after</>,
+					<>before{/* comment 1 *//* comment 2 */}after</>,
+					<>before{
+						// comment 1
+						// comment 2
+					}after</>,
 				)
 			`,
 		},
@@ -8087,5 +8115,26 @@ func TestCommentPreservationPreserveJSX(t *testing.T) {
 				Preserve: true,
 			},
 		},
+	})
+}
+
+func TestErrorMessageCrashStdinIssue2913(t *testing.T) {
+	default_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/project/node_modules/fflate/package.json": `{ "main": "main.js" }`,
+			"/project/node_modules/fflate/main.js":      ``,
+		},
+		options: config.Options{
+			Stdin: &config.StdinInfo{
+				Contents:      `import "node_modules/fflate"`,
+				AbsResolveDir: "/project",
+			},
+			Mode:         config.ModeBundle,
+			Platform:     config.PlatformNeutral,
+			AbsOutputDir: "/out",
+		},
+		expectedScanLog: `<stdin>: ERROR: Could not resolve "node_modules/fflate"
+NOTE: You can mark the path "node_modules/fflate" as external to exclude it from the bundle, which will remove this error.
+`,
 	})
 }

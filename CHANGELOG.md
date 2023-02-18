@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased
+
+* Fix TypeScript code translation for certain computed `declare` class fields ([#2914](https://github.com/evanw/esbuild/issues/2914))
+
+    In TypeScript, the key of a computed `declare` class field should only be preserved if there are no decorators for that field. Previously esbuild always preserved the key, but esbuild will now remove the key to match the output of the TypeScript compiler:
+
+    ```ts
+    // Original code
+    declare function dec(a: any, b: any): any
+    declare const removeMe: unique symbol
+    declare const keepMe: unique symbol
+    class X {
+        declare [removeMe]: any
+        @dec declare [keepMe]: any
+    }
+
+    // Old output
+    var _a;
+    class X {
+    }
+    removeMe, _a = keepMe;
+    __decorateClass([
+      dec
+    ], X.prototype, _a, 2);
+
+    // New output
+    var _a;
+    class X {
+    }
+    _a = keepMe;
+    __decorateClass([
+      dec
+    ], X.prototype, _a, 2);
+    ```
+
+* Fix a crash with path resolution error generation ([#2913](https://github.com/evanw/esbuild/issues/2913))
+
+    In certain situations, a module containing an invalid import path could previously cause esbuild to crash when it attempts to generate a more helpful error message. This crash has been fixed.
+
+## 0.17.8
+
+* Fix a minification bug with non-ASCII identifiers ([#2910](https://github.com/evanw/esbuild/issues/2910))
+
+    This release fixes a bug with esbuild where non-ASCII identifiers followed by a keyword were incorrectly not separated by a space. This bug affected both the `in` and `instanceof` keywords. Here's an example of the fix:
+
+    ```js
+    // Original code
+    π in a
+
+    // Old output (with --minify --charset=utf8)
+    πin a;
+
+    // New output (with --minify --charset=utf8)
+    π in a;
+    ```
+
+* Fix a regression with esbuild's WebAssembly API in version 0.17.6 ([#2911](https://github.com/evanw/esbuild/issues/2911))
+
+    Version 0.17.6 of esbuild updated the Go toolchain to version 1.20.0. This had the unfortunate side effect of increasing the amount of stack space that esbuild uses (presumably due to some changes to Go's WebAssembly implementation) which could cause esbuild's WebAssembly-based API to crash with a stack overflow in cases where it previously didn't crash. One such case is the package `grapheme-splitter` which contains code that looks like this:
+
+    ```js
+    if (
+      (0x0300 <= code && code <= 0x036F) ||
+      (0x0483 <= code && code <= 0x0487) ||
+      (0x0488 <= code && code <= 0x0489) ||
+      (0x0591 <= code && code <= 0x05BD) ||
+      // ... many hundreds of lines later ...
+    ) {
+      return;
+    }
+    ```
+
+    This edge case involves a chain of binary operators that results in an AST over 400 nodes deep. Normally this wouldn't be a problem because Go has growable call stacks, so the call stack would just grow to be as large as needed. However, WebAssembly byte code deliberately doesn't expose the ability to manipulate the stack pointer, so Go's WebAssembly translation is forced to use the fixed-size WebAssembly call stack. So esbuild's WebAssembly implementation is vulnerable to stack overflow in cases like these.
+
+    It's not unreasonable for this to cause a stack overflow, and for esbuild's answer to this problem to be "don't write code like this." That's how many other AST-manipulation tools handle this problem. However, it's possible to implement AST traversal using iteration instead of recursion to work around limited call stack space. This version of esbuild implements this code transformation for esbuild's JavaScript parser and printer, so esbuild's WebAssembly implementation is now able to process the `grapheme-splitter` package (at least when compiled with Go 1.20.0 and run with node's WebAssembly implementation).
+
 ## 0.17.7
 
 * Change esbuild's parsing of TypeScript instantiation expressions to match TypeScript 4.8+ ([#2907](https://github.com/evanw/esbuild/issues/2907))
