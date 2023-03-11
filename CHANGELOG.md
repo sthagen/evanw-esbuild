@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.17.11
+
+* Fix the `alias` feature to always prefer the longest match ([#2963](https://github.com/evanw/esbuild/issues/2963))
+
+    It's possible to configure conflicting aliases such as `--alias:a=b` and `--alias:a/c=d`, which is ambiguous for the import path `a/c/x` (since it could map to either `b/c/x` or `d/x`). Previously esbuild would pick the first matching `alias`, which would non-deterministically pick between one of the possible matches. This release fixes esbuild to always deterministically pick the longest possible match.
+
+* Minify calls to some global primitive constructors ([#2962](https://github.com/evanw/esbuild/issues/2962))
+
+    With this release, esbuild's minifier now replaces calls to `Boolean`/`Number`/`String`/`BigInt` with equivalent shorter code when relevant:
+
+    ```js
+    // Original code
+    console.log(
+      Boolean(a ? (b | c) !== 0 : (c & d) !== 0),
+      Number(e ? '1' : '2'),
+      String(e ? '1' : '2'),
+      BigInt(e ? 1n : 2n),
+    )
+
+    // Old output (with --minify)
+    console.log(Boolean(a?(b|c)!==0:(c&d)!==0),Number(e?"1":"2"),String(e?"1":"2"),BigInt(e?1n:2n));
+
+    // New output (with --minify)
+    console.log(!!(a?b|c:c&d),+(e?"1":"2"),e?"1":"2",e?1n:2n);
+    ```
 
 * Adjust some feature compatibility tables for node ([#2940](https://github.com/evanw/esbuild/issues/2940))
 
