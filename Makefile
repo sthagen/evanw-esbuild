@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.20\.1 ' || (echo 'Please install Go version 1.20.1' && false)
+	@go version | grep ' go1\.20\.2 ' || (echo 'Please install Go version 1.20.2' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -107,9 +107,16 @@ test-old-ts: platform-neutral | require/old-ts/node_modules
 node-unref-tests: | scripts/node_modules
 	node scripts/node-unref-tests.js
 
-lib-typecheck: | lib/node_modules
+lib-typecheck: lib-typecheck-node lib-typecheck-deno
+
+lib-typecheck-node: | lib/node_modules
 	cd lib && node_modules/.bin/tsc -noEmit -p tsconfig.json
+
+lib-typecheck-deno: lib/deno/lib.deno.d.ts | lib/node_modules
 	cd lib && node_modules/.bin/tsc -noEmit -p tsconfig-deno.json
+
+lib/deno/lib.deno.d.ts:
+	deno types > lib/deno/lib.deno.d.ts
 
 # End-to-end tests
 test-e2e: test-e2e-npm test-e2e-pnpm test-e2e-yarn-berry test-e2e-deno
