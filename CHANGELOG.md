@@ -1,5 +1,114 @@
 # Changelog
 
+## 0.17.14
+
+* Allow the TypeScript 5.0 `const` modifier in object type declarations ([#3021](https://github.com/evanw/esbuild/issues/3021))
+
+    The new TypeScript 5.0 `const` modifier was added to esbuild in version 0.17.5, and works with classes, functions, and arrow expressions. However, support for it wasn't added to object type declarations (e.g. interfaces) due to an oversight. This release adds support for these cases, so the following TypeScript 5.0 code can now be built with esbuild:
+
+    ```ts
+    interface Foo { <const T>(): T }
+    type Bar = { new <const T>(): T }
+    ```
+
+* Implement preliminary lowering for CSS nesting ([#1945](https://github.com/evanw/esbuild/issues/1945))
+
+    Chrome has [implemented the new CSS nesting specification](https://developer.chrome.com/articles/css-nesting/) in version 112, which is currently in beta but will become stable very soon. So CSS nesting is now a part of the web platform!
+
+    This release of esbuild can now transform nested CSS syntax into non-nested CSS syntax for older browsers. The transformation relies on the `:is()` pseudo-class in many cases, so the transformation is only guaranteed to work when targeting browsers that support `:is()` (e.g. Chrome 88+). You'll need to set esbuild's [`target`](https://esbuild.github.io/api/#target) to the browsers you intend to support to tell esbuild to do this transformation. You will get a warning if you use CSS nesting syntax with a `target` which includes older browsers that don't support `:is()`.
+
+    The lowering transformation looks like this:
+
+    ```css
+    /* Original input */
+    a.btn {
+      color: #333;
+      &:hover { color: #444 }
+      &:active { color: #555 }
+    }
+
+    /* New output (with --target=chrome88) */
+    a.btn {
+      color: #333;
+    }
+    a.btn:hover {
+      color: #444;
+    }
+    a.btn:active {
+      color: #555;
+    }
+    ```
+
+    More complex cases may generate the `:is()` pseudo-class:
+
+    ```css
+    /* Original input */
+    div, p {
+      .warning, .error {
+        padding: 20px;
+      }
+    }
+
+    /* New output (with --target=chrome88) */
+    :is(div, p) :is(.warning, .error) {
+      padding: 20px;
+    }
+    ```
+
+    In addition, esbuild now has a special warning message for nested style rules that start with an identifier. This isn't allowed in CSS because the syntax would be ambiguous with the existing declaration syntax. The new warning message looks like this:
+
+    ```
+    ▲ [WARNING] A nested style rule cannot start with "p" because it looks like the start of a declaration [css-syntax-error]
+
+        <stdin>:1:7:
+          1 │ main { p { margin: auto } }
+            │        ^
+            ╵        :is(p)
+
+      To start a nested style rule with an identifier, you need to wrap the identifier in ":is(...)" to
+      prevent the rule from being parsed as a declaration.
+    ```
+
+    Keep in mind that the transformation in this release is a preliminary implementation. CSS has many features that interact in complex ways, and there may be some edge cases that don't work correctly yet.
+
+* Minification now removes unnecessary `&` CSS nesting selectors
+
+    This release introduces the following CSS minification optimizations:
+
+    ```css
+    /* Original input */
+    a {
+      font-weight: bold;
+      & {
+        color: blue;
+      }
+      & :hover {
+        text-decoration: underline;
+      }
+    }
+
+    /* Old output (with --minify) */
+    a{font-weight:700;&{color:#00f}& :hover{text-decoration:underline}}
+
+    /* New output (with --minify) */
+    a{font-weight:700;:hover{text-decoration:underline}color:#00f}
+    ```
+
+* Minification now removes duplicates from CSS selector lists
+
+    This release introduces the following CSS minification optimization:
+
+    ```css
+    /* Original input */
+    div, div { color: red }
+
+    /* Old output (with --minify) */
+    div,div{color:red}
+
+    /* New output (with --minify) */
+    div{color:red}
+    ```
+
 ## 0.17.13
 
 * Work around an issue with `NODE_PATH` and Go's WebAssembly internals ([#3001](https://github.com/evanw/esbuild/issues/3001))

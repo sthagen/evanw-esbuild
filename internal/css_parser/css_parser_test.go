@@ -50,14 +50,14 @@ func expectParseError(t *testing.T, contents string, expected string, expectedLo
 
 func expectParseErrorMinify(t *testing.T, contents string, expected string, expectedLog string) {
 	t.Helper()
-	expectPrintedCommon(t, contents, contents, expected, &expectedLog, config.Options{
+	expectPrintedCommon(t, contents+" [minify]", contents, expected, &expectedLog, config.Options{
 		MinifyWhitespace: true,
 	})
 }
 
 func expectParseErrorMangle(t *testing.T, contents string, expected string, expectedLog string) {
 	t.Helper()
-	expectPrintedCommon(t, contents, contents, expected, &expectedLog, config.Options{
+	expectPrintedCommon(t, contents+" [mangle]", contents, expected, &expectedLog, config.Options{
 		MinifySyntax: true,
 	})
 }
@@ -69,7 +69,7 @@ func expectPrinted(t *testing.T, contents string, expected string) {
 
 func expectPrintedLower(t *testing.T, contents string, expected string) {
 	t.Helper()
-	expectPrintedCommon(t, contents+" [mangle]", contents, expected, nil, config.Options{
+	expectPrintedCommon(t, contents+" [lower]", contents, expected, nil, config.Options{
 		UnsupportedCSSFeatures: ^compat.CSSFeature(0),
 	})
 }
@@ -592,7 +592,9 @@ func TestDeclaration(t *testing.T) {
 	expectPrinted(t, ".decl { a: b; }", ".decl {\n  a: b;\n}\n")
 	expectPrinted(t, ".decl { a: b; c: d }", ".decl {\n  a: b;\n  c: d;\n}\n")
 	expectPrinted(t, ".decl { a: b; c: d; }", ".decl {\n  a: b;\n  c: d;\n}\n")
-	expectParseError(t, ".decl { a { b: c; } }", ".decl {\n  a { b: c; };\n}\n", "<stdin>: WARNING: Expected \":\"\n")
+	expectParseError(t, ".decl { a { b: c; } }", ".decl {\n  a { b: c; };\n}\n",
+		"<stdin>: WARNING: A nested style rule cannot start with \"a\" because it looks like the start of a declaration\n"+
+			"NOTE: To start a nested style rule with an identifier, you need to wrap the identifier in \":is(...)\" to prevent the rule from being parsed as a declaration.\n")
 	expectPrinted(t, ".decl { & a { b: c; } }", ".decl {\n  & a {\n    b: c;\n  }\n}\n")
 
 	// See http://browserhacks.com/
@@ -757,7 +759,9 @@ func TestNestedSelector(t *testing.T) {
 	expectParseError(t, "a { >b {} }", "a {\n  > b {\n  }\n}\n", "")
 	expectParseError(t, "a { +b {} }", "a {\n  + b {\n  }\n}\n", "")
 	expectParseError(t, "a { ~b {} }", "a {\n  ~ b {\n  }\n}\n", "")
-	expectParseError(t, "a { b {} }", "a {\n  b {};\n}\n", "<stdin>: WARNING: Expected \":\"\n")
+	expectParseError(t, "a { b {} }", "a {\n  b {};\n}\n",
+		"<stdin>: WARNING: A nested style rule cannot start with \"b\" because it looks like the start of a declaration\n"+
+			"NOTE: To start a nested style rule with an identifier, you need to wrap the identifier in \":is(...)\" to prevent the rule from being parsed as a declaration.\n")
 	expectParseError(t, "a { b() {} }", "a {\n  b() {};\n}\n", "<stdin>: WARNING: Expected identifier but found \"b(\"\n")
 
 	// Note: CSS nesting no longer requires each complex selector to contain "&"
@@ -789,12 +793,155 @@ func TestNestedSelector(t *testing.T) {
 		"html {\n  @layer base {\n    block-size: 100%;\n    @layer support {\n      & body {\n        min-block-size: 100%;\n      }\n    }\n  }\n}\n")
 	expectPrinted(t, ".card { aspect-ratio: 3/4; @scope (&) { :scope { border: 1px solid white } } }",
 		".card {\n  aspect-ratio: 3/4;\n  @scope (&) {\n    :scope {\n      border: 1px solid white;\n    }\n  }\n}\n")
+
+	// Minify an implicit leading "&"
+	expectPrintedMangle(t, "& { color: red }", "& {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& a { color: red }", "a {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& a, & b { color: red }", "a,\nb {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& a, b { color: red }", "a,\nb {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "a, & b { color: red }", "a,\nb {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& &a { color: red }", "& &a {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& .x { color: red }", ".x {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& &.x { color: red }", "& &.x {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& + a { color: red }", "+ a {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "& + &a { color: red }", "+ &a {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "&.x { color: red }", "&.x {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "a & { color: red }", "a & {\n  color: red;\n}\n")
+	expectPrintedMangle(t, ".x & { color: red }", ".x & {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { & a { color: red } }", "div {\n  & a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & .x { color: red } }", "div {\n  .x {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & .x, & a { color: red } }", "div {\n  .x,\n  a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { .x, & a { color: red } }", "div {\n  .x,\n  a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & &a { color: red } }", "div {\n  & &a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & .x { color: red } }", "div {\n  .x {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & &.x { color: red } }", "div {\n  & &.x {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & + a { color: red } }", "div {\n  + a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { & + &a { color: red } }", "div {\n  + &a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div { .x & { color: red } }", "div {\n  .x & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "@media screen { & div { color: red } }", "@media screen {\n  div {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "a { @media screen { & div { color: red } } }", "a {\n  @media screen {\n    & div {\n      color: red;\n    }\n  }\n}\n")
+
+	// Reorder selectors to enable removing "&"
+	expectPrintedMangle(t, "reorder { & first, .second { color: red } }", "reorder {\n  .second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, & .second { color: red } }", "reorder {\n  .second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, #second { color: red } }", "reorder {\n  #second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, [second] { color: red } }", "reorder {\n  [second],\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, :second { color: red } }", "reorder {\n  :second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, + second { color: red } }", "reorder {\n  + second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, ~ second { color: red } }", "reorder {\n  ~ second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, > second { color: red } }", "reorder {\n  > second,\n  first {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "reorder { & first, second, .third { color: red } }", "reorder {\n  .third,\n  second,\n  first {\n    color: red;\n  }\n}\n")
+
+	// Inline no-op nesting
+	expectPrintedMangle(t, "div { & { color: red } }", "div {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { && { color: red } }", "div {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { zoom: 2; & { color: red } }", "div {\n  zoom: 2;\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { zoom: 2; && { color: red } }", "div {\n  zoom: 2;\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { &, && { color: red } zoom: 2 }", "div {\n  zoom: 2;\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { &&, & { color: red } zoom: 2 }", "div {\n  zoom: 2;\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div { a: 1; & { b: 4 } b: 2; && { c: 5 } c: 3 }", "div {\n  a: 1;\n  b: 2;\n  c: 3;\n  b: 4;\n  c: 5;\n}\n")
+	expectPrintedMangle(t, "div { .b { x: 1 } & { x: 2 } }", "div {\n  .b {\n    x: 1;\n  }\n  x: 2;\n}\n")
+	expectPrintedMangle(t, "div { & { & { & { color: red } } & { & { zoom: 2 } } } }", "div {\n  color: red;\n  zoom: 2;\n}\n")
+
+	// Cannot inline no-op nesting with pseudo-elements (https://github.com/w3c/csswg-drafts/issues/7433)
+	expectPrintedMangle(t, "div, span:hover { & { color: red } }", "div,\nspan:hover {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "div, span::before { & { color: red } }", "div,\nspan:before {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span:before { & { color: red } }", "div,\nspan:before {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span::after { & { color: red } }", "div,\nspan:after {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span:after { & { color: red } }", "div,\nspan:after {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span::first-line { & { color: red } }", "div,\nspan:first-line {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span:first-line { & { color: red } }", "div,\nspan:first-line {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span::first-letter { & { color: red } }", "div,\nspan:first-letter {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span:first-letter { & { color: red } }", "div,\nspan:first-letter {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span::pseudo { & { color: red } }", "div,\nspan::pseudo {\n  & {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span:hover { @layer foo { & { color: red } } }", "div,\nspan:hover {\n  @layer foo {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span:hover { @media screen { & { color: red } } }", "div,\nspan:hover {\n  @media screen {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "div, span::pseudo { @layer foo { & { color: red } } }", "div,\nspan::pseudo {\n  @layer foo {\n    & {\n      color: red;\n    }\n  }\n}\n")
+	expectPrintedMangle(t, "div, span::pseudo { @media screen { & { color: red } } }", "div,\nspan::pseudo {\n  @media screen {\n    & {\n      color: red;\n    }\n  }\n}\n")
+
+	// Lowering tests for nesting
+	expectPrintedLower(t, ".foo { .bar { color: red } }", ".foo .bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo { &.bar { color: red } }", ".foo.bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo { & .bar { color: red } }", ".foo .bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo .bar { .baz { color: red } }", ".foo .bar .baz {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo .bar { &.baz { color: red } }", ".foo .bar.baz {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo .bar { & .baz { color: red } }", ".foo .bar .baz {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo .bar { & > .baz { color: red } }", ".foo .bar > .baz {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo .bar { .baz & { color: red } }", ".baz :is(.foo .bar) {\n  color: red;\n}\n") // NOT the same as ".baz .foo .bar"
+	expectPrintedLower(t, ".foo .bar { & .baz & { color: red } }", ".foo .bar .baz :is(.foo .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo, .bar { .baz & { color: red } }", ".baz :is(.foo, .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo, [bar~='abc'] { .baz { color: red } }", ":is(.foo, [bar~=abc]) .baz {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo, [bar~='a b c'] { .baz { color: red } }", ":is(.foo, [bar~=\"a b c\"]) .baz {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { .foo, .bar { color: red } }", ".baz :is(.foo, .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { .foo, & .bar { color: red } }", ".baz :is(.foo, .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { & .foo, .bar { color: red } }", ".baz :is(.foo, .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { & .foo, & .bar { color: red } }", ".baz :is(.foo, .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { .foo, &.bar { color: red } }", ".baz .foo,\n.baz.bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { &.foo, .bar { color: red } }", ".baz.foo,\n.baz .bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".baz { &.foo, &.bar { color: red } }", ".baz:is(.foo, .bar) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo { color: blue; & .bar { color: red } }", ".foo {\n  color: blue;\n}\n.foo .bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo { & .bar { color: red } color: blue }", ".foo {\n  color: blue;\n}\n.foo .bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo { color: blue; & .bar { color: red } zoom: 2 }", ".foo {\n  color: blue;\n  zoom: 2;\n}\n.foo .bar {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".a, .b { .c, .d { color: red } }", ":is(.a, .b) :is(.c, .d) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo, .bar, .foo:before, .bar:after { &:hover { color: red } }", ":is(.foo, .bar):hover {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo, .bar:before { &:hover { color: red } }", ".foo:hover {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo, .bar:before { :hover & { color: red } }", ":hover .foo {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".bar:before { &:hover { color: red } }", ":is():hover {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".bar:before { :hover & { color: red } }", ":hover :is() {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(&.foo) { color: red } }", ":where(.xy.foo) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(&.foo) { color: red } }", ":where(div.foo) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(.foo&) { color: red } }", ":where(.foo.xy) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(.foo&) { color: red } }", ":where(.foo:is(div)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where([href]&) { color: red } }", ":where([href].xy) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where([href]&) { color: red } }", ":where([href]:is(div)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(:hover&) { color: red } }", ":where(:hover.xy) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(:hover&) { color: red } }", ":where(:hover:is(div)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(:is(.foo)&) { color: red } }", ":where(:is(.foo).xy) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(:is(.foo)&) { color: red } }", ":where(:is(.foo):is(div)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(.foo + &) { color: red } }", ":where(.foo + .xy) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(.foo + &) { color: red } }", ":where(.foo + div) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(&, span:is(.foo &)) { color: red } }", ":where(.xy, span:is(.foo .xy)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(&, span:is(.foo &)) { color: red } }", ":where(div, span:is(.foo div)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".foo { @media screen {} }", "")
+	expectPrintedLower(t, ".foo { @media screen { color: red } }", "@media screen {\n  .foo {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo { @media screen { &:hover { color: red } } }", "@media screen {\n  .foo:hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo { @media screen { :hover { color: red } } }", "@media screen {\n  .foo :hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo, .bar { @media screen { color: red } }", "@media screen {\n  .foo,\n  .bar {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo, .bar { @media screen { &:hover { color: red } } }", "@media screen {\n  :is(.foo, .bar):hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo, .bar { @media screen { :hover { color: red } } }", "@media screen {\n  :is(.foo, .bar) :hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo { @layer xyz {} }", "@layer xyz;\n")
+	expectPrintedLower(t, ".foo { @layer xyz { color: red } }", "@layer xyz {\n  .foo {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo { @layer xyz { &:hover { color: red } } }", "@layer xyz {\n  .foo:hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo { @layer xyz { :hover { color: red } } }", "@layer xyz {\n  .foo :hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo, .bar { @layer xyz { color: red } }", "@layer xyz {\n  .foo,\n  .bar {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo, .bar { @layer xyz { &:hover { color: red } } }", "@layer xyz {\n  :is(.foo, .bar):hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, ".foo, .bar { @layer xyz { :hover { color: red } } }", "@layer xyz {\n  :is(.foo, .bar) :hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, "@media screen { @media (min-width: 900px) { a, b { &:hover { color: red } } } }",
+		"@media screen {\n  @media (min-width: 900px) {\n    :is(a, b):hover {\n      color: red;\n    }\n  }\n}\n")
+	expectPrintedLower(t, "@supports (display: flex) { @supports selector(h2 > p) { a, b { &:hover { color: red } } } }",
+		"@supports (display: flex) {\n  @supports selector(h2 > p) {\n    :is(a, b):hover {\n      color: red;\n    }\n  }\n}\n")
+	expectPrintedLower(t, "@layer foo { @layer bar { a, b { &:hover { color: red } } } }",
+		"@layer foo {\n  @layer bar {\n    :is(a, b):hover {\n      color: red;\n    }\n  }\n}\n")
+	expectPrintedLower(t, ".demo { .lg { &.triangle, &.circle { color: red } } }",
+		".demo .lg:is(.triangle, .circle) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".demo { .lg { .triangle, .circle { color: red } } }",
+		".demo .lg :is(.triangle, .circle) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".card { .featured & & & { color: red } }",
+		".featured .card .card .card {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".card { &--header { color: red } }",
+		"--header.card {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".card { @supports (selector(&)) { &:hover { color: red } } }",
+		"@supports (selector(&)) {\n  .card:hover {\n    color: red;\n  }\n}\n")
+	expectPrintedLower(t, "html { @layer base { color: blue; @layer support { & body { color: red } } } }",
+		"@layer base {\n  html {\n    color: blue;\n  }\n  @layer support {\n    html body {\n      color: red;\n    }\n  }\n}\n")
 }
 
 func TestBadQualifiedRules(t *testing.T) {
 	expectParseError(t, "$bad: rule;", "$bad: rule; {\n}\n", "<stdin>: WARNING: Unexpected \"$\"\n")
 	expectParseError(t, "$bad { color: red }", "$bad {\n  color: red;\n}\n", "<stdin>: WARNING: Unexpected \"$\"\n")
-	expectParseError(t, "a { div.major { color: blue } color: red }", "a {\n  div.major { color: blue } color: red;\n}\n", "<stdin>: WARNING: Expected \":\" but found \".\"\n")
+	expectParseError(t, "a { div.major { color: blue } color: red }", "a {\n  div.major { color: blue } color: red;\n}\n",
+		"<stdin>: WARNING: A nested style rule cannot start with \"div\" because it looks like the start of a declaration\n"+
+			"NOTE: To start a nested style rule with an identifier, you need to wrap the identifier in \":is(...)\" to prevent the rule from being parsed as a declaration.\n")
 	expectParseError(t, "a { div:hover { color: blue } color: red }", "a {\n  div: hover { color: blue } color: red;\n}\n", "")
 	expectParseError(t, "a { div:hover { color: blue }; color: red }", "a {\n  div: hover { color: blue };\n  color: red;\n}\n", "")
 	expectParseError(t, "a { div:hover { color: blue } ; color: red }", "a {\n  div: hover { color: blue };\n  color: red;\n}\n", "")
@@ -1772,6 +1919,17 @@ func TestMangleAlpha(t *testing.T) {
 
 	// An alpha value of 100% does not use "rgba(...)"
 	expectPrintedLowerMangle(t, "a { color: #000000FF }", "a {\n  color: #000;\n}\n")
+}
+
+func TestMangleDuplicateSelectors(t *testing.T) {
+	expectPrinted(t, "a, a { color: red }", "a,\na {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "a, a { color: red }", "a {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "a, b { color: red }", "a,\nb {\n  color: red;\n}\n")
+	expectPrintedMangle(t, "a, a.foo, a.foo, a.bar, a { color: red }", "a,\na.foo,\na.bar {\n  color: red;\n}\n")
+
+	expectPrintedMangle(t, "@media screen { a, a { color: red } }", "@media screen {\n  a {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "@media screen { a, b { color: red } }", "@media screen {\n  a,\n  b {\n    color: red;\n  }\n}\n")
+	expectPrintedMangle(t, "@media screen { a, a.foo, a.foo, a.bar, a { color: red } }", "@media screen {\n  a,\n  a.foo,\n  a.bar {\n    color: red;\n  }\n}\n")
 }
 
 func TestMangleDuplicateSelectorRules(t *testing.T) {
