@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.17.15
+
+* Allow keywords as type parameter names in mapped types ([#3033](https://github.com/evanw/esbuild/issues/3033))
+
+    TypeScript allows type keywords to be used as parameter names in mapped types. Previously esbuild incorrectly treated this as an error. Code that does this is now supported:
+
+    ```ts
+    type Foo = 'a' | 'b' | 'c'
+    type A = { [keyof in Foo]: number }
+    type B = { [infer in Foo]: number }
+    type C = { [readonly in Foo]: number }
+    ```
+
+* Add annotations for re-exported modules in node ([#2486](https://github.com/evanw/esbuild/issues/2486), [#3029](https://github.com/evanw/esbuild/issues/3029))
+
+    Node lets you import named imports from a CommonJS module using ESM import syntax. However, the allowed names aren't derived from the properties of the CommonJS module. Instead they are derived from an arbitrary syntax-only analysis of the CommonJS module's JavaScript AST.
+
+    To accommodate node doing this, esbuild's ESM-to-CommonJS conversion adds a special non-executable "annotation" for node that describes the exports that node should expose in this scenario. It takes the form `0 && (module.exports = { ... })` and comes at the end of the file (`0 && expr` means `expr` is never evaluated).
+
+    Previously esbuild didn't do this for modules re-exported using the `export * from` syntax. Annotations for these re-exports will now be added starting with this release:
+
+    ```js
+    // Original input
+    export { foo } from './foo'
+    export * from './bar'
+
+    // Old output (with --format=cjs --platform=node)
+    ...
+    0 && (module.exports = {
+      foo
+    });
+
+    // New output (with --format=cjs --platform=node)
+    ...
+    0 && (module.exports = {
+      foo,
+      ...require("./bar")
+    });
+    ```
+
+    Note that you need to specify both `--format=cjs` and `--platform=node` to get these node-specific annotations.
+
+* Avoid printing an unnecessary space in between a number and a `.` ([#3026](https://github.com/evanw/esbuild/pull/3026))
+
+    JavaScript typically requires a space in between a number token and a `.` token to avoid the `.` being interpreted as a decimal point instead of a member expression. However, this space is not required if the number token itself contains a decimal point, an exponent, or uses a base other than 10. This release of esbuild now avoids printing the unnecessary space in these cases:
+
+    ```js
+    // Original input
+    foo(1000 .x, 0 .x, 0.1 .x, 0.0001 .x, 0xFFFF_0000_FFFF_0000 .x)
+
+    // Old output (with --minify)
+    foo(1e3 .x,0 .x,.1 .x,1e-4 .x,0xffff0000ffff0000 .x);
+
+    // New output (with --minify)
+    foo(1e3.x,0 .x,.1.x,1e-4.x,0xffff0000ffff0000.x);
+    ```
+
+* Fix server-sent events with live reload when writing to the file system root ([#3027](https://github.com/evanw/esbuild/issues/3027))
+
+    This release fixes a bug where esbuild previously failed to emit server-sent events for live reload when `outdir` was the file system root, such as `/`. This happened because `/` is the only path on Unix that cannot have a trailing slash trimmed from it, which was fixed by improved path handling.
+
 ## 0.17.14
 
 * Allow the TypeScript 5.0 `const` modifier in object type declarations ([#3021](https://github.com/evanw/esbuild/issues/3021))
