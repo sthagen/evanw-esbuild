@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.17.16
+
+* Fix CSS nesting transform for triple-nested rules that start with a combinator ([#3046](https://github.com/evanw/esbuild/issues/3046))
+
+    This release fixes a bug with esbuild where triple-nested CSS rules that start with a combinator were not transformed correctly for older browsers. Here's an example of such a case before and after this bug fix:
+
+    ```css
+    /* Original input */
+    .a {
+      color: red;
+      > .b {
+        color: green;
+        > .c {
+          color: blue;
+        }
+      }
+    }
+
+    /* Old output (with --target=chrome90) */
+    .a {
+      color: red;
+    }
+    .a > .b {
+      color: green;
+    }
+    .a .b > .c {
+      color: blue;
+    }
+
+    /* New output (with --target=chrome90) */
+    .a {
+      color: red;
+    }
+    .a > .b {
+      color: green;
+    }
+    .a > .b > .c {
+      color: blue;
+    }
+    ```
+
+* Support `--inject` with a file loaded using the `copy` loader ([#3041](https://github.com/evanw/esbuild/issues/3041))
+
+    This release now allows you to use `--inject` with a file that is loaded using the `copy` loader. The `copy` loader copies the imported file to the output directory verbatim and rewrites the path in the `import` statement to point to the copied output file. When used with `--inject`, this means the injected file will be copied to the output directory as-is and a bare `import` statement for that file will be inserted in any non-copy output files that esbuild generates.
+
+    Note that since esbuild doesn't parse the contents of copied files, esbuild will not expose any of the export names as usable imports when you do this (in the way that esbuild's `--inject` feature is typically used). However, any side-effects that the injected file has will still occur.
+
 ## 0.17.15
 
 * Allow keywords as type parameter names in mapped types ([#3033](https://github.com/evanw/esbuild/issues/3033))
