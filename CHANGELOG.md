@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.17.18
+
+* Fix non-default JSON import error with `export {} from` ([#3070](https://github.com/evanw/esbuild/issues/3070))
+
+    This release fixes a bug where esbuild incorrectly identified statements of the form `export { default as x } from "y" assert { type: "json" }` as a non-default import. The bug did not affect code of the form `import { default as x } from ...` (only code that used the `export` keyword).
+
+* Fix a crash with an invalid subpath import ([#3067](https://github.com/evanw/esbuild/issues/3067))
+
+    Previously esbuild could crash when attempting to generate a friendly error message for an invalid [subpath import](https://nodejs.org/api/packages.html#subpath-imports) (i.e. an import starting with `#`). This happened because esbuild originally only supported the `exports` field and the code for that error message was not updated when esbuild later added support for the `imports` field. This crash has been fixed.
+
+## 0.17.17
+
+* Fix CSS nesting transform for top-level `&` ([#3052](https://github.com/evanw/esbuild/issues/3052))
+
+    Previously esbuild could crash with a stack overflow when lowering CSS nesting rules with a top-level `&`, such as in the code below. This happened because esbuild's CSS nesting transform didn't handle top-level `&`, causing esbuild to inline the top-level selector into itself. This release handles top-level `&` by replacing it with [the `:scope` pseudo-class](https://drafts.csswg.org/selectors-4/#the-scope-pseudo):
+
+    ```css
+    /* Original code */
+    &,
+    a {
+      .b {
+        color: red;
+      }
+    }
+
+    /* New output (with --target=chrome90) */
+    :is(:scope, a) .b {
+      color: red;
+    }
+    ```
+
+* Support `exports` in `package.json` for `extends` in `tsconfig.json` ([#3058](https://github.com/evanw/esbuild/issues/3058))
+
+    TypeScript 5.0 added the ability to use `extends` in `tsconfig.json` to reference a path in a package whose `package.json` file contains an `exports` map that points to the correct location. This doesn't automatically work in esbuild because `tsconfig.json` affects esbuild's path resolution, so esbuild's normal path resolution logic doesn't apply.
+
+    This release adds support for doing this by adding some additional code that attempts to resolve the `extends` path using the `exports` field. The behavior should be similar enough to esbuild's main path resolution logic to work as expected.
+
+    Note that esbuild always treats this `extends` import as a `require()` import since that's what TypeScript appears to do. Specifically the `require` condition will be active and the `import` condition will be inactive.
+
+* Fix watch mode with `NODE_PATH` ([#3062](https://github.com/evanw/esbuild/issues/3062))
+
+    Node has a rarely-used feature where you can extend the set of directories that node searches for packages using the `NODE_PATH` environment variable. While esbuild supports this too, previously a bug prevented esbuild's watch mode from picking up changes to imported files that were contained directly in a `NODE_PATH` directory. You're supposed to use `NODE_PATH` for packages, but some people abuse this feature by putting files in that directory instead (e.g. `node_modules/some-file.js` instead of `node_modules/some-pkg/some-file.js`). The watch mode bug happens when you do this because esbuild first tries to read `some-file.js` as a directory and then as a file. Watch mode was incorrectly waiting for `some-file.js` to become a valid directory. This release fixes this edge case bug by changing watch mode to watch `some-file.js` as a file when this happens.
+
 ## 0.17.16
 
 * Fix CSS nesting transform for triple-nested rules that start with a combinator ([#3046](https://github.com/evanw/esbuild/issues/3046))
