@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.17.19
+
+* Fix CSS transform bugs with nested selectors that start with a combinator ([#3096](https://github.com/evanw/esbuild/issues/3096))
+
+    This release fixes several bugs regarding transforming nested CSS into non-nested CSS for older browsers. The bugs were due to lack of test coverage for nested selectors with more than one compound selector where they all start with the same combinator. Here's what some problematic cases look like before and after these fixes:
+
+    ```css
+    /* Original code */
+    .foo {
+      > &a,
+      > &b {
+        color: red;
+      }
+    }
+    .bar {
+      > &a,
+      + &b {
+        color: green;
+      }
+    }
+
+    /* Old output (with --target=chrome90) */
+    .foo :is(> .fooa, > .foob) {
+      color: red;
+    }
+    .bar :is(> .bara, + .barb) {
+      color: green;
+    }
+
+    /* New output (with --target=chrome90) */
+    .foo > :is(a.foo, b.foo) {
+      color: red;
+    }
+    .bar > a.bar,
+    .bar + b.bar {
+      color: green;
+    }
+    ```
+
+* Fix bug with TypeScript parsing of instantiation expressions followed by `=` ([#3111](https://github.com/evanw/esbuild/issues/3111))
+
+    This release fixes esbuild's TypeScript-to-JavaScript conversion code in the case where a potential instantiation expression is followed immediately by a `=` token (such that the trailing `>` becomes a `>=` token). Previously esbuild considered that to still be an instantiation expression, but the official TypeScript compiler considered it to be a `>=` operator instead. This release changes esbuild's interpretation to match TypeScript. This edge case currently [appears to be problematic](https://sucrase.io/#transforms=typescript&compareWithTypeScript=true&code=x%3Cy%3E%3Da%3Cb%3Cc%3E%3E()) for other TypeScript-to-JavaScript converters as well:
+
+    | Original code | TypeScript | esbuild 0.17.18 | esbuild 0.17.19 | Sucrase | Babel |
+    |---|---|---|---|---|---|
+    | `x<y>=a<b<c>>()` | `x<y>=a();` | `x=a();` | `x<y>=a();` | `x=a()` | Invalid left-hand side in assignment expression |
+
+* Avoid removing unrecognized directives from the directive prologue when minifying ([#3115](https://github.com/evanw/esbuild/issues/3115))
+
+    The [directive prologue](https://262.ecma-international.org/6.0/#sec-directive-prologues-and-the-use-strict-directive) in JavaScript is a sequence of top-level string expressions that come before your code. The only directives that JavaScript engines currently recognize are `use strict` and sometimes `use asm`. However, the people behind React have made up their own directive for their own custom dialect of JavaScript. Previously esbuild only preserved the `use strict` directive when minifying, although you could still write React JavaScript with esbuild using something like `--banner:js="'your directive here';"`. With this release, you can now put arbitrary directives in the entry point and esbuild will preserve them in its minified output:
+
+    ```js
+    // Original code
+    'use wtf'; console.log(123)
+
+    // Old output (with --minify)
+    console.log(123);
+
+    // New output (with --minify)
+    "use wtf";console.log(123);
+    ```
+
+    Note that this means esbuild will no longer remove certain stray top-level strings when minifying. This behavior is an intentional change because these stray top-level strings are actually part of the directive prologue, and could potentially have semantics assigned to them (as was the case with React).
+
+* Improved minification of binary shift operators
+
+    With this release, esbuild's minifier will now evaluate the `<<` and `>>>` operators if the resulting code would be shorter:
+
+    ```js
+    // Original code
+    console.log(10 << 10, 10 << 20, -123 >>> 5, -123 >>> 10);
+
+    // Old output (with --minify)
+    console.log(10<<10,10<<20,-123>>>5,-123>>>10);
+
+    // New output (with --minify)
+    console.log(10240,10<<20,-123>>>5,4194303);
+    ```
+
 ## 0.17.18
 
 * Fix non-default JSON import error with `export {} from` ([#3070](https://github.com/evanw/esbuild/issues/3070))

@@ -4225,9 +4225,18 @@ func TestMangleBinaryConstantFolding(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "x = 3 instanceof 6", "x = 3 instanceof 6;\n", "x = 3 instanceof 6;\n")
 	expectPrintedNormalAndMangle(t, "x = (3, 6)", "x = (3, 6);\n", "x = 6;\n")
 
-	expectPrintedNormalAndMangle(t, "x = 10 << 1", "x = 10 << 1;\n", "x = 10 << 1;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 << 0", "x = 10 << 0;\n", "x = 10;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 << 1", "x = 10 << 1;\n", "x = 20;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 << 16", "x = 10 << 16;\n", "x = 655360;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 << 17", "x = 10 << 17;\n", "x = 10 << 17;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 >> 0", "x = 10 >> 0;\n", "x = 10;\n")
 	expectPrintedNormalAndMangle(t, "x = 10 >> 1", "x = 10 >> 1;\n", "x = 5;\n")
-	expectPrintedNormalAndMangle(t, "x = 10 >>> 1", "x = 10 >>> 1;\n", "x = 10 >>> 1;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 >>> 0", "x = 10 >>> 0;\n", "x = 10;\n")
+	expectPrintedNormalAndMangle(t, "x = 10 >>> 1", "x = 10 >>> 1;\n", "x = 5;\n")
+	expectPrintedNormalAndMangle(t, "x = -10 >>> 1", "x = -10 >>> 1;\n", "x = -10 >>> 1;\n")
+	expectPrintedNormalAndMangle(t, "x = -1 >>> 0", "x = -1 >>> 0;\n", "x = -1 >>> 0;\n")
+	expectPrintedNormalAndMangle(t, "x = -123 >>> 5", "x = -123 >>> 5;\n", "x = -123 >>> 5;\n")
+	expectPrintedNormalAndMangle(t, "x = -123 >>> 6", "x = -123 >>> 6;\n", "x = 67108862;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 & 6", "x = 3 & 6;\n", "x = 2;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 | 6", "x = 3 | 6;\n", "x = 7;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 ^ 6", "x = 3 ^ 6;\n", "x = 5;\n")
@@ -4320,10 +4329,10 @@ func TestMangleUnused(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "true", "true;\n", "")
 	expectPrintedNormalAndMangle(t, "123", "123;\n", "")
 	expectPrintedNormalAndMangle(t, "123n", "123n;\n", "")
-	expectPrintedNormalAndMangle(t, "'abc'", "\"abc\";\n", "")        // Technically a directive, not a string expression
-	expectPrintedNormalAndMangle(t, "0; 'abc'", "0;\n\"abc\";\n", "") // Actually a string expression
-	expectPrintedNormalAndMangle(t, "'abc'; 'use strict'", "\"use strict\";\n\"abc\";\n", "\"use strict\";\n")
-	expectPrintedNormalAndMangle(t, "function f() { 'abc'; 'use strict' }", "function f() {\n  \"abc\";\n  \"use strict\";\n}\n", "function f() {\n  \"use strict\";\n}\n")
+	expectPrintedNormalAndMangle(t, "'abc'", "\"abc\";\n", "\"abc\";\n") // Technically a directive, not a string expression
+	expectPrintedNormalAndMangle(t, "0; 'abc'", "0;\n\"abc\";\n", "")    // Actually a string expression
+	expectPrintedNormalAndMangle(t, "'abc'; 'use strict'", "\"abc\";\n\"use strict\";\n", "\"abc\";\n\"use strict\";\n")
+	expectPrintedNormalAndMangle(t, "function f() { 'abc'; 'use strict' }", "function f() {\n  \"abc\";\n  \"use strict\";\n}\n", "function f() {\n  \"abc\";\n  \"use strict\";\n}\n")
 	expectPrintedNormalAndMangle(t, "this", "this;\n", "")
 	expectPrintedNormalAndMangle(t, "/regex/", "/regex/;\n", "")
 	expectPrintedNormalAndMangle(t, "(function() {})", "(function() {\n});\n", "")
