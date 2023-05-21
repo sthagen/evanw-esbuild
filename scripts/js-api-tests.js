@@ -2881,28 +2881,32 @@ import "after/alias";
     new Function(outputFiles[0].text)()
   },
 
-  async bundleTSDecoratorAvoidTDZ({ esbuild }) {
-    var { outputFiles } = await esbuild.build({
-      stdin: {
-        contents: `
-          class Bar {}
-          var oldFoo
-          function swap(target) {
-            oldFoo = target
-            return Bar
-          }
-          @swap
-          class Foo {
-            bar() { return new Foo }
-            static foo = new Foo
-          }
-          if (!(oldFoo.foo instanceof oldFoo))
-            throw 'fail: foo'
-          if (!(oldFoo.foo.bar() instanceof Bar))
-            throw 'fail: bar'
-        `,
-        loader: 'ts',
+  async bundleTSDecoratorAvoidTDZ({ testDir, esbuild }) {
+    const input = path.join(testDir, 'input.ts')
+    await writeFileAsync(input, `
+      class Bar {}
+      var oldFoo
+      function swap(target) {
+        oldFoo = target
+        return Bar
+      }
+      @swap
+      class Foo {
+        bar() { return new Foo }
+        static foo = new Foo
+      }
+      if (!(oldFoo.foo instanceof oldFoo))
+        throw 'fail: foo'
+      if (!(oldFoo.foo.bar() instanceof Bar))
+        throw 'fail: bar'
+    `)
+    await writeFileAsync(path.join(testDir, 'tsconfig.json'), `{
+      "compilerOptions": {
+        "experimentalDecorators": true,
       },
+    }`)
+    var { outputFiles } = await esbuild.build({
+      entryPoints: [input],
       bundle: true,
       write: false,
     })
@@ -3492,13 +3496,13 @@ import "after/alias";
   },
 
   async yarnPnP_tsconfig({ esbuild, testDir }) {
-    const entry = path.join(testDir, 'entry.js')
+    const entry = path.join(testDir, 'entry.jsx')
     const tsconfigExtends = path.join(testDir, 'tsconfig.json')
     const tsconfigBase = path.join(testDir, 'foo', 'tsconfig.json')
     const manifest = path.join(testDir, '.pnp.data.json')
 
     await writeFileAsync(entry, `
-      x **= 2
+      console.log(<div/>)
     `)
 
     await writeFileAsync(tsconfigExtends, `{
@@ -3508,7 +3512,7 @@ import "after/alias";
     await mkdirAsync(path.dirname(tsconfigBase), { recursive: true })
     await writeFileAsync(tsconfigBase, `{
       "compilerOptions": {
-        "target": "ES5"
+        "jsxFactory": "success"
       }
     }`)
 
@@ -3542,10 +3546,8 @@ import "after/alias";
 
     assert.strictEqual(value.outputFiles.length, 1)
     assert.strictEqual(value.outputFiles[0].text, `(() => {
-  var __pow = Math.pow;
-
-  // entry.js
-  x = __pow(x, 2);
+  // entry.jsx
+  console.log(/* @__PURE__ */ success("div", null));
 })();
 `)
   },
@@ -5056,6 +5058,12 @@ let transformTests = {
         throw 'fail: bar'
     `, {
       loader: 'ts',
+      tsconfigRaw: {
+        compilerOptions: {
+          useDefineForClassFields: false,
+          experimentalDecorators: true,
+        },
+      },
     })
     new Function(code)()
   },
@@ -5305,10 +5313,10 @@ let transformTests = {
   },
 
   async tsconfigRawTarget({ esbuild }) {
-    // The "target" from "tsconfig.json" should apply, but esbuild's "target" should override
+    // The "target" from "tsconfig.json" should not apply, but esbuild's "target" should apply
 
     assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', tsconfigRaw: { compilerOptions: { target: 'ES6' } } })).code, `(x) => x;\n`)
-    assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', tsconfigRaw: { compilerOptions: { target: 'ES5' } } })).code, `(function(x) {\n  return x;\n});\n`)
+    assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', tsconfigRaw: { compilerOptions: { target: 'ES5' } } })).code, `(x) => x;\n`)
 
     assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', target: 'es6' })).code, `(x) => x;\n`)
     assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', target: 'es5' })).code, `(function(x) {\n  return x;\n});\n`)
@@ -5321,13 +5329,24 @@ let transformTests = {
     var { code } = await esbuild.transform(`class Foo { foo }`, {
       loader: 'ts',
     })
-    assert.strictEqual(code, `class Foo {\n}\n`)
+    assert.strictEqual(code, `class Foo {\n  foo;\n}\n`)
 
     var { code } = await esbuild.transform(`class Foo { foo }`, {
       target: 'es2021',
       loader: 'ts',
     })
-    assert.strictEqual(code, `class Foo {\n}\n`)
+    assert.strictEqual(code, `var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField = (obj, key, value) => {
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+  return value;
+};
+class Foo {
+  constructor() {
+    __publicField(this, "foo");
+  }
+}
+`)
 
     var { code } = await esbuild.transform(`class Foo { foo }`, {
       target: 'es2022',
@@ -6198,7 +6217,14 @@ let transformTests = {
       ];
 
       return {observed, expected};
-    `, { loader: 'ts' });
+    `, {
+      loader: 'ts',
+      tsconfigRaw: {
+        compilerOptions: {
+          experimentalDecorators: true,
+        },
+      },
+    });
     const { observed, expected } = new Function(code)();
     assert.deepStrictEqual(observed, expected);
   },
@@ -6449,6 +6475,33 @@ let transformTests = {
   async caseInsensitiveTarget({ esbuild }) {
     assert.strictEqual((await esbuild.transform(`a ||= b`, { target: 'eS5' })).code, `a || (a = b);\n`)
     assert.strictEqual((await esbuild.transform(`a ||= b`, { target: 'eSnExT' })).code, `a ||= b;\n`)
+  },
+
+  async propertyAccessBugWorkaroundForWebKit({ esbuild }) {
+    const check = async (target, input, expected) =>
+      assert.strictEqual((await esbuild.transform(input, { target })).code, expected)
+    await Promise.all([
+      check('safari16.2', `x(class{}.y=z)`, `x((class {\n}).y = z);\n`),
+      check('safari16.3', `x(class{}.y=z)`, `x(class {\n}.y = z);\n`),
+
+      check('safari16.2', `x(function(){}.y=z)`, `x((function() {\n}).y = z);\n`),
+      check('safari16.3', `x(function(){}.y=z)`, `x(function() {\n}.y = z);\n`),
+
+      check('safari16.2', `x(function*(){}.y=z)`, `x((function* () {\n}).y = z);\n`),
+      check('safari16.3', `x(function*(){}.y=z)`, `x(function* () {\n}.y = z);\n`),
+
+      check('safari16.2', `x(async function(){}.y=z)`, `x((async function() {\n}).y = z);\n`),
+      check('safari16.3', `x(async function(){}.y=z)`, `x(async function() {\n}.y = z);\n`),
+
+      check('safari16.2', `x(async function*(){}.y=z)`, `x((async function* () {\n}).y = z);\n`),
+      check('safari16.3', `x(async function*(){}.y=z)`, `x(async function* () {\n}.y = z);\n`),
+
+      // This should not be enabled by default
+      check('esnext', `x(class{}.y=z)`, `x(class {\n}.y = z);\n`),
+
+      // This doesn't need to be applied for methods in object literals
+      check('safari16.2', `x({f(a=-1){}}.y=z)`, `x({ f(a = -1) {\n} }.y = z);\n`),
+    ])
   },
 
   async multipleEngineTargets({ esbuild }) {

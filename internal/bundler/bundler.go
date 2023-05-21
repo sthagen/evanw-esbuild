@@ -1290,27 +1290,10 @@ func (s *scanner) maybeParseFile(
 		optionsClone.Stdin = nil
 	}
 
-	// Allow certain properties to be overridden
-	if len(resolveResult.JSXFactory) > 0 {
-		optionsClone.JSX.Factory = config.DefineExpr{Parts: resolveResult.JSXFactory}
-	}
-	if len(resolveResult.JSXFragment) > 0 {
-		optionsClone.JSX.Fragment = config.DefineExpr{Parts: resolveResult.JSXFragment}
-	}
-	if resolveResult.JSX != config.TSJSXNone {
-		optionsClone.JSX.SetOptionsFromTSJSX(resolveResult.JSX)
-	}
-	if resolveResult.JSXImportSource != "" {
-		optionsClone.JSX.ImportSource = resolveResult.JSXImportSource
-	}
-	if resolveResult.UseDefineForClassFieldsTS != config.Unspecified {
-		optionsClone.UseDefineForClassFields = resolveResult.UseDefineForClassFieldsTS
-	}
-	if resolveResult.UnusedImportFlagsTS != 0 {
-		optionsClone.UnusedImportFlagsTS = resolveResult.UnusedImportFlagsTS
-	}
-	if resolveResult.TSTarget != nil {
-		optionsClone.TSTarget = resolveResult.TSTarget
+	// Allow certain properties to be overridden by "tsconfig.json"
+	resolveResult.TSConfigJSX.ApplyTo(&optionsClone.JSX)
+	if resolveResult.TSConfig != nil {
+		optionsClone.TS.Config = *resolveResult.TSConfig
 	}
 	if resolveResult.TSAlwaysStrict != nil {
 		optionsClone.TSAlwaysStrict = resolveResult.TSAlwaysStrict

@@ -419,7 +419,6 @@ type thenCatchChain struct {
 type Options struct {
 	injectedFiles  []config.InjectedFile
 	jsx            config.JSXOptions
-	tsTarget       *config.TSTarget
 	tsAlwaysStrict *config.TSAlwaysStrict
 	mangleProps    *regexp.Regexp
 	reserveProps   *regexp.Regexp
@@ -443,24 +442,21 @@ type optionsThatSupportStructuralEquality struct {
 	unsupportedJSFeatureOverridesMask compat.JSFeature
 
 	// Byte-sized values go here (gathered together here to keep this object compact)
-	ts                      config.TSOptions
-	mode                    config.Mode
-	platform                config.Platform
-	outputFormat            config.Format
-	targetFromAPI           config.TargetFromAPI
-	asciiOnly               bool
-	keepNames               bool
-	minifySyntax            bool
-	minifyIdentifiers       bool
-	minifyWhitespace        bool
-	omitRuntimeForTests     bool
-	omitJSXRuntimeForTests  bool
-	ignoreDCEAnnotations    bool
-	treeShaking             bool
-	dropDebugger            bool
-	mangleQuoted            bool
-	unusedImportFlagsTS     config.UnusedImportFlagsTS
-	useDefineForClassFields config.MaybeBool
+	ts                     config.TSOptions
+	mode                   config.Mode
+	platform               config.Platform
+	outputFormat           config.Format
+	asciiOnly              bool
+	keepNames              bool
+	minifySyntax           bool
+	minifyIdentifiers      bool
+	minifyWhitespace       bool
+	omitRuntimeForTests    bool
+	omitJSXRuntimeForTests bool
+	ignoreDCEAnnotations   bool
+	treeShaking            bool
+	dropDebugger           bool
+	mangleQuoted           bool
 
 	// This is an internal-only option used for the implementation of Yarn PnP
 	decodeHydrateRuntimeStateYarnPnP bool
@@ -479,7 +475,6 @@ func OptionsFromConfig(options *config.Options) Options {
 		injectedFiles:  options.InjectedFiles,
 		jsx:            options.JSX,
 		defines:        options.Defines,
-		tsTarget:       options.TSTarget,
 		tsAlwaysStrict: options.TSAlwaysStrict,
 		mangleProps:    options.MangleProps,
 		reserveProps:   options.ReserveProps,
@@ -494,7 +489,6 @@ func OptionsFromConfig(options *config.Options) Options {
 			platform:                          options.Platform,
 			outputFormat:                      options.OutputFormat,
 			moduleTypeData:                    options.ModuleTypeData,
-			targetFromAPI:                     options.TargetFromAPI,
 			asciiOnly:                         options.ASCIIOnly,
 			keepNames:                         options.KeepNames,
 			minifySyntax:                      options.MinifySyntax,
@@ -506,8 +500,6 @@ func OptionsFromConfig(options *config.Options) Options {
 			treeShaking:                       options.TreeShaking,
 			dropDebugger:                      options.DropDebugger,
 			mangleQuoted:                      options.MangleQuoted,
-			unusedImportFlagsTS:               options.UnusedImportFlagsTS,
-			useDefineForClassFields:           options.UseDefineForClassFields,
 		},
 	}
 }
@@ -515,12 +507,6 @@ func OptionsFromConfig(options *config.Options) Options {
 func (a *Options) Equal(b *Options) bool {
 	// Compare "optionsThatSupportStructuralEquality"
 	if a.optionsThatSupportStructuralEquality != b.optionsThatSupportStructuralEquality {
-		return false
-	}
-
-	// Compare "TSTarget"
-	if (a.tsTarget == nil && b.tsTarget != nil) || (a.tsTarget != nil && b.tsTarget == nil) ||
-		(a.tsTarget != nil && b.tsTarget != nil && *a.tsTarget != *b.tsTarget) {
 		return false
 	}
 
@@ -6273,6 +6259,11 @@ func (p *parser) parseDecorators(decoratorScope *js_ast.Scope, classKeyword logg
 					[]logger.MsgData{p.tracker.MsgData(classKeyword, "This is a class expression, not a class declaration:")})
 			} else if (context & decoratorBeforeClassExpr) != 0 {
 				p.log.AddError(&p.tracker, p.lexer.Range(), "Experimental decorators cannot be used in expression position in TypeScript")
+			} else if p.options.ts.Config.ExperimentalDecorators != config.True {
+				p.log.AddErrorWithNotes(&p.tracker, p.lexer.Range(), "Experimental decorators are not currently enabled", []logger.MsgData{{
+					Text: "To use experimental decorators in TypeScript with esbuild, you need to enable them by adding \"experimentalDecorators\": true in your \"tsconfig.json\" file. " +
+						"TypeScript's experimental decorators are currently the only kind of decorators that esbuild supports.",
+				}})
 			}
 		} else {
 			if (context & decoratorInFnArgs) != 0 {
@@ -7246,7 +7237,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		//   import d, {} from 'x'
 		//   import d, { type y } from 'x'
 		//
-		if p.options.ts.Parse && p.options.unusedImportFlagsTS == config.UnusedImportKeepValues && stmt.Items != nil && len(*stmt.Items) == 0 {
+		if p.options.ts.Parse && p.options.ts.Config.UnusedImportFlags() == config.TSUnusedImport_KeepValues && stmt.Items != nil && len(*stmt.Items) == 0 {
 			if stmt.DefaultName == nil {
 				return js_ast.Stmt{Loc: loc, Data: &js_ast.STypeScript{}}
 			}
@@ -15232,6 +15223,7 @@ func (p *parser) scanForUnusedTSImportEquals(stmts []js_ast.Stmt) (result import
 }
 
 func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsExportsScanResult) {
+	unusedImportFlags := p.options.ts.Config.UnusedImportFlags()
 	stmtsEnd := 0
 
 	for _, stmt := range stmts {
@@ -15275,13 +15267,13 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 			//     user is expecting the output to be as small as possible. So we
 			//     should omit unused imports.
 			//
-			keepUnusedImports := p.options.ts.Parse && (p.options.unusedImportFlagsTS&config.UnusedImportKeepValues) != 0 &&
+			keepUnusedImports := p.options.ts.Parse && (unusedImportFlags&config.TSUnusedImport_KeepValues) != 0 &&
 				p.options.mode != config.ModeBundle && !p.options.minifyIdentifiers
 
 			// Forbid non-default imports for standard JSON modules
 			if (record.Flags&ast.AssertTypeJSON) != 0 && p.options.mode == config.ModeBundle && s.Items != nil {
 				for _, item := range *s.Items {
-					if p.options.ts.Parse && p.tsUseCounts[item.Name.Ref.InnerIndex] == 0 && (p.options.unusedImportFlagsTS&config.UnusedImportKeepValues) == 0 {
+					if p.options.ts.Parse && p.tsUseCounts[item.Name.Ref.InnerIndex] == 0 && (unusedImportFlags&config.TSUnusedImport_KeepValues) == 0 {
 						// Do not count imports that TypeScript interprets as type annotations
 						continue
 					}
@@ -15306,7 +15298,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					symbol := p.symbols[s.DefaultName.Ref.InnerIndex]
 
 					// TypeScript has a separate definition of unused
-					if p.options.ts.Parse && (p.tsUseCounts[s.DefaultName.Ref.InnerIndex] != 0 || (p.options.unusedImportFlagsTS&config.UnusedImportKeepValues) != 0) {
+					if p.options.ts.Parse && (p.tsUseCounts[s.DefaultName.Ref.InnerIndex] != 0 || (p.options.ts.Config.UnusedImportFlags()&config.TSUnusedImport_KeepValues) != 0) {
 						isUnusedInTypeScript = false
 					}
 
@@ -15322,7 +15314,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					symbol := p.symbols[s.NamespaceRef.InnerIndex]
 
 					// TypeScript has a separate definition of unused
-					if p.options.ts.Parse && (p.tsUseCounts[s.NamespaceRef.InnerIndex] != 0 || (p.options.unusedImportFlagsTS&config.UnusedImportKeepValues) != 0) {
+					if p.options.ts.Parse && (p.tsUseCounts[s.NamespaceRef.InnerIndex] != 0 || (p.options.ts.Config.UnusedImportFlags()&config.TSUnusedImport_KeepValues) != 0) {
 						isUnusedInTypeScript = false
 					}
 
@@ -15345,7 +15337,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 						symbol := p.symbols[item.Name.Ref.InnerIndex]
 
 						// TypeScript has a separate definition of unused
-						if p.options.ts.Parse && (p.tsUseCounts[item.Name.Ref.InnerIndex] != 0 || (p.options.unusedImportFlagsTS&config.UnusedImportKeepValues) != 0) {
+						if p.options.ts.Parse && (p.tsUseCounts[item.Name.Ref.InnerIndex] != 0 || (p.options.ts.Config.UnusedImportFlags()&config.TSUnusedImport_KeepValues) != 0) {
 							isUnusedInTypeScript = false
 						}
 
@@ -15377,7 +15369,7 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 				//
 				// We do not want to do this culling in JavaScript though because the
 				// module may have side effects even if all imports are unused.
-				if p.options.ts.Parse && foundImports && isUnusedInTypeScript && (p.options.unusedImportFlagsTS&config.UnusedImportKeepStmt) == 0 {
+				if p.options.ts.Parse && foundImports && isUnusedInTypeScript && (unusedImportFlags&config.TSUnusedImport_KeepStmt) == 0 {
 					// Ignore import records with a pre-filled source index. These are
 					// for injected files and we definitely do not want to trim these.
 					if !record.SourceIndex.IsValid() && !record.CopySourceIndex.IsValid() {
@@ -15562,6 +15554,13 @@ func (p *parser) scanForImportsAndExports(stmts []js_ast.Stmt) (result importsEx
 					}
 				}
 			}
+
+			// TypeScript always trims unused re-exports. This is important for
+			// correctness since some re-exports might be fake (only in the type
+			// system and used for type-only stuff).
+			if p.options.ts.Parse && len(s.Items) == 0 && (unusedImportFlags&config.TSUnusedImport_KeepStmt) == 0 {
+				continue
+			}
 		}
 
 		// Filter out statements we skipped over
@@ -15715,40 +15714,6 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	}
 	if len(options.jsx.ImportSource) == 0 {
 		options.jsx.ImportSource = defaultJSXImportSource
-	}
-
-	if !options.ts.Parse {
-		// Non-TypeScript files always get the real JavaScript class field behavior
-		options.useDefineForClassFields = config.True
-	} else if options.useDefineForClassFields == config.Unspecified {
-		// The default behavior for TypeScript files depends on the value of the
-		// "target" field and on the version of TypeScript:
-		//
-		//   * TypeScript ≥4.3 and "target": "ESNext" => "useDefineForClassFields": true
-		//   * Otherwise => "useDefineForClassFields": false
-		//
-		// Context: https://github.com/microsoft/TypeScript/pull/42663. This was
-		// silently changed in TypeScript 4.3. It's a breaking change even though
-		// it wasn't mentioned in the announcement blog post for TypeScript 4.3:
-		// https://devblogs.microsoft.com/typescript/announcing-typescript-4-3/.
-		if options.targetFromAPI == config.TargetWasConfiguredAndAtLeastES2022 ||
-			(options.tsTarget != nil && options.tsTarget.TargetIsAtLeastES2022) {
-			options.useDefineForClassFields = config.True
-		} else {
-			options.useDefineForClassFields = config.False
-		}
-	}
-
-	// If there is no top-level esbuild "target" setting, include unsupported
-	// JavaScript features from the TypeScript "target" setting. Otherwise the
-	// TypeScript "target" setting is ignored.
-	if options.targetFromAPI == config.TargetWasUnconfigured && options.tsTarget != nil {
-		options.unsupportedJSFeatures |= options.tsTarget.UnsupportedJSFeatures
-
-		// Re-apply overrides to make sure they always win
-		options.unsupportedJSFeatures = options.unsupportedJSFeatures.ApplyOverrides(
-			options.unsupportedJSFeatureOverrides,
-			options.unsupportedJSFeatureOverridesMask)
 	}
 
 	p := newParser(log, source, js_lexer.NewLexer(log, source, options.ts), &options)

@@ -128,9 +128,9 @@ func TestTSDeclareClassFields(t *testing.T) {
 				}
 				(() => new Bar())()
 			`,
-			"/define-true/tsconfig.json": `{
+			"/define-false/tsconfig.json": `{
 				"compilerOptions": {
-					"useDefineForClassFields": true
+					"useDefineForClassFields": false
 				}
 			}`,
 		},
@@ -604,6 +604,11 @@ func TestTSMinifyDerivedClass(t *testing.T) {
 					}
 				}
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": false
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
@@ -798,7 +803,31 @@ func TestTSMinifiedBundleCommonJS(t *testing.T) {
 	})
 }
 
-func TestTypeScriptDecorators(t *testing.T) {
+func TestTSExperimentalDecoratorsNoConfig(t *testing.T) {
+	ts_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.ts": `
+				@decorator
+				class Foo {}
+			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"experimentalDecorators": false
+				}
+			}`,
+		},
+		entryPaths: []string{"/entry.ts"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+		},
+		expectedScanLog: "entry.ts: ERROR: Experimental decorators are not currently enabled\n" +
+			"NOTE: To use experimental decorators in TypeScript with esbuild, you need to enable them by adding \"experimentalDecorators\": true in your \"tsconfig.json\" file. " +
+			"TypeScript's experimental decorators are currently the only kind of decorators that esbuild supports.\n",
+	})
+}
+
+func TestTSExperimentalDecorators(t *testing.T) {
 	ts_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
@@ -935,6 +964,12 @@ func TestTypeScriptDecorators(t *testing.T) {
 					return Foo;
 				}
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": false,
+					"experimentalDecorators": true
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.js"},
 		options: config.Options{
@@ -944,13 +979,18 @@ func TestTypeScriptDecorators(t *testing.T) {
 	})
 }
 
-func TestTypeScriptDecoratorsKeepNames(t *testing.T) {
+func TestTSExperimentalDecoratorsKeepNames(t *testing.T) {
 	ts_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.ts": `
 				@decoratorMustComeAfterName
 				class Foo {}
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"experimentalDecorators": true
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
@@ -962,7 +1002,7 @@ func TestTypeScriptDecoratorsKeepNames(t *testing.T) {
 }
 
 // See: https://github.com/evanw/esbuild/issues/2147
-func TestTypeScriptDecoratorScopeIssue2147(t *testing.T) {
+func TestTSExperimentalDecoratorScopeIssue2147(t *testing.T) {
 	ts_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.ts": `
@@ -989,6 +1029,12 @@ func TestTypeScriptDecoratorScopeIssue2147(t *testing.T) {
 					}
 				}
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": false,
+					"experimentalDecorators": true
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
@@ -1117,6 +1163,11 @@ func TestTSExportDefaultTypeIssue316(t *testing.T) {
 				export default foo
 				export let bar = 123
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": false
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
@@ -1230,9 +1281,11 @@ func TestExportTypeIssue379(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModeBundle,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.False,
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+			TS: config.TSOptions{Config: config.TSConfig{
+				UseDefineForClassFields: config.False,
+			}},
 		},
 	})
 }
@@ -1269,9 +1322,11 @@ func TestThisInsideFunctionTS(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModeBundle,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.False,
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+			TS: config.TSOptions{Config: config.TSConfig{
+				UseDefineForClassFields: config.False,
+			}},
 		},
 	})
 }
@@ -1308,9 +1363,11 @@ func TestThisInsideFunctionTSUseDefineForClassFields(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModeBundle,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.True,
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+			TS: config.TSOptions{Config: config.TSConfig{
+				UseDefineForClassFields: config.True,
+			}},
 		},
 	})
 }
@@ -1344,6 +1401,11 @@ func TestThisInsideFunctionTSNoBundle(t *testing.T) {
 					new Bar(bar(objBar))
 				}
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": false
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
@@ -1385,9 +1447,11 @@ func TestThisInsideFunctionTSNoBundleUseDefineForClassFields(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModePassThrough,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.True,
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			TS: config.TSOptions{Config: config.TSConfig{
+				UseDefineForClassFields: config.True,
+			}},
 		},
 	})
 }
@@ -1406,12 +1470,17 @@ func TestTSComputedClassFieldUseDefineFalse(t *testing.T) {
 				}
 				new Foo()
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": false,
+					"experimentalDecorators": true
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModePassThrough,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.False,
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
 		},
 	})
 }
@@ -1430,12 +1499,17 @@ func TestTSComputedClassFieldUseDefineTrue(t *testing.T) {
 				}
 				new Foo()
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": true,
+					"experimentalDecorators": true
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModePassThrough,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.True,
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
 		},
 	})
 }
@@ -1454,13 +1528,18 @@ func TestTSComputedClassFieldUseDefineTrueLower(t *testing.T) {
 				}
 				new Foo()
 			`,
+			"/tsconfig.json": `{
+				"compilerOptions": {
+					"useDefineForClassFields": true,
+					"experimentalDecorators": true
+				}
+			}`,
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModePassThrough,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.True,
-			UnsupportedJSFeatures:   compat.ClassField,
+			Mode:                  config.ModePassThrough,
+			AbsOutputFile:         "/out.js",
+			UnsupportedJSFeatures: compat.ClassField,
 		},
 	})
 }
@@ -1483,9 +1562,11 @@ func TestTSAbstractClassFieldUseAssign(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModePassThrough,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.False,
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			TS: config.TSOptions{Config: config.TSConfig{
+				UseDefineForClassFields: config.False,
+			}},
 		},
 	})
 }
@@ -1508,9 +1589,11 @@ func TestTSAbstractClassFieldUseDefine(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:                    config.ModePassThrough,
-			AbsOutputFile:           "/out.js",
-			UseDefineForClassFields: config.True,
+			Mode:          config.ModePassThrough,
+			AbsOutputFile: "/out.js",
+			TS: config.TSOptions{Config: config.TSConfig{
+				UseDefineForClassFields: config.True,
+			}},
 		},
 	})
 }

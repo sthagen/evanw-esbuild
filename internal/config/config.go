@@ -29,30 +29,85 @@ type TSJSX uint8
 const (
 	TSJSXNone TSJSX = iota
 	TSJSXPreserve
+	TSJSXReactNative
 	TSJSXReact
 	TSJSXReactJSX
 	TSJSXReactJSXDev
 )
 
-func (jsxOptions *JSXOptions) SetOptionsFromTSJSX(tsx TSJSX) {
-	switch tsx {
-	case TSJSXPreserve:
-		jsxOptions.Preserve = true
+type TSOptions struct {
+	Config              TSConfig
+	Parse               bool
+	NoAmbiguousLessThan bool
+}
+
+type TSConfigJSX struct {
+	// If not empty, these should override the default values
+	JSXFactory         []string // Default if empty: "React.createElement"
+	JSXFragmentFactory []string // Default if empty: "React.Fragment"
+	JSXImportSource    string   // Default if empty: "react"
+	JSX                TSJSX
+}
+
+func (tsConfig *TSConfigJSX) ApplyTo(jsxOptions *JSXOptions) {
+	switch tsConfig.JSX {
+	case TSJSXPreserve, TSJSXReactNative:
+		// Deliberately don't set "Preserve = true" here. Some tools from Vercel
+		// apparently automatically set "jsx": "preserve" in "tsconfig.json" and
+		// people are then confused when esbuild preserves their JSX. Ignoring this
+		// value means you now have to explicitly pass "--jsx=preserve" to esbuild
+		// to get this behavior.
+
 	case TSJSXReact:
 		jsxOptions.AutomaticRuntime = false
 		jsxOptions.Development = false
+
 	case TSJSXReactJSX:
 		jsxOptions.AutomaticRuntime = true
-		// Don't set Development = false implicitly
+		// Deliberately don't set "Development = false" here. People want to be
+		// able to have "react-jsx" in their "tsconfig.json" file and then swap
+		// that to "react-jsxdev" by passing "--jsx-dev" to esbuild.
+
 	case TSJSXReactJSXDev:
 		jsxOptions.AutomaticRuntime = true
 		jsxOptions.Development = true
 	}
+
+	if len(tsConfig.JSXFactory) > 0 {
+		jsxOptions.Factory = DefineExpr{Parts: tsConfig.JSXFactory}
+	}
+
+	if len(tsConfig.JSXFragmentFactory) > 0 {
+		jsxOptions.Fragment = DefineExpr{Parts: tsConfig.JSXFragmentFactory}
+	}
+
+	if tsConfig.JSXImportSource != "" {
+		jsxOptions.ImportSource = tsConfig.JSXImportSource
+	}
 }
 
-type TSOptions struct {
-	Parse               bool
-	NoAmbiguousLessThan bool
+// Note: This can currently only contain primitive values. It's compared
+// for equality using a structural equality comparison by the JS parser.
+type TSConfig struct {
+	ExperimentalDecorators  MaybeBool
+	ImportsNotUsedAsValues  TSImportsNotUsedAsValues
+	PreserveValueImports    MaybeBool
+	Target                  TSTarget
+	UseDefineForClassFields MaybeBool
+	VerbatimModuleSyntax    MaybeBool
+}
+
+func (cfg *TSConfig) UnusedImportFlags() (flags TSUnusedImportFlags) {
+	if cfg.VerbatimModuleSyntax == True {
+		return TSUnusedImport_KeepStmt | TSUnusedImport_KeepValues
+	}
+	if cfg.PreserveValueImports == True {
+		flags |= TSUnusedImport_KeepValues
+	}
+	if cfg.ImportsNotUsedAsValues != TSImportsNotUsedAsValues_Remove {
+		flags |= TSUnusedImport_KeepStmt
+	}
+	return
 }
 
 type Platform uint8
@@ -258,7 +313,6 @@ func (flag *CancelFlag) DidCancel() bool {
 type Options struct {
 	ModuleTypeData js_ast.ModuleTypeData
 	Defines        *ProcessedDefines
-	TSTarget       *TSTarget
 	TSAlwaysStrict *TSAlwaysStrict
 	MangleProps    *regexp.Regexp
 	ReserveProps   *regexp.Regexp
@@ -342,91 +396,79 @@ type Options struct {
 	// If true, make sure to generate a single file that can be written to stdout
 	WriteToStdout bool
 
-	OmitRuntimeForTests     bool
-	OmitJSXRuntimeForTests  bool
-	UnusedImportFlagsTS     UnusedImportFlagsTS
-	UseDefineForClassFields MaybeBool
-	ASCIIOnly               bool
-	KeepNames               bool
-	IgnoreDCEAnnotations    bool
-	TreeShaking             bool
-	DropDebugger            bool
-	MangleQuoted            bool
-	Platform                Platform
-	TargetFromAPI           TargetFromAPI
-	OutputFormat            Format
-	NeedsMetafile           bool
-	SourceMap               SourceMap
-	ExcludeSourcesContent   bool
+	OmitRuntimeForTests    bool
+	OmitJSXRuntimeForTests bool
+	ASCIIOnly              bool
+	KeepNames              bool
+	IgnoreDCEAnnotations   bool
+	TreeShaking            bool
+	DropDebugger           bool
+	MangleQuoted           bool
+	Platform               Platform
+	OutputFormat           Format
+	NeedsMetafile          bool
+	SourceMap              SourceMap
+	ExcludeSourcesContent  bool
 }
 
-type TargetFromAPI uint8
+type TSImportsNotUsedAsValues uint8
 
 const (
-	// In this state, the "target" field in "tsconfig.json" is respected
-	TargetWasUnconfigured TargetFromAPI = iota
-
-	// In this state, the "target" field in "tsconfig.json" is overridden
-	TargetWasConfigured
-
-	// In this state, "useDefineForClassFields" is true unless overridden
-	TargetWasConfiguredAndAtLeastES2022
+	TSImportsNotUsedAsValues_Remove TSImportsNotUsedAsValues = iota
+	TSImportsNotUsedAsValues_Preserve
+	TSImportsNotUsedAsValues_Error
 )
 
-type UnusedImportFlagsTS uint8
+// These flags represent the following separate "tsconfig.json" settings:
+//
+// - importsNotUsedAsValues
+// - preserveValueImports
+// - verbatimModuleSyntax
+//
+// TypeScript prefers for people to use "verbatimModuleSyntax" and has
+// deprecated the other two settings, but we must still support them.
+// All settings are combined into these two behavioral flags for us.
+type TSUnusedImportFlags uint8
 
-// With !UnusedImportKeepStmt && !UnusedImportKeepValues:
+// With !TSUnusedImport_KeepStmt && !TSUnusedImport_KeepValues:
 //
 //	"import 'foo'"                      => "import 'foo'"
 //	"import * as unused from 'foo'"     => ""
 //	"import { unused } from 'foo'"      => ""
 //	"import { type unused } from 'foo'" => ""
 //
-// With UnusedImportKeepStmt && !UnusedImportKeepValues:
+// With TSUnusedImport_KeepStmt && !TSUnusedImport_KeepValues:
 //
 //	"import 'foo'"                      => "import 'foo'"
 //	"import * as unused from 'foo'"     => "import 'foo'"
 //	"import { unused } from 'foo'"      => "import 'foo'"
 //	"import { type unused } from 'foo'" => "import 'foo'"
 //
-// With !UnusedImportKeepStmt && UnusedImportKeepValues:
+// With !TSUnusedImport_KeepStmt && TSUnusedImport_KeepValues:
 //
 //	"import 'foo'"                      => "import 'foo'"
 //	"import * as unused from 'foo'"     => "import * as unused from 'foo'"
 //	"import { unused } from 'foo'"      => "import { unused } from 'foo'"
 //	"import { type unused } from 'foo'" => ""
 //
-// With UnusedImportKeepStmt && UnusedImportKeepValues:
+// With TSUnusedImport_KeepStmt && TSUnusedImport_KeepValues:
 //
 //	"import 'foo'"                      => "import 'foo'"
 //	"import * as unused from 'foo'"     => "import * as unused from 'foo'"
 //	"import { unused } from 'foo'"      => "import { unused } from 'foo'"
 //	"import { type unused } from 'foo'" => "import {} from 'foo'"
 const (
-	UnusedImportKeepStmt   UnusedImportFlagsTS = 1 << iota // "importsNotUsedAsValues" != "remove"
-	UnusedImportKeepValues                                 // "preserveValueImports" == true
+	TSUnusedImport_KeepStmt   TSUnusedImportFlags = 1 << iota // "importsNotUsedAsValues" != "remove"
+	TSUnusedImport_KeepValues                                 // "preserveValueImports" == true
 )
 
-func UnusedImportFlagsFromTsconfigValues(preserveImportsNotUsedAsValues bool, preserveValueImports bool) (flags UnusedImportFlagsTS) {
-	if preserveValueImports {
-		flags |= UnusedImportKeepValues
-	}
-	if preserveImportsNotUsedAsValues {
-		flags |= UnusedImportKeepStmt
-	}
-	return
-}
+type TSTarget uint8
 
-type TSTarget struct {
-	// This information is only used for error messages
-	Target string
-	Source logger.Source
-	Range  logger.Range
-
-	// This information can affect code transformation
-	UnsupportedJSFeatures compat.JSFeature
-	TargetIsAtLeastES2022 bool
-}
+const (
+	TSTargetUnspecified     TSTarget = iota
+	TSTargetBelowES2022              // "useDefineForClassFields" defaults to false
+	TSTargetAtOrAboveES2022          // "useDefineForClassFields" defaults to true
+)
 
 type TSAlwaysStrict struct {
 	// This information is only used for error messages

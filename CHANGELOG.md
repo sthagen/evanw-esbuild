@@ -1,5 +1,221 @@
 # Changelog
 
+## Unreleased
+
+* Add a way to try esbuild online ([#797](https://github.com/evanw/esbuild/issues/797))
+
+    There is now a way to try esbuild live on esbuild's website without installing it: https://esbuild.github.io/try/. In addition to being able to more easily evaluate esbuild, this should also make it more efficient to generate esbuild bug reports. For example, you can use it to compare the behavior of different versions of esbuild on the same input. The state of the page is stored in the URL for easy sharing. Many thanks to [@hyrious](https://github.com/hyrious) for creating https://hyrious.me/esbuild-repl/, which was the main inspiration for this addition to esbuild's website.
+
+    Two forms of build options are supported: either CLI-style ([example](https://esbuild.github.io/try/#dAAwLjE3LjE5AC0tbG9hZGVyPXRzeCAtLW1pbmlmeQBsZXQgZWw6IEpTWC5FbGVtZW50ID0gPGRpdiAvPg)) or JS-style ([example](https://esbuild.github.io/try/#dAAwLjE3LjE5AHsKICBsb2FkZXI6ICd0c3gnLAogIG1pbmlmeTogdHJ1ZSwKfQBsZXQgZWw6IEpTWC5FbGVtZW50ID0gPGRpdiAvPg)). Both are converted into a JS object that's passed to esbuild's WebAssembly API. The CLI-style argument parser is a custom one that simulates shell quoting rules, and the JS-style argument parser is also custom and parses a superset of JSON (basically JSON5 + regular expressions). So argument parsing is an approximate simulation of what happens for real but hopefully it should be close enough.
+
+* Changes to esbuild's `tsconfig.json` support ([#3019](https://github.com/evanw/esbuild/issues/3019)):
+
+    This release makes the following changes to esbuild's `tsconfig.json` support:
+
+    * Using experimental decorators now requires `"experimentalDecorators": true` ([#104](https://github.com/evanw/esbuild/issues/104))
+
+        Previously esbuild would always compile decorators in TypeScript code using TypeScript's experimental decorator transform. Now that standard JavaScript decorators are close to being finalized, esbuild will now require you to use `"experimentalDecorators": true` to do this. This new requirement makes it possible for esbuild to introduce a transform for standard JavaScript decorators in TypeScript code in the future. Such a transform has not been implemented yet, however.
+
+    * TypeScript's `target` no longer affects esbuild's `target` ([#2628](https://github.com/evanw/esbuild/issues/2628))
+
+        Some people requested that esbuild support TypeScript's `target` setting, so support for it was added (in [version 0.12.4](https://github.com/evanw/esbuild/releases/v0.12.4)). However, esbuild supports reading from multiple `tsconfig.json` files within a single build, which opens up the possibility that different files in the build have different language targets configured. There isn't really any reason to do this and it can lead to unexpected results. So with this release, the `target` setting in `tsconfig.json` will no longer affect esbuild's own `target` setting. You will have to use esbuild's own target setting instead (which is a single, global value).
+
+    * TypeScript's `jsx` setting no longer causes esbuild to preserve JSX syntax ([#2634](https://github.com/evanw/esbuild/issues/2634))
+
+        TypeScript has a setting called [`jsx`](https://www.typescriptlang.org/tsconfig#jsx) that controls how to transform JSX into JS. The tool-agnostic transform is called `react`, and the React-specific transform is called `react-jsx` (or `react-jsxdev`). There is also a setting called `preserve` which indicates JSX should be passed through untransformed. Previously people would run esbuild with `"jsx": "preserve"` in their `tsconfig.json` files and then be surprised when esbuild preserved their JSX. So with this release, esbuild will now ignore `"jsx": "preserve"` in `tsconfig.json` files. If you want to preserve JSX syntax with esbuild, you now have to use `--jsx=preserve`.
+
+        Note: Some people have suggested that esbuild's equivalent `jsx` setting override the one in `tsconfig.json`. However, some projects need to legitimately have different files within the same build use different transforms (i.e. `react` vs. `react-jsx`) and having esbuild's global `jsx` setting override `tsconfig.json` would prevent this from working. This release ignores `"jsx": "preserve"` but still allows other `jsx` values in `tsconfig.json` files to override esbuild's global `jsx` setting to keep the ability for multiple files within the same build to use different transforms.
+
+    * `useDefineForClassFields` behavior has changed ([#2584](https://github.com/evanw/esbuild/issues/2584), [#2993](https://github.com/evanw/esbuild/issues/2993))
+
+        Class fields in TypeScript look like this (`x` is a class field):
+
+        ```js
+        class Foo {
+          x = 123
+        }
+        ```
+
+        TypeScript has legacy behavior that uses assignment semantics instead of define semantics for class fields when [`useDefineForClassFields`](https://www.typescriptlang.org/tsconfig#useDefineForClassFields) is enabled (in which case class fields in TypeScript behave differently than they do in JavaScript, which is arguably "wrong").
+
+        This legacy behavior exists because TypeScript added class fields to TypeScript before they were added to JavaScript. The TypeScript team decided to go with assignment semantics and shipped their implementation. Much later on TC39 decided to go with define semantics for class fields in JavaScript instead. This behaves differently if the base class has a setter with the same name:
+
+        ```js
+        class Base {
+          set x(_) {
+            console.log('x:', _)
+          }
+        }
+
+        // useDefineForClassFields: false
+        class AssignSemantics extends Base {
+          constructor() {
+            super()
+            this.x = 123
+          }
+        }
+
+        // useDefineForClassFields: true
+        class DefineSemantics extends Base {
+          constructor() {
+            super()
+            Object.defineProperty(this, 'x', { value: 123 })
+          }
+        }
+
+        console.log(
+          new AssignSemantics().x, // Calls the setter
+          new DefineSemantics().x // Doesn't call the setter
+        )
+        ```
+
+        When you run `tsc`, the value of `useDefineForClassFields` defaults to `false` when it's not specified and the `target` in `tsconfig.json` is present but earlier than `ES2022`. This sort of makes sense because the class field language feature was added in ES2022, so before ES2022 class fields didn't exist (and thus TypeScript's legacy behavior is active). However, TypeScript's `target` setting currently defaults to `ES3` which unfortunately means that the `useDefineForClassFields` setting currently defaults to false (i.e. to "wrong"). In other words if you run `tsc` with all default settings, class fields will behave incorrectly.
+
+        Previously esbuild tried to do what `tsc` did. That meant esbuild's version of `useDefineForClassFields` was `false` by default, and was also `false` if esbuild's `--target=` was present but earlier than `es2022`. However, TypeScript's legacy class field behavior is becoming increasingly irrelevant and people who expect class fields in TypeScript to work like they do in JavaScript are confused when they use esbuild with default settings. It's also confusing that the behavior of class fields would change if you changed the language target (even though that's exactly how TypeScript works).
+
+        So with this release, esbuild will now only use the information in `tsconfig.json` to determine whether `useDefineForClassFields` is true or not. Specifically `useDefineForClassFields` will be respected if present, otherwise it will be `false` if `target` is present in `tsconfig.json` and is `ES2021` or earlier, otherwise it will be `true`. Targets passed to esbuild's `--target=` setting will no longer affect `useDefineForClassFields`.
+
+        Note that this means different directories in your build can have different values for this setting since esbuild allows different directories to have different `tsconfig.json` files within the same build. This should let you migrate your code one directory at a time without esbuild's `--target=` setting affecting the semantics of your code.
+
+    * Add support for `verbatimModuleSyntax` from TypeScript 5.0
+
+        TypeScript 5.0 added a new option called [`verbatimModuleSyntax`](https://www.typescriptlang.org/tsconfig#verbatimModuleSyntax) that deprecates and replaces two older options, `preserveValueImports` and `importsNotUsedAsValues`. Setting `verbatimModuleSyntax` to true in `tsconfig.json` tells esbuild to not drop unused import statements. Specifically esbuild now treats `"verbatimModuleSyntax": true` as if you had specified both `"preserveValueImports": true` and `"importsNotUsedAsValues": "preserve"`.
+
+    * Remove support for `moduleSuffixes` ([#2395](https://github.com/evanw/esbuild/issues/2395))
+
+        The community has requested that esbuild remove support for TypeScript's `moduleSuffixes` feature, so it has been removed in this release. Instead you can use esbuild's `--resolve-extensions=` feature to select which module suffix you want to build with.
+
+    These changes are intended to improve esbuild's compatibility with `tsc` and reduce the number of unfortunate behaviors regarding `tsconfig.json` and esbuild.
+
+* Add a workaround for bugs in Safari 16.2 and earlier ([#3072](https://github.com/evanw/esbuild/issues/3072))
+
+    Safari's JavaScript parser had a bug (which has now been fixed) where at least something about unary/binary operators nested inside default arguments nested inside either a function or class expression was incorrectly considered a syntax error if that expression was the target of a property assignment. Here are some examples that trigger this Safari bug:
+
+    ```
+    ❱ x(function (y = -1) {}.z = 2)
+    SyntaxError: Left hand side of operator '=' must be a reference.
+
+    ❱ x(class { f(y = -1) {} }.z = 2)
+    SyntaxError: Left hand side of operator '=' must be a reference.
+    ```
+
+    It's not clear what the exact conditions are that trigger this bug. However, a workaround for this bug appears to be to post-process your JavaScript to wrap any in function and class declarations that are the direct target of a property access expression in parentheses. That's the workaround that UglifyJS applies for this issue: [mishoo/UglifyJS#2056](https://github.com/mishoo/UglifyJS/pull/2056). So that's what esbuild now does starting with this release:
+
+    ```js
+    // Original code
+    x(function (y = -1) {}.z = 2, class { f(y = -1) {} }.z = 2)
+
+    // Old output (with --minify --target=safari16.2)
+    x(function(c=-1){}.z=2,class{f(c=-1){}}.z=2);
+
+    // New output (with --minify --target=safari16.2)
+    x((function(c=-1){}).z=2,(class{f(c=-1){}}).z=2);
+    ```
+
+    This fix is not enabled by default. It's only enabled when `--target=` contains Safari 16.2 or earlier, such as with `--target=safari16.2`. You can also explicitly enable or disable this specific transform (called `function-or-class-property-access`) with `--supported:function-or-class-property-access=false`.
+
+* Fix esbuild's TypeScript type declarations to forbid unknown properties ([#3089](https://github.com/evanw/esbuild/issues/3089))
+
+    Version 0.17.0 of esbuild introduced a specific form of function overloads in the TypeScript type definitions for esbuild's API calls that looks like this:
+
+    ```ts
+    interface TransformOptions {
+      legalComments?: 'none' | 'inline' | 'eof' | 'external'
+    }
+
+    interface TransformResult<ProvidedOptions extends TransformOptions = TransformOptions> {
+      legalComments: string | (ProvidedOptions['legalComments'] extends 'external' ? never : undefined)
+    }
+
+    declare function transformSync<ProvidedOptions extends TransformOptions>(input: string, options?: ProvidedOptions): TransformResult<ProvidedOptions>
+    declare function transformSync(input: string, options?: TransformOptions): TransformResult
+    ```
+
+    This more accurately reflects how esbuild's JavaScript API behaves. The result object returned by `transformSync` only has the `legalComments` property if you pass `legalComments: 'external'`:
+
+    ```ts
+    // These have type "string | undefined"
+    transformSync('').legalComments
+    transformSync('', { legalComments: 'eof' }).legalComments
+
+    // This has type "string"
+    transformSync('', { legalComments: 'external' }).legalComments
+    ```
+
+    However, this form of function overloads unfortunately allows typos (e.g. `egalComments`) to pass the type checker without generating an error as TypeScript allows all objects with unknown properties to extend `TransformOptions`. These typos result in esbuild's API throwing an error at run-time.
+
+    To prevent typos during type checking, esbuild's TypeScript type definitions will now use a different form that looks like this:
+
+    ```ts
+    type SameShape<Out, In extends Out> = In & { [Key in Exclude<keyof In, keyof Out>]: never }
+
+    interface TransformOptions {
+      legalComments?: 'none' | 'inline' | 'eof' | 'external'
+    }
+
+    interface TransformResult<ProvidedOptions extends TransformOptions = TransformOptions> {
+      legalComments: string | (ProvidedOptions['legalComments'] extends 'external' ? never : undefined)
+    }
+
+    declare function transformSync<T extends TransformOptions>(input: string, options?: SameShape<TransformOptions, T>): TransformResult<T>
+    ```
+
+    This change should hopefully not affect correct code. It should hopefully introduce type errors only for incorrect code.
+
+* Fix CSS nesting transform for pseudo-elements ([#3119](https://github.com/evanw/esbuild/issues/3119))
+
+    This release fixes esbuild's CSS nesting transform for pseudo-elements (e.g. `::before` and `::after`). The CSS nesting specification says that [the nesting selector does not work with pseudo-elements](https://www.w3.org/TR/css-nesting-1/#ref-for-matches-pseudo%E2%91%A0). This can be seen in the example below: esbuild does not carry the parent pseudo-element `::before` through the nesting selector `&`. However, that doesn't apply to pseudo-elements that are within the same selector. Previously esbuild had a bug where it considered pseudo-elements in both locations as invalid. This release changes esbuild to only consider those from the parent selector invalid, which should align with the specification:
+
+    ```css
+    /* Original code */
+    a, b::before {
+      &.c, &::after {
+        content: 'd';
+      }
+    }
+
+    /* Old output (with --target=chrome90) */
+    a:is(.c, ::after) {
+      content: "d";
+    }
+
+    /* New output (with --target=chrome90) */
+    a.c,
+    a::after {
+      content: "d";
+    }
+    ```
+
+* Forbid `&` before a type selector in nested CSS
+
+    The people behind the work-in-progress CSS nesting specification have very recently [decided to forbid nested CSS that looks like `&div`](https://github.com/w3c/csswg-drafts/issues/8662#issuecomment-1514977935). You will have to use either `div&` or `&:is(div)` instead. This release of esbuild has been updated to take this new change into consideration. Doing this now generates a warning. The suggested fix is slightly different depending on where in the overall selector it happened:
+
+    ```
+    ▲ [WARNING] Cannot use type selector "input" directly after nesting selector "&" [css-syntax-error]
+
+        example.css:2:3:
+          2 │   &input {
+            │    ~~~~~
+            ╵    :is(input)
+
+      CSS nesting syntax does not allow the "&" selector to come before a type selector. You can wrap
+      this selector in ":is()" as a workaround. This restriction exists to avoid problems with SASS
+      nesting, where the same syntax means something very different that has no equivalent in real CSS
+      (appending a suffix to the parent selector).
+
+    ▲ [WARNING] Cannot use type selector "input" directly after nesting selector "&" [css-syntax-error]
+
+        example.css:6:8:
+          6 │   .form &input {
+            │         ~~~~~~
+            ╵         input&
+
+      CSS nesting syntax does not allow the "&" selector to come before a type selector. You can move
+      the "&" to the end of this selector as a workaround. This restriction exists to avoid problems
+      with SASS nesting, where the same syntax means something very different that has no equivalent in
+      real CSS (appending a suffix to the parent selector).
+    ```
+
 ## 0.17.19
 
 * Fix CSS transform bugs with nested selectors that start with a combinator ([#3096](https://github.com/evanw/esbuild/issues/3096))
