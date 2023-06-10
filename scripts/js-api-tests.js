@@ -2180,6 +2180,73 @@ console.log("success");
 `)
   },
 
+  async forceTsConfigRaw({ esbuild, testDir }) {
+    // ./a/tsconfig.json
+    // ./a/b/test-impl.js
+    // ./a/b/c/in.js
+    const aDir = path.join(testDir, 'a')
+    const bDir = path.join(aDir, 'b')
+    const cDir = path.join(bDir, 'c')
+    await mkdirAsync(aDir).catch(x => x)
+    await mkdirAsync(bDir).catch(x => x)
+    await mkdirAsync(cDir).catch(x => x)
+    const input = path.join(cDir, 'in.js')
+    const forced = path.join(bDir, 'test-impl.js')
+    const tsconfigIgnore = path.join(aDir, 'tsconfig.json')
+    const output = path.join(testDir, 'out.js')
+    await writeFileAsync(input, 'import "test"')
+    await writeFileAsync(forced, 'console.log("success")')
+    await writeFileAsync(tsconfigIgnore, '{"compilerOptions": {"baseUrl": "./b", "paths": {"test": ["./ignore.js"]}}}')
+    await esbuild.build({
+      entryPoints: [input],
+      bundle: true,
+      outfile: output,
+      absWorkingDir: testDir, // "paths" are resolved relative to the current working directory
+      tsconfigRaw: {
+        compilerOptions: {
+          baseUrl: './a/b',
+          paths: {
+            test: ['./test-impl.js'],
+          },
+        },
+      },
+      format: 'esm',
+    })
+    const result = await readFileAsync(output, 'utf8')
+    assert.strictEqual(result, `// a/b/test-impl.js
+console.log("success");
+`)
+  },
+
+  async forceTsConfigRawStdin({ esbuild, testDir }) {
+    const input = path.join(testDir, 'in.js')
+    const test = path.join(testDir, 'test-impl.js')
+    const output = path.join(testDir, 'out.js')
+    await writeFileAsync(input, 'import "test"')
+    await writeFileAsync(test, 'console.log("success")')
+    await esbuild.build({
+      stdin: {
+        contents: `import "test"`,
+        resolveDir: '.',
+      },
+      bundle: true,
+      outfile: output,
+      absWorkingDir: testDir,
+      tsconfigRaw: {
+        compilerOptions: {
+          paths: {
+            test: ['./test-impl.js'],
+          },
+        },
+      },
+      format: 'esm',
+    })
+    const result = await readFileAsync(output, 'utf8')
+    assert.strictEqual(result, `// test-impl.js
+console.log("success");
+`)
+  },
+
   async es5({ esbuild, testDir }) {
     const input = path.join(testDir, 'in.js')
     const cjs = path.join(testDir, 'cjs.js')
@@ -5323,6 +5390,18 @@ let transformTests = {
 
     assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', target: 'es5', tsconfigRaw: { compilerOptions: { target: 'ES6' } } })).code, `(function(x) {\n  return x;\n});\n`)
     assert.strictEqual((await esbuild.transform('x => x', { loader: 'ts', target: 'es6', tsconfigRaw: { compilerOptions: { target: 'ES5' } } })).code, `(x) => x;\n`)
+  },
+
+  async tsconfigRawExtends({ esbuild }) {
+    // Uses of "extends" in "tsconfigRaw" should be ignored for the transform API
+    const result = await esbuild.transform('let foo: bar', {
+      loader: 'ts',
+      logOverride: { 'tsconfig.json': 'error' },
+      tsconfigRaw: {
+        extends: __filename,
+      },
+    })
+    assert.strictEqual(result.code, `let foo;\n`)
   },
 
   async tsImplicitUseDefineForClassFields({ esbuild }) {

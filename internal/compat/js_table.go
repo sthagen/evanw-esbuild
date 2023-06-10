@@ -49,6 +49,14 @@ func (e Engine) String() string {
 	return ""
 }
 
+func (e Engine) IsBrowser() bool {
+	switch e {
+	case Chrome, Edge, Firefox, IE, IOS, Opera, Safari:
+		return true
+	}
+	return false
+}
+
 type JSFeature uint64
 
 const (
@@ -290,7 +298,7 @@ var jsTable = map[JSFeature]map[Engine][]versionRange{
 		Edge:    {{start: v{84, 0, 0}}},
 		ES:      {{start: v{2022, 0, 0}}},
 		Firefox: {{start: v{90, 0, 0}}},
-		IOS:     {{start: v{15, 0, 0}}},
+		IOS:     {{start: v{14, 5, 0}}},
 		Node:    {{start: v{14, 6, 0}}},
 		Opera:   {{start: v{70, 0, 0}}},
 		Safari:  {{start: v{14, 1, 0}}},
@@ -323,7 +331,7 @@ var jsTable = map[JSFeature]map[Engine][]versionRange{
 		Edge:    {{start: v{79, 0, 0}}},
 		ES:      {{start: v{2022, 0, 0}}},
 		Firefox: {{start: v{90, 0, 0}}},
-		IOS:     {{start: v{15, 0, 0}}},
+		IOS:     {{start: v{14, 5, 0}}},
 		Node:    {{start: v{12, 0, 0}}},
 		Opera:   {{start: v{62, 0, 0}}},
 		Safari:  {{start: v{14, 1, 0}}},
@@ -353,7 +361,7 @@ var jsTable = map[JSFeature]map[Engine][]versionRange{
 		Edge:    {{start: v{79, 0, 0}}},
 		ES:      {{start: v{2022, 0, 0}}},
 		Firefox: {{start: v{75, 0, 0}}},
-		IOS:     {{start: v{15, 0, 0}}},
+		IOS:     {{start: v{14, 5, 0}}},
 		Node:    {{start: v{12, 0, 0}}},
 		Opera:   {{start: v{60, 0, 0}}},
 		Safari:  {{start: v{14, 1, 0}}},

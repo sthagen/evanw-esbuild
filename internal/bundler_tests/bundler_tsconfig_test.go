@@ -1103,9 +1103,9 @@ func TestTsconfigJsonOverrideMissing(t *testing.T) {
 		},
 		entryPaths: []string{"/Users/user/project/src/app/entry.ts"},
 		options: config.Options{
-			Mode:             config.ModeBundle,
-			AbsOutputFile:    "/Users/user/project/out.js",
-			TsConfigOverride: "/Users/user/project/other/config-for-ts.json",
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/Users/user/project/out.js",
+			TSConfigPath:  "/Users/user/project/other/config-for-ts.json",
 		},
 	})
 }
@@ -1148,9 +1148,9 @@ func TestTsconfigJsonOverrideNodeModules(t *testing.T) {
 		},
 		entryPaths: []string{"/Users/user/project/src/app/entry.ts"},
 		options: config.Options{
-			Mode:             config.ModeBundle,
-			AbsOutputFile:    "/Users/user/project/out.js",
-			TsConfigOverride: "/Users/user/project/other/config-for-ts.json",
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/Users/user/project/out.js",
+			TSConfigPath:  "/Users/user/project/other/config-for-ts.json",
 		},
 	})
 }
@@ -1162,9 +1162,9 @@ func TestTsconfigJsonOverrideInvalid(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.ts"},
 		options: config.Options{
-			Mode:             config.ModeBundle,
-			AbsOutputFile:    "/out.js",
-			TsConfigOverride: "/this/file/doesn't/exist/tsconfig.json",
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/out.js",
+			TSConfigPath:  "/this/file/doesn't/exist/tsconfig.json",
 		},
 		expectedScanLog: `ERROR: Cannot find tsconfig file "this/file/doesn't/exist/tsconfig.json"
 `,
@@ -1629,6 +1629,53 @@ func TestTsConfigPathsExtendsBaseURL(t *testing.T) {
 	})
 }
 
+func TestTsConfigPathsInNodeModulesIssue2386(t *testing.T) {
+	tsconfig_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/main.js": `
+				import first from "wow/first";
+				import next from "wow/next";
+				console.log(first, next);
+			`,
+			"/Users/user/project/node_modules/wow/package.json": `{
+				"name": "wow",
+				"type": "module",
+				"private": true,
+				"exports": {
+					"./*": "./dist/*.js"
+				},
+				"typesVersions": {
+					"*": {
+						"*": [
+							"dist/*"
+						]
+					}
+				}
+			}`,
+			"/Users/user/project/node_modules/wow/tsconfig.json": `{
+				"compilerOptions": {
+					"paths": { "wow/*": [ "./*" ] }
+				}
+			}`,
+			"/Users/user/project/node_modules/wow/dist/first.js": `
+				export default "dist";
+			`,
+			"/Users/user/project/node_modules/wow/dist/next.js": `
+				import next from "wow/first";
+				export default next;
+			`,
+			"/Users/user/project/node_modules/wow/first.ts": `
+				export default "source";
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/main.js"},
+		options: config.Options{
+			Mode:          config.ModeBundle,
+			AbsOutputFile: "/Users/user/project/out.js",
+		},
+	})
+}
+
 func TestTsConfigWithStatementAlwaysStrictFalse(t *testing.T) {
 	tsconfig_suite.expectBundled(t, bundled{
 		files: map[string]string{
@@ -1918,10 +1965,10 @@ func TestTsConfigExtendsDotWithoutSlash(t *testing.T) {
 		},
 		entryPaths: []string{"/Users/user/project/src/main.tsx"},
 		options: config.Options{
-			Mode:             config.ModeBundle,
-			AbsOutputDir:     "/Users/user/project/out",
-			OutputFormat:     config.FormatESModule,
-			TsConfigOverride: "/Users/user/project/src/foo.json",
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/Users/user/project/out",
+			OutputFormat: config.FormatESModule,
+			TSConfigPath: "/Users/user/project/src/foo.json",
 		},
 	})
 }
@@ -1967,10 +2014,10 @@ func TestTsConfigExtendsDotWithSlash(t *testing.T) {
 		},
 		entryPaths: []string{"/Users/user/project/src/main.tsx"},
 		options: config.Options{
-			Mode:             config.ModeBundle,
-			AbsOutputDir:     "/Users/user/project/out",
-			OutputFormat:     config.FormatESModule,
-			TsConfigOverride: "/Users/user/project/src/foo.json",
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/Users/user/project/out",
+			OutputFormat: config.FormatESModule,
+			TSConfigPath: "/Users/user/project/src/foo.json",
 		},
 		expectedScanLog: `Users/user/project/src/foo.json: WARNING: Cannot find base config file "./"
 `,
@@ -2172,6 +2219,137 @@ func TestTsConfigVerbatimModuleSyntaxFalse(t *testing.T) {
 		entryPaths: []string{"/Users/user/project/src/main.ts"},
 		options: config.Options{
 			Mode:         config.ModePassThrough,
+			AbsOutputDir: "/Users/user/project/out",
+		},
+	})
+}
+
+func TestTsConfigExtendsArray(t *testing.T) {
+	tsconfig_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/main.tsx": `
+				declare let h: any, frag: any
+				console.log(<><div /></>)
+			`,
+			"/Users/user/project/tsconfig.json": `{
+				"extends": [
+					"./a.json",
+					"./b.json",
+				],
+			}`,
+			"/Users/user/project/a.json": `{
+				"compilerOptions": {
+					"jsxFactory": "h",
+					"jsxFragmentFactory": "FAILURE",
+				},
+			}`,
+			"/Users/user/project/b.json": `{
+				"compilerOptions": {
+					"jsxFragmentFactory": "frag",
+				},
+			}`,
+		},
+		entryPaths: []string{"/Users/user/project/src/main.tsx"},
+		options: config.Options{
+			Mode:         config.ModePassThrough,
+			AbsOutputDir: "/Users/user/project/out",
+		},
+	})
+}
+
+func TestTsConfigExtendsArrayNested(t *testing.T) {
+	tsconfig_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/main.tsx": `
+				import { foo } from 'foo'
+				declare let b: any, bBase: any
+				export class Foo {
+					render = () => <><div /></>
+				}
+			`,
+			"/Users/user/project/tsconfig.json": `{
+				"extends": [
+					"./a.json",
+					"./b.json",
+				],
+			}`,
+			"/Users/user/project/a.json": `{
+				"extends": "./a-base.json",
+				"compilerOptions": {
+					"jsxFactory": "a",
+					"jsxFragmentFactory": "a",
+					"target": "ES2015",
+				},
+			}`,
+			"/Users/user/project/a-base.json": `{
+				"compilerOptions": {
+					"jsxFactory": "aBase",
+					"jsxFragmentFactory": "aBase",
+					"target": "ES2022",
+					"verbatimModuleSyntax": true,
+				},
+			}`,
+			"/Users/user/project/b.json": `{
+				"extends": "./b-base.json",
+				"compilerOptions": {
+					"jsxFactory": "b",
+				},
+			}`,
+			"/Users/user/project/b-base.json": `{
+				"compilerOptions": {
+					"jsxFactory": "bBase",
+					"jsxFragmentFactory": "bBase",
+				},
+			}`,
+		},
+		entryPaths: []string{"/Users/user/project/src/main.tsx"},
+		options: config.Options{
+			Mode:              config.ModePassThrough,
+			AbsOutputDir:      "/Users/user/project/out",
+			OriginalTargetEnv: "esnext",
+		},
+	})
+}
+
+func TestTsConfigIgnoreInsideNodeModules(t *testing.T) {
+	tsconfig_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/main.ts": `
+				import { foo } from 'js-pkg'
+				import { bar } from 'ts-pkg'
+				import { foo as shimFoo, bar as shimBar } from 'pkg'
+				if (foo !== 'foo') throw 'fail: foo'
+				if (bar !== 'bar') throw 'fail: bar'
+				if (shimFoo !== 'shimFoo') throw 'fail: shimFoo'
+				if (shimBar !== 'shimBar') throw 'fail: shimBar'
+			`,
+			"/Users/user/project/shim.ts": `
+				export let foo = 'shimFoo'
+				export let bar = 'shimBar'
+			`,
+			"/Users/user/project/tsconfig.json": `{
+				"compilerOptions": {
+					"paths": {
+						"pkg": ["./shim"],
+					},
+				},
+			}`,
+			"/Users/user/project/node_modules/js-pkg/index.js": `
+				import { foo as pkgFoo } from 'pkg'
+				export let foo = pkgFoo
+			`,
+			"/Users/user/project/node_modules/ts-pkg/index.ts": `
+				import { bar as pkgBar } from 'pkg'
+				export let bar = pkgBar
+			`,
+			"/Users/user/project/node_modules/pkg/index.js": `
+				export let foo = 'foo'
+				export let bar = 'bar'
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/src/main.ts"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
 			AbsOutputDir: "/Users/user/project/out",
 		},
 	})

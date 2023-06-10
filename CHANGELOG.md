@@ -2,11 +2,21 @@
 
 ## Unreleased
 
+* Fill in `null` entries in input source maps ([#3144](https://github.com/evanw/esbuild/issues/3144))
+
+    If esbuild bundles input files with source maps and those source maps contain a `sourcesContent` array with `null` entries, esbuild previously copied those `null` entries over to the output source map. With this release, esbuild will now attempt to fill in those `null` entries by looking for a file on the file system with the corresponding name from the `sources` array. This matches esbuild's existing behavior that automatically generates the `sourcesContent` array from the file system if the entire `sourcesContent` array is missing.
+
+## 0.18.0
+
+**This release deliberately contains backwards-incompatible changes.** To avoid automatically picking up releases like this, you should either be pinning the exact version of `esbuild` in your `package.json` file (recommended) or be using a version range syntax that only accepts patch upgrades such as `^0.17.0` or `~0.17.0`. See npm's documentation about [semver](https://docs.npmjs.com/cli/v6/using-npm/semver/) for more information.
+
+The breaking changes in this release mainly focus on fixing some long-standing issues with esbuild's handling of `tsconfig.json` files. Here are all the changes in this release, in detail:
+
 * Add a way to try esbuild online ([#797](https://github.com/evanw/esbuild/issues/797))
 
     There is now a way to try esbuild live on esbuild's website without installing it: https://esbuild.github.io/try/. In addition to being able to more easily evaluate esbuild, this should also make it more efficient to generate esbuild bug reports. For example, you can use it to compare the behavior of different versions of esbuild on the same input. The state of the page is stored in the URL for easy sharing. Many thanks to [@hyrious](https://github.com/hyrious) for creating https://hyrious.me/esbuild-repl/, which was the main inspiration for this addition to esbuild's website.
 
-    Two forms of build options are supported: either CLI-style ([example](https://esbuild.github.io/try/#dAAwLjE3LjE5AC0tbG9hZGVyPXRzeCAtLW1pbmlmeQBsZXQgZWw6IEpTWC5FbGVtZW50ID0gPGRpdiAvPg)) or JS-style ([example](https://esbuild.github.io/try/#dAAwLjE3LjE5AHsKICBsb2FkZXI6ICd0c3gnLAogIG1pbmlmeTogdHJ1ZSwKfQBsZXQgZWw6IEpTWC5FbGVtZW50ID0gPGRpdiAvPg)). Both are converted into a JS object that's passed to esbuild's WebAssembly API. The CLI-style argument parser is a custom one that simulates shell quoting rules, and the JS-style argument parser is also custom and parses a superset of JSON (basically JSON5 + regular expressions). So argument parsing is an approximate simulation of what happens for real but hopefully it should be close enough.
+    Two forms of build options are supported: either CLI-style ([example](https://esbuild.github.io/try/#dAAwLjE3LjE5AC0tbG9hZGVyPXRzeCAtLW1pbmlmeSAtLXNvdXJjZW1hcABsZXQgZWw6IEpTWC5FbGVtZW50ID0gPGRpdiAvPg)) or JS-style ([example](https://esbuild.github.io/try/#dAAwLjE3LjE5AHsKICBsb2FkZXI6ICd0c3gnLAogIG1pbmlmeTogdHJ1ZSwKICBzb3VyY2VtYXA6IHRydWUsCn0AbGV0IGVsOiBKU1guRWxlbWVudCA9IDxkaXYgLz4)). Both are converted into a JS object that's passed to esbuild's WebAssembly API. The CLI-style argument parser is a custom one that simulates shell quoting rules, and the JS-style argument parser is also custom and parses a superset of JSON (basically JSON5 + regular expressions). So argument parsing is an approximate simulation of what happens for real but hopefully it should be close enough.
 
 * Changes to esbuild's `tsconfig.json` support ([#3019](https://github.com/evanw/esbuild/issues/3019)):
 
@@ -81,9 +91,33 @@
 
         TypeScript 5.0 added a new option called [`verbatimModuleSyntax`](https://www.typescriptlang.org/tsconfig#verbatimModuleSyntax) that deprecates and replaces two older options, `preserveValueImports` and `importsNotUsedAsValues`. Setting `verbatimModuleSyntax` to true in `tsconfig.json` tells esbuild to not drop unused import statements. Specifically esbuild now treats `"verbatimModuleSyntax": true` as if you had specified both `"preserveValueImports": true` and `"importsNotUsedAsValues": "preserve"`.
 
+    * Add multiple inheritance for `tsconfig.json` from TypeScript 5.0
+
+        TypeScript 5.0 now allows [multiple inheritance for `tsconfig.json` files](https://devblogs.microsoft.com/typescript/announcing-typescript-5-0/#supporting-multiple-configuration-files-in-extends). You can now pass an array of filenames via the `extends` parameter and your `tsconfig.json` will start off containing properties from all of those configuration files, in order. This release of esbuild adds support for this new TypeScript feature.
+
     * Remove support for `moduleSuffixes` ([#2395](https://github.com/evanw/esbuild/issues/2395))
 
         The community has requested that esbuild remove support for TypeScript's `moduleSuffixes` feature, so it has been removed in this release. Instead you can use esbuild's `--resolve-extensions=` feature to select which module suffix you want to build with.
+
+    * Apply `--tsconfig=` overrides to `stdin` and virtual files ([#385](https://github.com/evanw/esbuild/issues/385), [#2543](https://github.com/evanw/esbuild/issues/2543))
+
+        When you override esbuild's automatic `tsconfig.json` file detection with `--tsconfig=` to pass a specific `tsconfig.json` file, esbuild previously didn't apply these settings to source code passed via the `stdin` API option or to TypeScript files from plugins that weren't in the `file` namespace. This release changes esbuild's behavior so that settings from `tsconfig.json` also apply to these source code files as well.
+
+    * Support `--tsconfig-raw=` in build API calls ([#943](https://github.com/evanw/esbuild/issues/943), [#2440](https://github.com/evanw/esbuild/issues/2440))
+
+        Previously if you wanted to override esbuild's automatic `tsconfig.json` file detection, you had to create a new `tsconfig.json` file and pass the file name to esbuild via the `--tsconfig=` flag. With this release, you can now optionally use `--tsconfig-raw=` instead to pass the contents of `tsconfig.json` to esbuild directly instead of passing the file name. For example, you can now use `--tsconfig-raw={"compilerOptions":{"experimentalDecorators":true}}` to enable TypeScript experimental decorators directly using a command-line flag (assuming you escape the quotes correctly using your current shell's quoting rules). The `--tsconfig-raw=` flag previously only worked with transform API calls but with this release, it now works with build API calls too.
+
+    * Ignore all `tsconfig.json` files in `node_modules` ([#276](https://github.com/evanw/esbuild/issues/276), [#2386](https://github.com/evanw/esbuild/issues/2386))
+
+        This changes esbuild's behavior that applies `tsconfig.json` to all files in the subtree of the directory containing `tsconfig.json`. In version 0.12.7, esbuild started ignoring `tsconfig.json` files inside `node_modules` folders. The rationale is that people typically do this by mistake and that doing this intentionally is a rare use case that doesn't need to be supported. However, this change only applied to certain syntax-specific settings (e.g. `jsxFactory`) but did not apply to path resolution settings (e.g. `paths`). With this release, esbuild will now ignore all `tsconfig.json` files in `node_modules` instead of only ignoring certain settings.
+
+    * Ignore `tsconfig.json` when resolving paths within `node_modules` ([#2481](https://github.com/evanw/esbuild/issues/2481))
+
+        Previously fields in `tsconfig.json` related to path resolution (e.g. `paths`) were respected for all files in the subtree containing that `tsconfig.json` file, even within a nested `node_modules` subdirectory. This meant that a project's `paths` settings could potentially affect any bundled packages. With this release, esbuild will no longer use `tsconfig.json` settings during path resolution inside nested `node_modules` subdirectories.
+
+    * Prefer `.js` over `.ts` within `node_modules` ([#3019](https://github.com/evanw/esbuild/issues/3019))
+
+        The default list of implicit extensions that esbuild will try appending to import paths contains `.ts` before `.js`. This makes it possible to bundle TypeScript projects that reference other files in the project using extension-less imports (e.g. `./some-file` to load `./some-file.ts` instead of `./some-file.js`). However, this behavior is undesirable within `node_modules` directories. Some package authors publish both their original TypeScript code and their compiled JavaScript code side-by-side. In these cases, esbuild should arguably be using the compiled JavaScript files instead of the original TypeScript files because the TypeScript compilation settings for files within the package should be determined by the package author, not the user of esbuild. So with this release, esbuild will now prefer implicit `.js` extensions over `.ts` when searching for import paths within `node_modules`.
 
     These changes are intended to improve esbuild's compatibility with `tsc` and reduce the number of unfortunate behaviors regarding `tsconfig.json` and esbuild.
 
