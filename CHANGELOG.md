@@ -1,10 +1,223 @@
 # Changelog
 
-## Unreleased
+## 0.18.4
+
+* Bundling no longer unnecessarily transforms class syntax ([#1360](https://github.com/evanw/esbuild/issues/1360), [#1328](https://github.com/evanw/esbuild/issues/1328), [#1524](https://github.com/evanw/esbuild/issues/1524), [#2416](https://github.com/evanw/esbuild/issues/2416))
+
+    When bundling, esbuild automatically converts top-level class statements to class expressions. Previously this conversion had the unfortunate side-effect of also transforming certain other class-related syntax features to avoid correctness issues when the references to the class name within the class body. This conversion has been reworked to avoid doing this:
+
+    ```js
+    // Original code
+    export class Foo {
+      static foo = () => Foo
+    }
+
+    // Old output (with --bundle)
+    var _Foo = class {
+    };
+    var Foo = _Foo;
+    __publicField(Foo, "foo", () => _Foo);
+
+    // New output (with --bundle)
+    var Foo = class _Foo {
+      static foo = () => _Foo;
+    };
+    ```
+
+    This conversion process is very complicated and has many edge cases (including interactions with static fields, static blocks, private class properties, and TypeScript experimental decorators). It should already be pretty robust but a change like this may introduce new unintentional behavior. Please report any issues with this upgrade on the esbuild bug tracker.
+
+    You may be wondering why esbuild needs to do this at all. One reason to do this is that esbuild's bundler sometimes needs to lazily-evaluate a module. For example, a module may end up being both the target of a dynamic `import()` call and a static `import` statement. Lazy module evaluation is done by wrapping the top-level module code in a closure. To avoid a performance hit for static `import` statements, esbuild stores top-level exported symbols outside of the closure and references them directly instead of indirectly.
+
+    Another reason to do this is that multiple JavaScript VMs have had and continue to have performance issues with TDZ (i.e. "temporal dead zone") checks. These checks validate that a let, or const, or class symbol isn't used before it's initialized. Here are two issues with well-known VMs:
+
+    * V8: https://bugs.chromium.org/p/v8/issues/detail?id=13723 (10% slowdown)
+    * JavaScriptCore: https://bugs.webkit.org/show_bug.cgi?id=199866 (1,000% slowdown!)
+
+    JavaScriptCore had a severe performance issue as their TDZ implementation had time complexity that was quadratic in the number of variables needing TDZ checks in the same scope (with the top-level scope typically being the worst offender). V8 has ongoing issues with TDZ checks being present throughout the code their JIT generates even when they have already been checked earlier in the same function or when the function in question has already been run (so the checks have already happened).
+
+    Due to esbuild's parallel architecture, esbuild both a) needs to convert class statements into class expressions during parsing and b) doesn't yet know whether this module will need to be lazily-evaluated or not in the parser. So esbuild always does this conversion during bundling in case it's needed for correctness (and also to avoid potentially catastrophic performance issues due to bundling creating a large scope with many TDZ variables).
+
+* Enforce TDZ errors in computed class property keys ([#2045](https://github.com/evanw/esbuild/issues/2045))
+
+    JavaScript allows class property keys to be generated at run-time using code, like this:
+
+    ```js
+    class Foo {
+      static foo = 'foo'
+      static [Foo.foo + '2'] = 2
+    }
+    ```
+
+    Previously esbuild treated references to the containing class name within computed property keys as a reference to the partially-initialized class object. That meant code that attempted to reference properties of the class object (such as the code above) would get back `undefined` instead of throwing an error.
+
+    This release rewrites references to the containing class name within computed property keys into code that always throws an error at run-time, which is how this JavaScript code is supposed to work. Code that does this will now also generate a warning. You should never write code like this, but it now should be more obvious when incorrect code like this is written.
+
+* Fix an issue with experimental decorators and static fields ([#2629](https://github.com/evanw/esbuild/issues/2629))
+
+    This release also fixes a bug regarding TypeScript experimental decorators and static class fields which reference the enclosing class name in their initializer. This affected top-level classes when bundling was enabled. Previously code that does this could crash because the class name wasn't initialized yet. This case should now be handled correctly:
+
+    ```ts
+    // Original code
+    class Foo {
+      @someDecorator
+      static foo = 'foo'
+      static bar = Foo.foo.length
+    }
+
+    // Old output
+    const _Foo = class {
+      static foo = "foo";
+      static bar = _Foo.foo.length;
+    };
+    let Foo = _Foo;
+    __decorateClass([
+      someDecorator
+    ], Foo, "foo", 2);
+
+    // New output
+    const _Foo = class _Foo {
+      static foo = "foo";
+      static bar = _Foo.foo.length;
+    };
+    __decorateClass([
+      someDecorator
+    ], _Foo, "foo", 2);
+    let Foo = _Foo;
+    ```
+
+* Fix a minification regression with negative numeric properties ([#3169](https://github.com/evanw/esbuild/issues/3169))
+
+    Version 0.18.0 introduced a regression where computed properties with negative numbers were incorrectly shortened into a non-computed property when minification was enabled. This regression has been fixed:
+
+    ```js
+    // Original code
+    x = {
+      [1]: 1,
+      [-1]: -1,
+      [NaN]: NaN,
+      [Infinity]: Infinity,
+      [-Infinity]: -Infinity,
+    }
+
+    // Old output (with --minify)
+    x={1:1,-1:-1,NaN:NaN,1/0:1/0,-1/0:-1/0};
+
+    // New output (with --minify)
+    x={1:1,[-1]:-1,NaN:NaN,[1/0]:1/0,[-1/0]:-1/0};
+    ```
+
+## 0.18.3
+
+* Fix a panic due to empty static class blocks ([#3161](https://github.com/evanw/esbuild/issues/3161))
+
+    This release fixes a bug where an internal invariant that was introduced in the previous release was sometimes violated, which then caused a panic. It happened when bundling code containing an empty static class block with both minification and bundling enabled.
+
+## 0.18.2
+
+* Lower static blocks when static fields are lowered ([#2800](https://github.com/evanw/esbuild/issues/2800), [#2950](https://github.com/evanw/esbuild/issues/2950), [#3025](https://github.com/evanw/esbuild/issues/3025))
+
+    This release fixes a bug where esbuild incorrectly did not lower static class blocks when static class fields needed to be lowered. For example, the following code should print `1 2 3` but previously printed `2 1 3` instead due to this bug:
+
+    ```js
+    // Original code
+    class Foo {
+      static x = console.log(1)
+      static { console.log(2) }
+      static y = console.log(3)
+    }
+
+    // Old output (with --supported:class-static-field=false)
+    class Foo {
+      static {
+        console.log(2);
+      }
+    }
+    __publicField(Foo, "x", console.log(1));
+    __publicField(Foo, "y", console.log(3));
+
+    // New output (with --supported:class-static-field=false)
+    class Foo {
+    }
+    __publicField(Foo, "x", console.log(1));
+    console.log(2);
+    __publicField(Foo, "y", console.log(3));
+    ```
+
+* Use static blocks to implement `--keep-names` on classes ([#2389](https://github.com/evanw/esbuild/issues/2389))
+
+    This change fixes a bug where the `name` property could previously be incorrect within a class static context when using `--keep-names`. The problem was that the `name` property was being initialized after static blocks were run instead of before. This has been fixed by moving the `name` property initializer into a static block at the top of the class body:
+
+    ```js
+    // Original code
+    if (typeof Foo === 'undefined') {
+      let Foo = class {
+        static test = this.name
+      }
+      console.log(Foo.test)
+    }
+
+    // Old output (with --keep-names)
+    if (typeof Foo === "undefined") {
+      let Foo2 = /* @__PURE__ */ __name(class {
+        static test = this.name;
+      }, "Foo");
+      console.log(Foo2.test);
+    }
+
+    // New output (with --keep-names)
+    if (typeof Foo === "undefined") {
+      let Foo2 = class {
+        static {
+          __name(this, "Foo");
+        }
+        static test = this.name;
+      };
+      console.log(Foo2.test);
+    }
+    ```
+
+    This change was somewhat involved, especially regarding what esbuild considers to be side-effect free. Some unused classes that weren't removed by tree shaking in previous versions of esbuild may now be tree-shaken. One example is classes with static private fields that are transformed by esbuild into code that doesn't use JavaScript's private field syntax. Previously esbuild's tree shaking analysis ran on the class after syntax lowering, but with this release it will run on the class before syntax lowering, meaning it should no longer be confused by class mutations resulting from automatically-generated syntax lowering code.
+
+## 0.18.1
 
 * Fill in `null` entries in input source maps ([#3144](https://github.com/evanw/esbuild/issues/3144))
 
     If esbuild bundles input files with source maps and those source maps contain a `sourcesContent` array with `null` entries, esbuild previously copied those `null` entries over to the output source map. With this release, esbuild will now attempt to fill in those `null` entries by looking for a file on the file system with the corresponding name from the `sources` array. This matches esbuild's existing behavior that automatically generates the `sourcesContent` array from the file system if the entire `sourcesContent` array is missing.
+
+* Support `/* @__KEY__ */` comments for mangling property names ([#2574](https://github.com/evanw/esbuild/issues/2574))
+
+    Property mangling is an advanced feature that enables esbuild to minify certain property names, even though it's not possible to automatically determine that it's safe to do so. The safe property names are configured via regular expression such as `--mangle-props=_$` (mangle all properties ending in `_`).
+
+    Sometimes it's desirable to also minify strings containing property names, even though it's not possible to automatically determine which strings are property names. This release makes it possible to do this by annotating those strings with `/* @__KEY__ */`. This is a convention that Terser added earlier this year, and which esbuild is now following too: https://github.com/terser/terser/pull/1365. Using it looks like this:
+
+    ```js
+    // Original code
+    console.log(
+      [obj.mangle_, obj.keep],
+      [obj.get('mangle_'), obj.get('keep')],
+      [obj.get(/* @__KEY__ */ 'mangle_'), obj.get(/* @__KEY__ */ 'keep')],
+    )
+
+    // Old output (with --mangle-props=_$)
+    console.log(
+      [obj.a, obj.keep],
+      [obj.get("mangle_"), obj.get("keep")],
+      [obj.get(/* @__KEY__ */ "mangle_"), obj.get(/* @__KEY__ */ "keep")]
+    );
+
+    // New output (with --mangle-props=_$)
+    console.log(
+      [obj.a, obj.keep],
+      [obj.get("mangle_"), obj.get("keep")],
+      [obj.get(/* @__KEY__ */ "a"), obj.get(/* @__KEY__ */ "keep")]
+    );
+    ```
+
+* Support `/* @__NO_SIDE_EFFECTS__ */` comments for functions ([#3149](https://github.com/evanw/esbuild/issues/3149))
+
+    Rollup has recently added support for `/* @__NO_SIDE_EFFECTS__ */` annotations before functions to indicate that calls to these functions can be removed if the result is unused (i.e. the calls can be assumed to have no side effects). This release adds basic support for these to esbuild as well, which means esbuild will now parse these comments in input files and preserve them in output files. This should help people that use esbuild in combination with Rollup.
+
+    Note that this doesn't necessarily mean esbuild will treat these calls as having no side effects, as esbuild's parallel architecture currently isn't set up to enable this type of cross-file tree-shaking information (tree-shaking decisions regarding a function call are currently local to the file they appear in). If you want esbuild to consider a function call to have no side effects, make sure you continue to annotate the function call with `/* @__PURE__ */` (which is the previously-established convention for communicating this).
 
 ## 0.18.0
 

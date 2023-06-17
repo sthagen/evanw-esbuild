@@ -431,6 +431,16 @@ func TestLowerClassStatic(t *testing.T) {
 let Bar = (_a = class {
 }, __publicField(_a, "foo", 123), __publicField(_a, "bar", _a.foo), _a);
 `)
+
+	// Generated IIFEs for static class blocks should be appropriately annotated
+	expectPrintedTarget(t, 2015, "class Foo { static { try {} finally { impureCall() } } }",
+		"class Foo {\n}\n(() => {\n  try {\n  } finally {\n    impureCall();\n  }\n})();\n")
+	expectPrintedTarget(t, 2015, "(class Foo { static { try {} finally { impureCall() } } })",
+		"var _a;\n_a = class {\n}, (() => {\n  try {\n  } finally {\n    impureCall();\n  }\n})(), _a;\n")
+	expectPrintedTarget(t, 2015, "class Foo { static { try {} finally { /* @__PURE__ */ pureCall() } } }",
+		"class Foo {\n}\n/* @__PURE__ */ (() => {\n  try {\n  } finally {\n    /* @__PURE__ */ pureCall();\n  }\n})();\n")
+	expectPrintedTarget(t, 2015, "(class Foo { static { try {} finally { /* @__PURE__ */ pureCall() } } })",
+		"var _a;\n_a = class {\n}, /* @__PURE__ */ (() => {\n  try {\n  } finally {\n    /* @__PURE__ */ pureCall();\n  }\n})(), _a;\n")
 }
 
 func TestLowerClassStaticThis(t *testing.T) {
@@ -466,9 +476,9 @@ func TestLowerClassStaticThis(t *testing.T) {
 	expectPrintedTarget(t, 2015, "class Foo { [this.x] }",
 		"var _a;\nclass Foo {\n  constructor() {\n    __publicField(this, _a);\n  }\n}\n_a = this.x;\n")
 	expectPrintedTarget(t, 2015, "class Foo { static x = this }",
-		"const _Foo = class {\n};\nlet Foo = _Foo;\n__publicField(Foo, \"x\", _Foo);\n")
+		"const _Foo = class _Foo {\n};\n__publicField(_Foo, \"x\", _Foo);\nlet Foo = _Foo;\n")
 	expectPrintedTarget(t, 2015, "class Foo { static x = () => this }",
-		"const _Foo = class {\n};\nlet Foo = _Foo;\n__publicField(Foo, \"x\", () => _Foo);\n")
+		"const _Foo = class _Foo {\n};\n__publicField(_Foo, \"x\", () => _Foo);\nlet Foo = _Foo;\n")
 	expectPrintedTarget(t, 2015, "class Foo { static x = function() { return this } }",
 		"class Foo {\n}\n__publicField(Foo, \"x\", function() {\n  return this;\n});\n")
 	expectPrintedTarget(t, 2015, "class Foo { static [this.x] }",
@@ -476,9 +486,9 @@ func TestLowerClassStaticThis(t *testing.T) {
 	expectPrintedTarget(t, 2015, "class Foo { static x = class { y = this } }",
 		"class Foo {\n}\n__publicField(Foo, \"x\", class {\n  constructor() {\n    __publicField(this, \"y\", this);\n  }\n});\n")
 	expectPrintedTarget(t, 2015, "class Foo { static x = class { [this.y] } }",
-		"var _a, _b;\nconst _Foo = class {\n};\nlet Foo = _Foo;\n__publicField(Foo, \"x\", (_b = class {\n  constructor() {\n    __publicField(this, _a);\n  }\n}, _a = _Foo.y, _b));\n")
+		"var _a, _b;\nconst _Foo = class _Foo {\n};\n__publicField(_Foo, \"x\", (_b = class {\n  constructor() {\n    __publicField(this, _a);\n  }\n}, _a = _Foo.y, _b));\nlet Foo = _Foo;\n")
 	expectPrintedTarget(t, 2015, "class Foo { static x = class extends this {} }",
-		"const _Foo = class {\n};\nlet Foo = _Foo;\n__publicField(Foo, \"x\", class extends _Foo {\n});\n")
+		"const _Foo = class _Foo {\n};\n__publicField(_Foo, \"x\", class extends _Foo {\n});\nlet Foo = _Foo;\n")
 
 	expectPrintedTarget(t, 2015, "x = class Foo { x = this }",
 		"x = class Foo {\n  constructor() {\n    __publicField(this, \"x\", this);\n  }\n};\n")
@@ -517,6 +527,18 @@ func TestLowerClassStaticThis(t *testing.T) {
 		"var _a, _b, _c;\nx = (_c = class {\n}, __publicField(_c, \"x\", (_b = class {\n  constructor() {\n    __publicField(this, _a);\n  }\n}, _a = _c.y, _b)), _c);\n")
 	expectPrintedTarget(t, 2015, "x = class Foo { static x = class extends this {} }",
 		"var _a;\nx = (_a = class {\n}, __publicField(_a, \"x\", class extends _a {\n}), _a);\n")
+}
+
+func TestLowerClassStaticBlocks(t *testing.T) {
+	expectPrintedTarget(t, 2015, "class Foo { static {} }", "class Foo {\n}\n")
+	expectPrintedTarget(t, 2015, "class Foo { static {} x() {} }", "class Foo {\n  x() {\n  }\n}\n")
+	expectPrintedTarget(t, 2015, "class Foo { x() {} static {} }", "class Foo {\n  x() {\n  }\n}\n")
+	expectPrintedTarget(t, 2015, "class Foo { static { x } static {} static { y } }", "class Foo {\n}\nx;\ny;\n")
+
+	expectPrintedMangleTarget(t, 2015, "class Foo { static {} }", "class Foo {\n}\n")
+	expectPrintedMangleTarget(t, 2015, "class Foo { static {} x() {} }", "class Foo {\n  x() {\n  }\n}\n")
+	expectPrintedMangleTarget(t, 2015, "class Foo { x() {} static {} }", "class Foo {\n  x() {\n  }\n}\n")
+	expectPrintedMangleTarget(t, 2015, "class Foo { static { x } static {} static { y } }", "class Foo {\n}\nx, y;\n")
 }
 
 func TestLowerOptionalChain(t *testing.T) {
