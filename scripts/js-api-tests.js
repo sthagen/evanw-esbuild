@@ -923,8 +923,8 @@ export {
     const names2 = result2.outputFiles.map(x => path.basename(x.path)).sort()
 
     // Check that the public path is included in chunk hashes but not asset hashes
-    assert.deepStrictEqual(names1, ['data-BYATPJRB.bin', 'in-OGEHLZ72.js'])
-    assert.deepStrictEqual(names2, ['data-BYATPJRB.bin', 'in-IF4VVJK4.js'])
+    assert.deepStrictEqual(names1, ['data-BYATPJRB.bin', 'in-IN5VRZMW.js'])
+    assert.deepStrictEqual(names2, ['data-BYATPJRB.bin', 'in-7HV645WS.js'])
   },
 
   async fileLoaderPublicPath({ esbuild, testDir }) {
@@ -6697,13 +6697,6 @@ class Foo {
   nonIdArrayRest: ({ esbuild }) => futureSyntax(esbuild, 'let [...[x]] = y', 'es2015', 'es2016'),
   topLevelAwait: ({ esbuild }) => futureSyntax(esbuild, 'await foo', 'es2020', 'esnext'),
   topLevelForAwait: ({ esbuild }) => futureSyntax(esbuild, 'for await (foo of bar) ;', 'es2020', 'esnext'),
-
-  // Future syntax: async generator functions
-  asyncGenFnStmt: ({ esbuild }) => futureSyntax(esbuild, 'async function* foo() {}', 'es2017', 'es2018'),
-  asyncGenFnExpr: ({ esbuild }) => futureSyntax(esbuild, '(async function*() {})', 'es2017', 'es2018'),
-  asyncGenObjFn: ({ esbuild }) => futureSyntax(esbuild, '({ async* foo() {} })', 'es2017', 'es2018'),
-  asyncGenClassStmtFn: ({ esbuild }) => futureSyntax(esbuild, 'class Foo { async* foo() {} }', 'es2017', 'es2018'),
-  asyncGenClassExprFn: ({ esbuild }) => futureSyntax(esbuild, '(class { async* foo() {} })', 'es2017', 'es2018'),
 }
 
 function registerClassPrivateTests(target) {

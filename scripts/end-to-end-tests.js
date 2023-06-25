@@ -524,66 +524,471 @@ tests.push(
   }),
 )
 
-// Check for await lowering
-tests.push(
-  // return() must not be called in this case (TypeScript has this bug: https://github.com/microsoft/TypeScript/issues/50525)
-  test(['in.js', '--outfile=node.js', '--target=es6'], {
-    'in.js': `
-      let pass = true
-      async function f() {
-        const y = {
-          [Symbol.asyncIterator]() {
-            let count = 0
-            return {
-              async next() {
-                count++
-                if (count === 2) throw 'error'
-                return { value: count }
-              },
-              async return() {
-                pass = false
-              },
+// Check async generator lowering
+for (const flags of [[], ['--target=es6', '--target=es2017', '--supported:async-generator=false', '--supported:async-await=false']]) {
+  tests.push(
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        function* x() {
+          yield 1
+          yield 2
+          return 3
+        }
+        async function y(arg) {
+          return -(await Promise.resolve(arg))
+        }
+        async function* z(arg) {
+          yield 1
+          yield Promise.resolve(2)
+          yield* [3, Promise.resolve(4)]
+          yield* {
+            [Symbol.iterator]() {
+              var value = 5
+              return { next: () => ({ value, done: value++ > 6 }) }
             }
-          },
+          }
+          yield* {
+            [Symbol.asyncIterator]() {
+              var value = 7
+              return { next: async () => ({ value, done: value++ > 8 }) }
+            }
+          }
+          return -(await Promise.resolve(arg))
         }
-        for await (let x of y) {
-        }
-      }
-      f().catch(() => {
-        if (!pass) throw 'fail'
-      })
-    `,
-  }),
+        export let async = async () => {
+          let state
 
-  // return() must be called in this case
-  test(['in.js', '--outfile=node.js', '--target=es6'], {
-    'in.js': `
-      let pass = false
-      async function f() {
-        const y = {
-          [Symbol.asyncIterator]() {
-            let count = 0
-            return {
-              async next() {
-                count++
-                return { value: count }
-              },
-              async return() {
-                pass = true
-              },
+          const X = x()
+          if (X[Symbol.iterator]() !== X) throw 'fail: x Symbol.iterator'
+          if (Symbol.asyncIterator in X) throw 'fail: x Symbol.asyncIterator'
+          state = X.next(); if (state.done !== false || state.value !== 1) throw 'fail: x 1: ' + JSON.stringify(state)
+          state = X.next(); if (state.done !== false || state.value !== 2) throw 'fail: x 2: ' + JSON.stringify(state)
+          state = X.next(); if (state.done !== true || state.value !== 3) throw 'fail: x 3: ' + JSON.stringify(state)
+
+          const Y = y(123)
+          if (Symbol.iterator in Y) throw 'fail: y Symbol.iterator'
+          if (Symbol.asyncIterator in Y) throw 'fail: y Symbol.asyncIterator'
+          if (await Y !== -123) throw 'fail: y'
+
+          const Z = z(123)
+          if (Symbol.iterator in Z) throw 'fail: z Symbol.iterator'
+          if (Z[Symbol.asyncIterator]() !== Z) throw 'fail: z Symbol.asyncIterator'
+          state = await Z.next(); if (state.done !== false || state.value !== 1) throw 'fail: z 1: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 2) throw 'fail: z 2: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 3) throw 'fail: z 3: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 4) throw 'fail: z 4: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 5) throw 'fail: z 5: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 6) throw 'fail: z 6: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 7) throw 'fail: z 7: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== false || state.value !== 8) throw 'fail: z 8: ' + JSON.stringify(state)
+          state = await Z.next(); if (state.done !== true || state.value !== -123) throw 'fail: z 123: ' + JSON.stringify(state)
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.asyncIterator]: () => ({ next() { throw 'f' } })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next(); throw 'fail: f: next' } catch (err) { if (err !== 'f') throw err }
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.asyncIterator]: () => ({ get next() { throw 'f' } })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next(); throw 'fail: f: next' } catch (err) { if (err !== 'f') throw err }
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.asyncIterator]: () => ({ async next() { throw 'f' } })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next(); throw 'fail: f: next' } catch (err) { if (err !== 'f') throw err }
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          try {
+            yield* {
+              [Symbol.asyncIterator]: () => ({
+                next: () => ({
+                  done: false,
+                  get value() { throw 'f' }
+                })
+              }),
             }
-          },
+          } catch (e) {
+            return e
+          }
         }
-        for await (let x of y) {
-          throw 'error'
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next()
+          if (state.done !== true || state.value !== 'f') throw 'fail: f: next'
         }
-      }
-      f().catch(() => {
-        if (!pass) throw 'fail'
-      })
-    `,
-  }),
-)
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* [
+            Promise.reject('f.x'),
+            'f.y',
+          ]
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next(); throw 'fail: f: next' } catch (err) { if (err !== 'f.x') throw err }
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.iterator]: () => ({ next: () => 123 }),
+          }
+          return 'f'
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next(); throw 'fail: f: next' } catch (err) { if (!(err instanceof TypeError)) throw err }
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.asyncIterator]: () => ({ next: () => 123 }),
+          }
+          return 'f'
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next(); throw 'fail: f: next' } catch (err) { if (!(err instanceof TypeError)) throw err }
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* [
+            'f.x',
+            'f.y',
+          ]
+          return 'f'
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next()
+          if (state.done !== false || state.value !== 'f.x') throw 'fail: f: next'
+          try { await it.throw('f: throw') } catch (err) { var error = err }
+          if (error !== 'f: throw') throw 'fail: f: ' + error
+          state = await it.next()
+          if (state.done !== true || state.value !== void 0) throw 'fail: f: done'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.iterator]: () => ({
+              next: a => ({ value: 'f.x.' + a, done: false }),
+              return: a => ({ value: 'f.y.' + a, done: true }),
+            })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next('A')
+          if (state.done !== false || state.value !== 'f.x.undefined') throw 'fail: f: next'
+          state = await it.return('B')
+          if (state.done !== true || state.value !== 'f.y.B') throw 'fail: f: return'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.asyncIterator]: () => ({
+              next: a => Promise.resolve({ value: 'f.x.' + a, done: false }),
+              return: a => Promise.resolve({ value: 'f.y.' + a, done: true }),
+            })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next('A')
+          if (state.done !== false || state.value !== 'f.x.undefined') throw 'fail: f: next'
+          state = await it.return('B')
+          if (state.done !== true || state.value !== 'f.y.B') throw 'fail: f: return'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.iterator]: () => ({
+              next: a => ({ value: 'f.x.' + a, done: false }),
+              throw: a => ({ value: 'f.y.' + a, done: true }),
+            })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next('A')
+          if (state.done !== false || state.value !== 'f.x.undefined') throw 'fail: f: next'
+          state = await it.throw('B')
+          if (state.done !== true || state.value !== undefined) throw 'fail: f: throw'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          yield* {
+            [Symbol.asyncIterator]: () => ({
+              next: a => Promise.resolve({ value: 'f.x.' + a, done: false }),
+              throw: a => Promise.resolve({ value: 'f.y.' + a, done: true }),
+            })
+          }
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next('A')
+          if (state.done !== false || state.value !== 'f.x.undefined') throw 'fail: f: next'
+          state = await it.throw('B')
+          if (state.done !== true || state.value !== undefined) throw 'fail: f: throw'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          var value = 0
+          yield* {
+            [Symbol.iterator]: () => ({ next: () => ({ done: value > 10, value: value += 100 }) }),
+            get [Symbol.asyncIterator]() { value += 10; return undefined },
+          }
+          return value
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next(); if (state.done !== false || state.value !== 110) throw 'fail: f 110: ' + JSON.stringify(state)
+          state = await it.next(); if (state.done !== true || state.value !== 210) throw 'fail: f 210: ' + JSON.stringify(state)
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          var value = 0
+          yield* {
+            [Symbol.iterator]: () => ({ next: () => ({ done: value > 10, value: value += 100 }) }),
+            get [Symbol.asyncIterator]() { value += 10; return null },
+          }
+          return value
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          state = await it.next(); if (state.done !== false || state.value !== 110) throw 'fail: f 110: ' + JSON.stringify(state)
+          state = await it.next(); if (state.done !== true || state.value !== 210) throw 'fail: f 210: ' + JSON.stringify(state)
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          var value = 0
+          yield* {
+            [Symbol.iterator]: () => ({ next: () => ({ done: value > 10, value: value += 100 }) }),
+            get [Symbol.asyncIterator]() { value += 10; return false },
+          }
+          return value
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next() } catch (e) { var error = e }
+          if (!(error instanceof TypeError)) throw 'fail: f'
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        async function* f() {
+          var value = 0
+          yield* {
+            [Symbol.iterator]: () => ({ next: () => ({ done: value > 10, value: value += 100 }) }),
+            get [Symbol.asyncIterator]() { value += 10; return 0 },
+          }
+          return value
+        }
+        export let async = async () => {
+          let it, state
+          it = f()
+          try { await it.next() } catch (e) { var error = e }
+          if (!(error instanceof TypeError)) throw 'fail: f'
+        }
+      `,
+    }, { async: true }),
+  )
+}
+
+// Check "for await" lowering
+for (const flags of [[], ['--target=es6', '--target=es2017', '--supported:for-await=false']]) {
+  tests.push(
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        export let async = async () => {
+          const log = []
+          const it = {
+            [Symbol.iterator]() { return this },
+            next() { log.push(this === it && 'next'); return { value: 123, done: false } },
+            return() { log.push(this === it && 'return') },
+          }
+          try {
+            for await (const x of it) {
+              if (x !== 123) throw 'fail: ' + x
+              throw 'foo'
+            }
+          } catch (err) {
+            if (err !== 'foo') throw err
+          }
+          if (log + '' !== 'next,return') throw 'fail: ' + log
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        export let async = async () => {
+          const log = []
+          const it = {
+            [Symbol.asyncIterator]() { return this },
+            async next() { log.push(this === it && 'next'); return { value: 123, done: false } },
+            async return() { log.push(this === it && 'return') },
+          }
+          try {
+            for await (const x of it) {
+              if (x !== 123) throw 'fail: ' + x
+              throw 'foo'
+            }
+          } catch (err) {
+            if (err !== 'foo') throw err
+          }
+          if (log + '' !== 'next,return') throw 'fail: ' + log
+        }
+      `,
+    }, { async: true }),
+
+    // return() must not be called in this case (TypeScript has this bug: https://github.com/microsoft/TypeScript/issues/50525)
+    test(['in.js', '--outfile=node.js'].concat(flags), {
+      'in.js': `
+        let pass = true
+        async function f() {
+          const y = {
+            [Symbol.asyncIterator]() {
+              let count = 0
+              return {
+                async next() {
+                  count++
+                  if (count === 2) throw 'error'
+                  return { value: count }
+                },
+                async return() {
+                  pass = false
+                },
+              }
+            },
+          }
+          for await (let x of y) {
+          }
+        }
+        f().catch(() => {
+          if (!pass) throw 'fail'
+        })
+      `,
+    }),
+
+    // return() must be called in this case
+    test(['in.js', '--outfile=node.js'].concat(flags), {
+      'in.js': `
+        let pass = false
+        async function f() {
+          const y = {
+            [Symbol.asyncIterator]() {
+              let count = 0
+              return {
+                async next() {
+                  count++
+                  return { value: count }
+                },
+                async return() {
+                  pass = true
+                },
+              }
+            },
+          }
+          for await (let x of y) {
+            throw 'error'
+          }
+        }
+        f().catch(() => {
+          if (!pass) throw 'fail'
+        })
+      `,
+    }),
+  )
+}
 
 // Check object rest lowering
 // https://github.com/evanw/esbuild/issues/956
@@ -2996,6 +3401,22 @@ for (const minify of [[], ['--minify-syntax']]) {
       `,
     }),
   );
+
+  // https://github.com/evanw/esbuild/issues/3125
+  tests.push(
+    test(['in.js', '--outfile=node.js'].concat(minify), {
+      'in.js': `
+        let y
+        {
+          // There was a bug where this incorrectly turned into "y = (() => x)()"
+          const f = () => x;
+          const x = 0;
+          y = f()
+        }
+        if (y !== 0) throw 'fail'
+      `,
+    }),
+  )
 }
 
 // Test minification of top-level symbols
@@ -3552,6 +3973,43 @@ tests.push(
       if (!sideEffect) throw 'fail'
     `,
   }),
+
+  // Keep because side effects (decorators)
+  test(['--bundle', 'entry.ts', '--outfile=node.js', '--target=es2022'], {
+    'entry.ts': `
+      import { order } from './decorator'
+      import './class'
+      import './field'
+      import './method'
+      import './accessor'
+      import './parameter'
+      import './static-field'
+      import './static-method'
+      import './static-accessor'
+      import './static-parameter'
+      if (order + '' !== ',field,method,accessor,parameter,staticField,staticMethod,staticAccessor,staticParameter') throw 'fail: ' + order
+    `,
+    'decorator.ts': `
+      export const order = []
+      export const fn = (_, name) => {
+        order.push(name)
+      }
+    `,
+    'class.ts': `import { fn } from './decorator'; @fn class Foo {}`,
+    'field.ts': `import { fn } from './decorator'; class Foo { @fn field }`,
+    'method.ts': `import { fn } from './decorator'; class Foo { @fn method() {} }`,
+    'accessor.ts': `import { fn } from './decorator'; class Foo { @fn accessor accessor }`,
+    'parameter.ts': `import { fn } from './decorator'; class Foo { parameter(@fn arg) {} }`,
+    'static-field.ts': `import { fn } from './decorator'; class Foo { @fn static staticField }`,
+    'static-method.ts': `import { fn } from './decorator'; class Foo { @fn static staticMethod() {} }`,
+    'static-accessor.ts': `import { fn } from './decorator'; class Foo { @fn static accessor staticAccessor }`,
+    'static-parameter.ts': `import { fn } from './decorator'; class Foo { static staticParameter(@fn arg) {} }`,
+    'tsconfig.json': `{
+      "compilerOptions": {
+        "experimentalDecorators": true
+      }
+    }`,
+  }),
 )
 
 // Test obscure CommonJS symbol edge cases
@@ -3620,7 +4078,7 @@ for (let [code, expected] of [
 }
 
 // Class lowering tests
-for (let flags of [[], ['--target=es6'], ['--bundle'], ['--bundle', '--target=es6']]) {
+for (let flags of [['--target=es2022'], ['--target=es6'], ['--bundle', '--target=es2022'], ['--bundle', '--target=es6']]) {
   // Skip running these tests untransformed. I believe V8 actually has a bug
   // here and esbuild is correct, both because SpiderMonkey and JavaScriptCore
   // run this code fine and because the specification says that the left operand
@@ -3971,6 +4429,20 @@ for (let flags of [[], ['--target=es6'], ['--bundle'], ['--bundle', '--target=es
         let foo = new Foo()
         if (setterCalls !== 0 || !foo.hasOwnProperty('key') || foo.key !== void 0) throw 'fail'
       `,
+    }, {
+      expectedStderr: `▲ [WARNING] Duplicate member "key" in class body [duplicate-class-member]
+
+    in.js:5:14:
+      5 │           set key(x) { setterCalls++ }
+        ╵               ~~~
+
+  The original member "key" is here:
+
+    in.js:4:10:
+      4 │           key
+        ╵           ~~~
+
+`,
     }),
     test(['in.js', '--outfile=node.js'].concat(flags), {
       'in.js': `
@@ -3982,6 +4454,20 @@ for (let flags of [[], ['--target=es6'], ['--bundle'], ['--bundle', '--target=es
         let foo = new Foo()
         if (setterCalls !== 0 || !foo.hasOwnProperty('key') || foo.key !== 123) throw 'fail'
       `,
+    }, {
+      expectedStderr: `▲ [WARNING] Duplicate member "key" in class body [duplicate-class-member]
+
+    in.js:5:14:
+      5 │           set key(x) { setterCalls++ }
+        ╵               ~~~
+
+  The original member "key" is here:
+
+    in.js:4:10:
+      4 │           key = 123
+        ╵           ~~~
+
+`,
     }),
     test(['in.js', '--outfile=node.js'].concat(flags), {
       'in.js': `
@@ -4585,6 +5071,49 @@ for (let flags of [[], ['--target=es6'], ['--bundle'], ['--bundle', '--target=es
       `,
     }),
 
+    // Check side effect order of computed properties with assign semantics
+    test(['in.ts', '--outfile=node.js'].concat(flags), {
+      'in.ts': `
+        const order = []
+        const check = x => {
+          order.push(x)
+          return x
+        }
+        class Foo {
+          [check('a')]() {}
+          [check('b')];
+          [check('c')] = 1;
+          [check('d')]() {}
+          static [check('e')];
+          static [check('f')] = 2;
+          static [check('g')]() {}
+          [check('h')];
+        }
+        class Bar {
+          // Use a class with a single static field to check that the computed
+          // key isn't deferred outside of the class body while the initializer
+          // is left inside.
+          static [check('i')] = 3
+        }
+        if (order + '' !== 'a,b,c,d,e,f,g,h,i') throw 'fail: ' + order
+        const foo = new Foo
+        if (typeof foo.a !== 'function') throw 'fail: a'
+        if ('b' in foo) throw 'fail: b'
+        if (foo.c !== 1) throw 'fail: c'
+        if (typeof foo.d !== 'function') throw 'fail: d'
+        if ('e' in Foo) throw 'fail: e'
+        if (Foo.f !== 2) throw 'fail: f'
+        if (typeof Foo.g !== 'function') throw 'fail: g'
+        if ('h' in foo) throw 'fail: h'
+        if (Bar.i !== 3) throw 'fail: i'
+      `,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "useDefineForClassFields": false,
+        },
+      }`,
+    }),
+
     // Check for the specific reference behavior of TypeScript's implementation
     // of "experimentalDecorators" with class decorators, which mutate the class
     // binding itself. This test passes on TypeScript's implementation.
@@ -4811,6 +5340,198 @@ for (let flags of [[], ['--target=es6'], ['--bundle'], ['--bundle', '--target=es
         try { temp = (class A { capture = () => A; static a = 1; static [A.a]() { return 2 } }) } catch (err) { staticMethod = err }
         if (!staticMethod) throw 'fail: staticMethod'
       `,
+    }),
+  )
+
+  // https://github.com/evanw/esbuild/issues/3177
+  const input3177 = `
+    const props: Record<number, string> = {}
+    const dec = (n: number) => (_: any, prop: string): void => {
+      props[n] = prop
+    }
+    class Foo {
+      @dec(1) prop1: any
+      @dec(2) prop2_: any
+      @dec(3) ['prop3']: any
+      @dec(4) ['prop4_']: any
+      @dec(5) [/* @__KEY__ */ 'prop5']: any
+      @dec(6) [/* @__KEY__ */ 'prop6_']: any
+    }
+    if (props[1] !== 'prop1') throw 'fail 1: ' + props[1]
+    if (props[2] !== /* @__KEY__ */ 'prop2_') throw 'fail 2: ' + props[2]
+    if (props[3] !== 'prop3') throw 'fail 3: ' + props[3]
+    if (props[4] !== 'prop4_') throw 'fail 4: ' + props[4]
+    if (props[5] !== 'prop5') throw 'fail 5: ' + props[5]
+    if (props[6] !== /* @__KEY__ */ 'prop6_') throw 'fail 6: ' + props[6]
+  `
+  tests.push(
+    test(['in.ts', '--outfile=node.js', '--mangle-props=_'].concat(flags), {
+      'in.ts': input3177,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "experimentalDecorators": true,
+          "useDefineForClassFields": true,
+        },
+      }`,
+    }),
+    test(['in.ts', '--outfile=node.js', '--mangle-props=_'].concat(flags), {
+      'in.ts': input3177,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "experimentalDecorators": true,
+          "useDefineForClassFields": false,
+        },
+      }`,
+    }),
+  )
+
+  // Test TypeScript experimental decorators and accessors
+  const experimentalDecoratorsAndAccessors = `
+    const log: string[] = []
+    const decorate = (target: any, key: string, descriptor: PropertyDescriptor): any => {
+      if (descriptor.get === void 0) throw 'fail: get ' + key
+      if (descriptor.set === void 0) throw 'fail: set ' + key
+      return {
+        get() {
+          const value = descriptor.get!.call(this)
+          log.push('get ' + key + ' ' + value)
+          return value
+        },
+        set(value: any) {
+          descriptor.set!.call(this, value)
+          log.push('set ' + key + ' ' + value)
+        },
+      }
+    }
+
+    // With esbuild's accessor syntax
+    class Foo {
+      @decorate accessor x = 1
+      @decorate static accessor y = 2
+    }
+    const foo = new Foo
+    if (++foo.x !== 2) throw 'fail: foo.x'
+    if (++Foo.y !== 3) throw 'fail: foo.y'
+    if (log + '' !== 'get x 1,set x 2,get y 2,set y 3') throw 'fail: foo ' + log
+
+    log.length = 0
+
+    // Without esbuild's accessor syntax (should be the same)
+    class Bar {
+      #x = 1
+      @decorate get x() { return this.#x }
+      set x(_) { this.#x = _ }
+      static #y = 2
+      @decorate static get y() { return this.#y }
+      static set y(_) { this.#y = _ }
+    }
+    const bar = new Bar
+    if (++bar.x !== 2) throw 'fail: bar.x'
+    if (++Bar.y !== 3) throw 'fail: Bar.y'
+    if (log + '' !== 'get x 1,set x 2,get y 2,set y 3') throw 'fail: bar ' + log
+  `
+  tests.push(
+    test(['in.ts', '--outfile=node.js'].concat(flags), {
+      'in.ts': experimentalDecoratorsAndAccessors,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "experimentalDecorators": true,
+          "useDefineForClassFields": true,
+        },
+      }`,
+    }),
+    test(['in.ts', '--outfile=node.js'].concat(flags), {
+      'in.ts': experimentalDecoratorsAndAccessors,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "experimentalDecorators": true,
+          "useDefineForClassFields": false,
+        },
+      }`,
+    }),
+  )
+
+  // Test class accessors
+  const classAccessorTest = `
+    const checkAccessor = (obj, key, value) => {
+      if (obj[key] !== value) throw 'fail: ' + key + ' get'
+      obj[key] = null
+      if (obj[key] !== null) throw 'fail: ' + key + ' set'
+    }
+
+    checkAccessor(new class { accessor undef }, 'undef')
+    checkAccessor(new class { accessor undef2; x = 0 }, 'undef2')
+    checkAccessor(new class { accessor def = 123 }, 'def', 123)
+    checkAccessor(new class { accessor def2 = 123; x = 0 }, 'def2', 123)
+
+    checkAccessor(class { static accessor staticUndef }, 'staticUndef')
+    checkAccessor(class { static accessor staticUndef2; x = 0 }, 'staticUndef2')
+    checkAccessor(class { static accessor staticDef = 123 }, 'staticDef', 123)
+    checkAccessor(class { static accessor staticDef2 = 123; x = 0 }, 'staticDef2', 123)
+
+    checkAccessor(new class { accessor #x; get privateUndef() { return this.#x } set privateUndef(_) { this.#x = _ } }, 'privateUndef')
+    checkAccessor(new class { accessor #x; get privateUndef2() { return this.#x } set privateUndef2(_) { this.#x = _ } x = 0 }, 'privateUndef2')
+    checkAccessor(new class { accessor #x = 123; get privateDef() { return this.#x } set privateDef(_) { this.#x = _ } }, 'privateDef', 123)
+    checkAccessor(new class { accessor #x = 123; get privateDef2() { return this.#x } set privateDef2(_) { this.#x = _ } x = 0 }, 'privateDef2', 123)
+
+    checkAccessor(class { static accessor #x; static get staticPrivateUndef() { return this.#x } static set staticPrivateUndef(_) { this.#x = _ } }, 'staticPrivateUndef')
+    checkAccessor(class { static accessor #x; static get staticPrivateUndef2() { return this.#x } static set staticPrivateUndef2(_) { this.#x = _ } x = 0 }, 'staticPrivateUndef2')
+    checkAccessor(class { static accessor #x = 123; static get staticPrivateDef() { return this.#x } static set staticPrivateDef(_) { this.#x = _ } }, 'staticPrivateDef', 123)
+    checkAccessor(class { static accessor #x = 123; static get staticPrivateDef2() { return this.#x } static set staticPrivateDef2(_) { this.#x = _ } x = 0 }, 'staticPrivateDef2', 123)
+
+    const order = []
+    const checkOrder = x => {
+      order.push(x)
+      return x
+    }
+    class Foo {
+      a = checkOrder(8)
+      #a = checkOrder(9)
+      accessor b = checkOrder(10)
+      accessor #b = checkOrder(11)
+      accessor [checkOrder(1)] = checkOrder(12)
+      static c = checkOrder(3)
+      static #c = checkOrder(4)
+      static accessor d = checkOrder(5)
+      static accessor #d = checkOrder(6)
+      static accessor [checkOrder(2)] = checkOrder(7)
+      'get#a'() { return this.#a }
+      'get#b'() { return this.#b }
+      static 'get#c'() { return this.#c }
+      static 'get#d'() { return this.#d }
+    }
+    const foo = new Foo
+    if (order + '' !== '1,2,3,4,5,6,7,8,9,10,11,12') throw 'fail: ' + order
+    if (foo.a !== 8) throw 'fail: a'
+    if (foo['get#a']() !== 9) throw 'fail: #a'
+    if (foo.b !== 10) throw 'fail: b'
+    if (foo['get#b']() !== 11) throw 'fail: #b'
+    if (foo[1] !== 12) throw 'fail: 1'
+    if (Foo.c !== 3) throw 'fail: c'
+    if (Foo['get#c']() !== 4) throw 'fail: #c'
+    if (Foo.d !== 5) throw 'fail: d'
+    if (Foo['get#d']() !== 6) throw 'fail: #d'
+    if (Foo[2] !== 7) throw 'fail: 2'
+  `
+  tests.push(
+    test(['in.js', '--outfile=node.js'].concat(flags), {
+      'in.js': classAccessorTest,
+    }),
+    test(['in.ts', '--outfile=node.js'].concat(flags), {
+      'in.ts': classAccessorTest,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "useDefineForClassFields": true,
+        }
+      }`,
+    }),
+    test(['in.ts', '--outfile=node.js'].concat(flags), {
+      'in.ts': classAccessorTest,
+      'tsconfig.json': `{
+        "compilerOptions": {
+          "useDefineForClassFields": false,
+        }
+      }`,
     }),
   )
 }
@@ -7144,6 +7865,202 @@ if (process.platform === 'darwin' || process.platform === 'win32') {
       'node_modules/pkg/file1.js': `export default 123`,
       'node_modules/pkg/File2.js': `export default 234`,
     }),
+  )
+}
+
+// Test "using" declarations
+for (const flags of [[], '--supported:async-await=false']) {
+  tests.push(
+    test(['in.js', '--outfile=node.js', '--supported:using=false'].concat(flags), {
+      'in.js': `
+        Symbol.dispose ||= Symbol.for('Symbol.dispose')
+        const log = []
+        {
+          using x = { [Symbol.dispose]() { log.push('x') } }
+          using y = { [Symbol.dispose]() { log.push('y') } }
+          using z1 = null
+          using z2 = undefined
+          try {
+            using no = 0
+          } catch {
+            log.push('no')
+          }
+          log.push('z')
+        }
+        if (log + '' !== 'no,z,y,x') throw 'fail: ' + log
+      `,
+    }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false', '--format=esm'].concat(flags), {
+      'in.js': `
+        Symbol.asyncDispose ||= Symbol.for('Symbol.asyncDispose')
+        export let async = async () => {
+          const log = []
+          {
+            await using x = { [Symbol.asyncDispose]() {
+              log.push('x1')
+              Promise.resolve().then(() => log.push('x2'))
+              return Promise.resolve()
+            } }
+            await using y = { [Symbol.asyncDispose]() {
+              log.push('y1')
+              Promise.resolve().then(() => log.push('y2'))
+              return Promise.resolve()
+            } }
+            await using z1 = null
+            await using z2 = undefined
+            try {
+              await using no = 0
+            } catch {
+              log.push('no')
+            }
+            log.push('z')
+          }
+          if (log + '' !== 'no,z,y1,y2,x1,x2') throw 'fail: ' + log
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false'].concat(flags), {
+      'in.js': `
+        Symbol.dispose ||= Symbol.for('Symbol.dispose')
+        const log = []
+        for (using x of [
+          { [Symbol.dispose]() { log.push('x') } },
+          null,
+          { [Symbol.dispose]() { log.push('y') } },
+          undefined,
+        ]) {
+          try {
+            using no = 0
+          } catch {
+            log.push('no')
+          }
+          log.push('z')
+        }
+        if (log + '' !== 'no,z,x,no,z,no,z,y,no,z') throw 'fail: ' + log
+      `,
+    }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false', '--format=esm'].concat(flags), {
+      'in.js': `
+        Symbol.dispose ||= Symbol.for('Symbol.dispose')
+        Symbol.asyncDispose ||= Symbol.for('Symbol.asyncDispose')
+        export let async = async () => {
+          const log = []
+          for (await using x of [
+            { [Symbol.dispose]() { log.push('x') } },
+            null,
+            { [Symbol.asyncDispose]() {
+              log.push('y1')
+              Promise.resolve().then(() => log.push('y2'))
+              return Promise.resolve()
+            } },
+            undefined,
+          ]) {
+            try {
+              using no = 0
+            } catch {
+              log.push('no')
+            }
+            log.push('z')
+          }
+          if (log + '' !== 'no,z,x,no,z,no,z,y1,y2,no,z') throw 'fail: ' + log
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false', '--format=esm'].concat(flags), {
+      'in.js': `
+        Symbol.dispose ||= Symbol.for('Symbol.dispose')
+        export let async = async () => {
+          const log = []
+          for await (using x of [
+            { [Symbol.dispose]() { log.push('x1') } },
+            Promise.resolve({ [Symbol.dispose]() { log.push('x2') } }),
+            null,
+            Promise.resolve(null),
+            undefined,
+            Promise.resolve(undefined),
+          ]) {
+            try {
+              using no = 0
+            } catch {
+              log.push('no')
+            }
+            log.push('z')
+          }
+          if (log + '' !== 'no,z,x1,no,z,x2,no,z,no,z,no,z,no,z') throw 'fail: ' + log
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false', '--format=esm'].concat(flags), {
+      'in.js': `
+        Symbol.dispose ||= Symbol.for('Symbol.dispose')
+        Symbol.asyncDispose ||= Symbol.for('Symbol.asyncDispose')
+        export let async = async () => {
+          const log = []
+          for await (await using x of [
+            { [Symbol.dispose]() { log.push('x1') } },
+            Promise.resolve({ [Symbol.dispose]() { log.push('x2') } }),
+            { [Symbol.asyncDispose]() { log.push('y1') } },
+            Promise.resolve({ [Symbol.asyncDispose]() { log.push('y2') } }),
+            null,
+            Promise.resolve(null),
+            undefined,
+            Promise.resolve(undefined),
+          ]) {
+            try {
+              using no = 0
+            } catch {
+              log.push('no')
+            }
+            log.push('z')
+          }
+          if (log + '' !== 'no,z,x1,no,z,x2,no,z,y1,no,z,y2,no,z,no,z,no,z,no,z') throw 'fail: ' + log
+        }
+      `,
+    }, { async: true }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false'].concat(flags), {
+      'in.js': `
+        Symbol.dispose ||= Symbol.for('Symbol.dispose')
+        class Foo { [Symbol.dispose]() { throw new Error('x') } }
+        try {
+          using x = new Foo
+          throw new Error('y')
+        } catch (err) {
+          var result = err
+        }
+        if (result.name !== 'SuppressedError') throw 'fail: SuppressedError'
+        if (result.error.message !== 'x') throw 'fail: x'
+        if (result.suppressed.message !== 'y') throw 'fail: y'
+        try {
+          using x = new Foo
+        } catch (err) {
+          var result = err
+        }
+        if (result.message !== 'x') throw 'fail: x (2)'
+      `,
+    }),
+    test(['in.js', '--outfile=node.js', '--supported:using=false', '--format=esm'].concat(flags), {
+      'in.js': `
+        Symbol.asyncDispose ||= Symbol.for('Symbol.asyncDispose')
+        class Foo { [Symbol.asyncDispose]() { throw new Error('x') } }
+        export let async = async () => {
+          try {
+            await using x = new Foo
+            throw new Error('y')
+          } catch (err) {
+            var result = err
+          }
+          if (result.name !== 'SuppressedError') throw 'fail: SuppressedError'
+          if (result.error.message !== 'x') throw 'fail: x'
+          if (result.suppressed.message !== 'y') throw 'fail: y'
+          try {
+            await using x = new Foo
+          } catch (err) {
+            var result = err
+          }
+          if (result.message !== 'x') throw 'fail: x (2)'
+        }
+      `,
+    }, { async: true }),
   )
 }
 

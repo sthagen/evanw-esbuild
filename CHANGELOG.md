@@ -1,5 +1,277 @@
 # Changelog
 
+## 0.18.8
+
+* Implement transforming `async` generator functions ([#2780](https://github.com/evanw/esbuild/issues/2780))
+
+    With this release, esbuild will now transform `async` generator functions into normal generator functions when the configured target environment doesn't support them. These functions behave similar to normal generator functions except that they use the `Symbol.asyncIterator` interface instead of the `Symbol.iterator` interface and the iteration methods return promises. Here's an example (helper functions are omitted):
+
+    ```js
+    // Original code
+    async function* foo() {
+      yield Promise.resolve(1)
+      await new Promise(r => setTimeout(r, 100))
+      yield *[Promise.resolve(2)]
+    }
+    async function bar() {
+      for await (const x of foo()) {
+        console.log(x)
+      }
+    }
+    bar()
+
+    // New output (with --target=es6)
+    function foo() {
+      return __asyncGenerator(this, null, function* () {
+        yield Promise.resolve(1);
+        yield new __await(new Promise((r) => setTimeout(r, 100)));
+        yield* __yieldStar([Promise.resolve(2)]);
+      });
+    }
+    function bar() {
+      return __async(this, null, function* () {
+        try {
+          for (var iter = __forAwait(foo()), more, temp, error; more = !(temp = yield iter.next()).done; more = false) {
+            const x = temp.value;
+            console.log(x);
+          }
+        } catch (temp) {
+          error = [temp];
+        } finally {
+          try {
+            more && (temp = iter.return) && (yield temp.call(iter));
+          } finally {
+            if (error)
+              throw error[0];
+          }
+        }
+      });
+    }
+    bar();
+    ```
+
+    This is an older feature that was added to JavaScript in ES2018 but I didn't implement the transformation then because it's a rarely-used feature. Note that esbuild already added support for transforming `for await` loops (the other part of the [asynchronous iteration proposal](https://github.com/tc39/proposal-async-iteration)) a year ago, so support for asynchronous iteration should now be complete.
+
+    I have never used this feature myself and code that uses this feature is hard to come by, so this transformation has not yet been tested on real-world code. If you do write code that uses this feature, please let me know if esbuild's `async` generator transformation doesn't work with your code.
+
+## 0.18.7
+
+* Add support for `using` declarations in TypeScript 5.2+ ([#3191](https://github.com/evanw/esbuild/issues/3191))
+
+    TypeScript 5.2 (due to be released in August of 2023) will introduce `using` declarations, which will allow you to automatically dispose of the declared resources when leaving the current scope. You can read the [TypeScript PR for this feature](https://github.com/microsoft/TypeScript/pull/54505) for more information. This release of esbuild adds support for transforming this syntax to target environments without support for `using` declarations (which is currently all targets other than `esnext`). Here's an example (helper functions are omitted):
+
+    ```js
+    // Original code
+    class Foo {
+      [Symbol.dispose]() {
+        console.log('cleanup')
+      }
+    }
+    using foo = new Foo;
+    foo.bar();
+
+    // New output (with --target=es6)
+    var _stack = [];
+    try {
+      var Foo = class {
+        [Symbol.dispose]() {
+          console.log("cleanup");
+        }
+      };
+      var foo = __using(_stack, new Foo());
+      foo.bar();
+    } catch (_) {
+      var _error = _, _hasError = true;
+    } finally {
+      __callDispose(_stack, _error, _hasError);
+    }
+    ```
+
+    The injected helper functions ensure that the method named `Symbol.dispose` is called on `new Foo` when control exits the scope. Note that as with all new JavaScript APIs, you'll need to polyfill `Symbol.dispose` if it's not present before you use it. This is not something that esbuild does for you because esbuild only handles syntax, not APIs. Polyfilling it can be done with something like this:
+
+    ```js
+    Symbol.dispose ||= Symbol('Symbol.dispose')
+    ```
+
+    This feature also introduces `await using` declarations which are like `using` declarations but they call `await` on the disposal method (not on the initializer). Here's an example (helper functions are omitted):
+
+    ```js
+    // Original code
+    class Foo {
+      async [Symbol.asyncDispose]() {
+        await new Promise(done => {
+          setTimeout(done, 1000)
+        })
+        console.log('cleanup')
+      }
+    }
+    await using foo = new Foo;
+    foo.bar();
+
+    // New output (with --target=es2022)
+    var _stack = [];
+    try {
+      var Foo = class {
+        async [Symbol.asyncDispose]() {
+          await new Promise((done) => {
+            setTimeout(done, 1e3);
+          });
+          console.log("cleanup");
+        }
+      };
+      var foo = __using(_stack, new Foo(), true);
+      foo.bar();
+    } catch (_) {
+      var _error = _, _hasError = true;
+    } finally {
+      var _promise = __callDispose(_stack, _error, _hasError);
+      _promise && await _promise;
+    }
+    ```
+
+    The injected helper functions ensure that the method named `Symbol.asyncDispose` is called on `new Foo` when control exits the scope, and that the returned promise is awaited. Similarly to `Symbol.dispose`, you'll also need to polyfill `Symbol.asyncDispose` before you use it.
+
+* Add a `--line-limit=` flag to limit line length ([#3170](https://github.com/evanw/esbuild/issues/3170))
+
+    Long lines are common in minified code. However, many tools and text editors can't handle long lines. This release introduces the `--line-limit=` flag to tell esbuild to wrap lines longer than the provided number of bytes. For example, `--line-limit=80` tells esbuild to insert a newline soon after a given line reaches 80 bytes in length. This setting applies to both JavaScript and CSS, and works even when minification is disabled. Note that turning this setting on will make your files bigger, as the extra newlines take up additional space in the file (even after gzip compression).
+
+## 0.18.6
+
+* Fix tree-shaking of classes with decorators ([#3164](https://github.com/evanw/esbuild/issues/3164))
+
+    This release fixes a bug where esbuild incorrectly allowed tree-shaking on classes with decorators. Each decorator is a function call, so classes with decorators must never be tree-shaken. This bug was a regression that was unintentionally introduced in version 0.18.2 by the change that enabled tree-shaking of lowered private fields. Previously decorators were always lowered, and esbuild always considered the automatically-generated decorator code to be a side effect. But this is no longer the case now that esbuild analyzes side effects using the AST before lowering takes place. This bug was fixed by considering any decorator a side effect.
+
+* Fix a minification bug involving function expressions ([#3125](https://github.com/evanw/esbuild/issues/3125))
+
+    When minification is enabled, esbuild does limited inlining of `const` symbols at the top of a scope. This release fixes a bug where inlineable symbols were incorrectly removed assuming that they were inlined. They may not be inlined in cases where they were referenced by earlier constants in the body of a function expression. The declarations involved in these edge cases are now kept instead of being removed:
+
+    ```js
+    // Original code
+    {
+      const fn = () => foo
+      const foo = 123
+      console.log(fn)
+    }
+
+    // Old output (with --minify-syntax)
+    console.log((() => foo)());
+
+    // New output (with --minify-syntax)
+    {
+      const fn = () => foo, foo = 123;
+      console.log(fn);
+    }
+    ```
+
+## 0.18.5
+
+* Implement auto accessors ([#3009](https://github.com/evanw/esbuild/issues/3009))
+
+    This release implements the new auto-accessor syntax from the upcoming [JavaScript decorators proposal](https://github.com/tc39/proposal-decorators). The auto-accessor syntax looks like this:
+
+    ```js
+    class Foo {
+      accessor foo;
+      static accessor bar;
+    }
+    new Foo().foo = Foo.bar;
+    ```
+
+    This syntax is not yet a part of JavaScript but it was [added to TypeScript in version 4.9](https://devblogs.microsoft.com/typescript/announcing-typescript-4-9/#auto-accessors-in-classes). More information about this feature can be found in [microsoft/TypeScript#49705](https://github.com/microsoft/TypeScript/pull/49705). Auto-accessors will be transformed if the target is set to something other than `esnext`:
+
+    ```js
+    // Output (with --target=esnext)
+    class Foo {
+      accessor foo;
+      static accessor bar;
+    }
+    new Foo().foo = Foo.bar;
+
+    // Output (with --target=es2022)
+    class Foo {
+      #foo;
+      get foo() {
+        return this.#foo;
+      }
+      set foo(_) {
+        this.#foo = _;
+      }
+      static #bar;
+      static get bar() {
+        return this.#bar;
+      }
+      static set bar(_) {
+        this.#bar = _;
+      }
+    }
+    new Foo().foo = Foo.bar;
+
+    // Output (with --target=es2021)
+    var _foo, _bar;
+    class Foo {
+      constructor() {
+        __privateAdd(this, _foo, void 0);
+      }
+      get foo() {
+        return __privateGet(this, _foo);
+      }
+      set foo(_) {
+        __privateSet(this, _foo, _);
+      }
+      static get bar() {
+        return __privateGet(this, _bar);
+      }
+      static set bar(_) {
+        __privateSet(this, _bar, _);
+      }
+    }
+    _foo = new WeakMap();
+    _bar = new WeakMap();
+    __privateAdd(Foo, _bar, void 0);
+    new Foo().foo = Foo.bar;
+    ```
+
+    You can also now use auto-accessors with esbuild's TypeScript experimental decorator transformation, which should behave the same as decorating the underlying getter/setter pair.
+
+    **Please keep in mind that this syntax is not yet part of JavaScript.** This release enables auto-accessors in `.js` files with the expectation that it will be a part of JavaScript soon. However, esbuild may change or remove this feature in the future if JavaScript ends up changing or removing this feature. Use this feature with caution for now.
+
+* Pass through JavaScript decorators ([#104](https://github.com/evanw/esbuild/issues/104))
+
+    In this release, esbuild now parses decorators from the upcoming [JavaScript decorators proposal](https://github.com/tc39/proposal-decorators) and passes them through to the output unmodified (as long as the language target is set to `esnext`). Transforming JavaScript decorators to environments that don't support them has not been implemented yet. The only decorator transform that esbuild currently implements is still the TypeScript experimental decorator transform, which only works in `.ts` files and which requires `"experimentalDecorators": true` in your `tsconfig.json` file.
+
+* Static fields with assign semantics now use static blocks if possible
+
+    Setting `useDefineForClassFields` to false in TypeScript requires rewriting class fields to assignment statements. Previously this was done by removing the field from the class body and adding an assignment statement after the class declaration. However, this also caused any private fields to also be lowered by necessity (in case a field initializer uses a private symbol, either directly or indirectly). This release changes this transform to use an inline static block if it's supported, which avoids needing to lower private fields in this scenario:
+
+    ```js
+    // Original code
+    class Test {
+      static #foo = 123
+      static bar = this.#foo
+    }
+
+    // Old output (with useDefineForClassFields=false)
+    var _foo;
+    const _Test = class _Test {
+    };
+    _foo = new WeakMap();
+    __privateAdd(_Test, _foo, 123);
+    _Test.bar = __privateGet(_Test, _foo);
+    let Test = _Test;
+
+    // New output (with useDefineForClassFields=false)
+    class Test {
+      static #foo = 123;
+      static {
+        this.bar = this.#foo;
+      }
+    }
+    ```
+
+* Fix TypeScript experimental decorators combined with `--mangle-props` ([#3177](https://github.com/evanw/esbuild/issues/3177))
+
+    Previously using TypeScript experimental decorators combined with the `--mangle-props` setting could result in a crash, as the experimental decorator transform was not expecting a mangled property as a class member. This release fixes the crash so you can now combine both of these features together safely.
+
 ## 0.18.4
 
 * Bundling no longer unnecessarily transforms class syntax ([#1360](https://github.com/evanw/esbuild/issues/1360), [#1328](https://github.com/evanw/esbuild/issues/1328), [#1524](https://github.com/evanw/esbuild/issues/1524), [#2416](https://github.com/evanw/esbuild/issues/2416))
