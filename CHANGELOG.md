@@ -1,5 +1,168 @@
 # Changelog
 
+## 0.18.11
+
+* Fix a TypeScript code generation edge case ([#3199](https://github.com/evanw/esbuild/issues/3199))
+
+    This release fixes a regression in version 0.18.4 where using a TypeScript `namespace` that exports a `class` declaration combined with `--keep-names` and a `--target` of `es2021` or earlier could cause esbuild to export the class from the namespace using an incorrect name (notice the assignment to `X2._Y` vs. `X2.Y`):
+
+    ```ts
+    // Original code
+
+    // Old output (with --keep-names --target=es2021)
+    var X;
+    ((X2) => {
+      const _Y = class _Y {
+      };
+      __name(_Y, "Y");
+      let Y = _Y;
+      X2._Y = _Y;
+    })(X || (X = {}));
+
+    // New output (with --keep-names --target=es2021)
+    var X;
+    ((X2) => {
+      const _Y = class _Y {
+      };
+      __name(_Y, "Y");
+      let Y = _Y;
+      X2.Y = _Y;
+    })(X || (X = {}));
+    ```
+
+## 0.18.10
+
+* Fix a tree-shaking bug that removed side effects ([#3195](https://github.com/evanw/esbuild/issues/3195))
+
+    This fixes a regression in version 0.18.4 where combining `--minify-syntax` with `--keep-names` could cause expressions with side effects after a function declaration to be considered side-effect free for tree shaking purposes. The reason was because `--keep-names` generates an expression statement containing a call to a helper function after the function declaration with a special flag that makes the function call able to be tree shaken, and then `--minify-syntax` could potentially merge that expression statement with following expressions without clearing the flag. This release fixes the bug by clearing the flag when merging expression statements together.
+
+* Fix an incorrect warning about CSS nesting ([#3197](https://github.com/evanw/esbuild/issues/3197))
+
+    A warning is currently generated when transforming nested CSS to a browser that doesn't support `:is()` because transformed nested CSS may need to use that feature to represent nesting. This was previously always triggered when an at-rule was encountered in a declaration context. Typically the only case you would encounter this is when using CSS nesting within a selector rule. However, there is a case where that's not true: when using a margin at-rule such as `@top-left` within `@page`. This release avoids incorrectly generating a warning in this case by checking that the at-rule is within a selector rule before generating a warning.
+
+## 0.18.9
+
+* Fix `await using` declarations inside `async` generator functions
+
+    I forgot about the new `await using` declarations when implementing lowering for `async` generator functions in the previous release. This change fixes the transformation of `await using` declarations when they are inside lowered `async` generator functions:
+
+    ```js
+    // Original code
+    async function* foo() {
+      await using x = await y
+    }
+
+    // Old output (with --supported:async-generator=false)
+    function foo() {
+      return __asyncGenerator(this, null, function* () {
+        await using x = yield new __await(y);
+      });
+    }
+
+    // New output (with --supported:async-generator=false)
+    function foo() {
+      return __asyncGenerator(this, null, function* () {
+        var _stack = [];
+        try {
+          const x = __using(_stack, yield new __await(y), true);
+        } catch (_) {
+          var _error = _, _hasError = true;
+        } finally {
+          var _promise = __callDispose(_stack, _error, _hasError);
+          _promise && (yield new __await(_promise));
+        }
+      });
+    }
+    ```
+
+* Insert some prefixed CSS properties when appropriate ([#3122](https://github.com/evanw/esbuild/issues/3122))
+
+    With this release, esbuild will now insert prefixed CSS properties in certain cases when the `target` setting includes browsers that require a certain prefix. This is currently done for the following properties:
+
+    * `appearance: *;` => `-webkit-appearance: *; -moz-appearance: *;`
+    * `backdrop-filter: *;` => `-webkit-backdrop-filter: *;`
+    * `background-clip: text` => `-webkit-background-clip: text;`
+    * `box-decoration-break: *;` => `-webkit-box-decoration-break: *;`
+    * `clip-path: *;` => `-webkit-clip-path: *;`
+    * `font-kerning: *;` => `-webkit-font-kerning: *;`
+    * `hyphens: *;` => `-webkit-hyphens: *;`
+    * `initial-letter: *;` => `-webkit-initial-letter: *;`
+    * `mask-image: *;` => `-webkit-mask-image: *;`
+    * `mask-origin: *;` => `-webkit-mask-origin: *;`
+    * `mask-position: *;` => `-webkit-mask-position: *;`
+    * `mask-repeat: *;` => `-webkit-mask-repeat: *;`
+    * `mask-size: *;` => `-webkit-mask-size: *;`
+    * `position: sticky;` => `position: -webkit-sticky;`
+    * `print-color-adjust: *;` => `-webkit-print-color-adjust: *;`
+    * `tab-size: *;` => `-moz-tab-size: *; -o-tab-size: *;`
+    * `text-decoration-color: *;` => `-webkit-text-decoration-color: *; -moz-text-decoration-color: *;`
+    * `text-decoration-line: *;` => `-webkit-text-decoration-line: *; -moz-text-decoration-line: *;`
+    * `text-decoration-skip: *;` => `-webkit-text-decoration-skip: *;`
+    * `text-emphasis-color: *;` => `-webkit-text-emphasis-color: *;`
+    * `text-emphasis-position: *;` => `-webkit-text-emphasis-position: *;`
+    * `text-emphasis-style: *;` => `-webkit-text-emphasis-style: *;`
+    * `text-orientation: *;` => `-webkit-text-orientation: *;`
+    * `text-size-adjust: *;` => `-webkit-text-size-adjust: *; -ms-text-size-adjust: *;`
+    * `user-select: *;` => `-webkit-user-select: *; -moz-user-select: *; -ms-user-select: *;`
+
+    Here is an example:
+
+    ```css
+    /* Original code */
+    div {
+      mask-image: url(x.png);
+    }
+
+    /* Old output (with --target=chrome99) */
+    div {
+      mask-image: url(x.png);
+    }
+
+    /* New output (with --target=chrome99) */
+    div {
+      -webkit-mask-image: url(x.png);
+      mask-image: url(x.png);
+    }
+    ```
+
+    Browser compatibility data was sourced from the tables on https://caniuse.com. Support for more CSS properties can be added in the future as appropriate.
+
+* Fix an obscure identifier minification bug ([#2809](https://github.com/evanw/esbuild/issues/2809))
+
+    Function declarations in nested scopes behave differently depending on whether or not `"use strict"` is present. To avoid generating code that behaves differently depending on whether strict mode is enabled or not, esbuild transforms nested function declarations into variable declarations. However, there was a bug where the generated variable name was not being recorded as declared internally, which meant that it wasn't being renamed correctly by the minifier and could cause a name collision. This bug has been fixed:
+
+    ```js
+    // Original code
+    const n = ''
+    for (let i of [0,1]) {
+      function f () {}
+    }
+
+    // Old output (with --minify-identifiers --format=esm)
+    const f = "";
+    for (let o of [0, 1]) {
+      let n = function() {
+      };
+      var f = n;
+    }
+
+    // New output (with --minify-identifiers --format=esm)
+    const f = "";
+    for (let o of [0, 1]) {
+      let n = function() {
+      };
+      var t = n;
+    }
+    ```
+
+* Fix a bug in esbuild's compatibility table script ([#3179](https://github.com/evanw/esbuild/pull/3179))
+
+    Setting esbuild's `target` to a specific JavaScript engine tells esbuild to use the JavaScript syntax feature compatibility data from https://kangax.github.io/compat-table/es6/ for that engine to determine which syntax features to allow. However, esbuild's script that builds this internal compatibility table had a bug that incorrectly ignores tests for engines that still have outstanding implementation bugs which were never fixed. This change fixes this bug with the script.
+
+    The only case where this changed the information in esbuild's internal compatibility table is that the `hermes` target is marked as no longer supporting destructuring. This is because there is a failing destructuring-related test for Hermes on https://kangax.github.io/compat-table/es6/. If you want to use destructuring with Hermes anyway, you can pass `--supported:destructuring=true` to esbuild to override the `hermes` target and force esbuild to accept this syntax.
+
+    This fix was contributed by [@ArrayZoneYour](https://github.com/ArrayZoneYour).
+
 ## 0.18.8
 
 * Implement transforming `async` generator functions ([#2780](https://github.com/evanw/esbuild/issues/2780))

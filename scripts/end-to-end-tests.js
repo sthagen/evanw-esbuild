@@ -3145,6 +3145,24 @@ for (const minify of [[], ['--minify-syntax']]) {
         var x = class { static [-0xFFFF_FFFF_FFFF] = 1 }; if (x['-281474976710655'] !== 1) throw 'fail: -0xFFFF_FFFF_FFFF'
       `,
     }),
+
+    // See: https://github.com/evanw/esbuild/issues/3195
+    test(['in.js', '--outfile=node.js', '--keep-names'].concat(minify), {
+      'in.js': `
+        const log = [];
+        const sideEffect = x => log.push(x);
+        (() => {
+          function f() {}
+          sideEffect(1, f());
+        })();
+        (() => {
+          function g() {}
+          debugger;
+          sideEffect(2, g());
+        })();
+        if (log + '' !== '1,2') throw 'fail: ' + log;
+      `,
+    }),
   )
 
   // Check property access simplification
@@ -3610,6 +3628,20 @@ for (let flags of [[], ['--minify', '--keep-names']]) {
     test(['in.js', '--outfile=node.js', '--bundle'].concat(flags), {
       'in.js': `(() => { let Foo = class { static foo() {} }; if (Foo.foo.name !== 'foo') throw 'fail: ' + Foo.foo.name })()`,
     }),
+
+    // See: https://github.com/evanw/esbuild/issues/3199
+    test(['in.ts', '--outfile=node.js', '--target=es6'].concat(flags), {
+      'in.ts': `
+        namespace foo { export class Foo {} }
+        if (foo.Foo.name !== 'Foo') throw 'fail: ' + foo.Foo.name
+      `,
+    }),
+    test(['in.ts', '--outfile=node.js', '--target=esnext'].concat(flags), {
+      'in.ts': `
+        namespace foo { export class Foo {} }
+        if (foo.Foo.name !== 'Foo') throw 'fail: ' + foo.Foo.name
+      `,
+    }),
   )
 }
 tests.push(
@@ -3817,6 +3849,37 @@ tests.push(
     `,
   }),
 )
+
+// Check for an obscure bug with minification, symbol renaming, and sloppy
+// nested function declarations: https://github.com/evanw/esbuild/issues/2809.
+// Previously esbuild generated the following code:
+//
+//   let f = 0;
+//   for (let l of [1, 2]) {
+//     let t = function(o) {
+//       return o;
+//     };
+//     var f = t;
+//     f += t(l);
+//   }
+//   if (f !== 3)
+//     throw "fail";
+//
+// Notice how "f" is declared twice, leading to a syntax error.
+for (const flags of [[], ['--minify']]) {
+  tests.push(
+    test(['in.js', '--outfile=node.js', '--format=esm'].concat(flags), {
+      'in.js': `
+        let total = 0
+        for (let value of [1, 2]) {
+          function f(x) { return x }
+          total += f(value)
+        }
+        if (total !== 3) throw 'fail'
+      `,
+    }),
+  )
+}
 
 // Test hoisting variables inside for loop initializers outside of lazy ESM
 // wrappers. Previously this didn't work due to a bug that considered for
