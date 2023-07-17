@@ -24,6 +24,8 @@ import (
 // representation that helps provide good parsing and printing performance.
 
 type AST struct {
+	Symbols              []ast.Symbol
+	CharFreq             *ast.CharFreq
 	ImportRecords        []ast.ImportRecord
 	Rules                []Rule
 	SourceMapComment     logger.Span
@@ -262,6 +264,17 @@ func (t Token) IsAngle() bool {
 	return false
 }
 
+func CloneTokensWithoutImportRecords(tokensIn []Token) (tokensOut []Token) {
+	for _, t := range tokensIn {
+		if t.Children != nil {
+			children := CloneTokensWithoutImportRecords(*t.Children)
+			t.Children = &children
+		}
+		tokensOut = append(tokensOut, t)
+	}
+	return
+}
+
 func CloneTokensWithImportRecords(
 	tokensIn []Token, importRecordsIn []ast.ImportRecord,
 	tokensOut []Token, importRecordsOut []ast.ImportRecord,
@@ -350,14 +363,17 @@ func (r *RAtImport) Hash() (uint32, bool) {
 }
 
 type RAtKeyframes struct {
-	AtToken string
-	Name    string
-	Blocks  []KeyframeBlock
+	AtToken       string
+	Name          string
+	Blocks        []KeyframeBlock
+	CloseBraceLoc logger.Loc
 }
 
 type KeyframeBlock struct {
-	Selectors []string
-	Rules     []Rule
+	Selectors     []string
+	Rules         []Rule
+	Loc           logger.Loc
+	CloseBraceLoc logger.Loc
 }
 
 func (a *RAtKeyframes) Equal(rule R, check *CrossFileEqualityCheck) bool {
@@ -397,9 +413,10 @@ func (r *RAtKeyframes) Hash() (uint32, bool) {
 }
 
 type RKnownAt struct {
-	AtToken string
-	Prelude []Token
-	Rules   []Rule
+	AtToken       string
+	Prelude       []Token
+	Rules         []Rule
+	CloseBraceLoc logger.Loc
 }
 
 func (a *RKnownAt) Equal(rule R, check *CrossFileEqualityCheck) bool {
@@ -435,49 +452,28 @@ func (r *RUnknownAt) Hash() (uint32, bool) {
 }
 
 type RSelector struct {
-	Selectors []ComplexSelector
-	Rules     []Rule
+	Selectors     []ComplexSelector
+	Rules         []Rule
+	CloseBraceLoc logger.Loc
 }
 
 func (a *RSelector) Equal(rule R, check *CrossFileEqualityCheck) bool {
 	b, ok := rule.(*RSelector)
-	if ok && len(a.Selectors) == len(b.Selectors) {
-		for i, ai := range a.Selectors {
-			if !ai.Equal(b.Selectors[i], check) {
-				return false
-			}
-		}
-		return RulesEqual(a.Rules, b.Rules, check)
-	}
-
-	return false
+	return ok && ComplexSelectorsEqual(a.Selectors, b.Selectors, check) && RulesEqual(a.Rules, b.Rules, check)
 }
 
 func (r *RSelector) Hash() (uint32, bool) {
 	hash := uint32(5)
 	hash = helpers.HashCombine(hash, uint32(len(r.Selectors)))
-	for _, complex := range r.Selectors {
-		hash = helpers.HashCombine(hash, uint32(len(complex.Selectors)))
-		for _, sel := range complex.Selectors {
-			if sel.TypeSelector != nil {
-				hash = helpers.HashCombineString(hash, sel.TypeSelector.Name.Text)
-			} else {
-				hash = helpers.HashCombine(hash, 0)
-			}
-			hash = helpers.HashCombine(hash, uint32(len(sel.SubclassSelectors)))
-			for _, sub := range sel.SubclassSelectors {
-				hash = helpers.HashCombine(hash, sub.Hash())
-			}
-			hash = helpers.HashCombine(hash, uint32(sel.Combinator))
-		}
-	}
+	hash = HashComplexSelectors(hash, r.Selectors)
 	hash = HashRules(hash, r.Rules)
 	return hash, true
 }
 
 type RQualified struct {
-	Prelude []Token
-	Rules   []Rule
+	Prelude       []Token
+	Rules         []Rule
+	CloseBraceLoc logger.Loc
 }
 
 func (a *RQualified) Equal(rule R, check *CrossFileEqualityCheck) bool {
@@ -557,8 +553,9 @@ func (r *RComment) Hash() (uint32, bool) {
 }
 
 type RAtLayer struct {
-	Names [][]string
-	Rules []Rule
+	Names         [][]string
+	Rules         []Rule
+	CloseBraceLoc logger.Loc
 }
 
 func (a *RAtLayer) Equal(rule R, check *CrossFileEqualityCheck) bool {
@@ -598,17 +595,46 @@ type ComplexSelector struct {
 	Selectors []CompoundSelector
 }
 
-func (s ComplexSelector) AppendToTokensWithoutLeadingCombinator(tokens []Token) []Token {
-	for i, sel := range s.Selectors {
-		if n := len(tokens); i > 0 && n > 0 {
-			tokens[n-1].Whitespace |= WhitespaceAfter
+func ComplexSelectorsEqual(a []ComplexSelector, b []ComplexSelector, check *CrossFileEqualityCheck) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, ai := range a {
+		if !ai.Equal(b[i], check) {
+			return false
 		}
+	}
+	return true
+}
+
+func HashComplexSelectors(hash uint32, selectors []ComplexSelector) uint32 {
+	for _, complex := range selectors {
+		hash = helpers.HashCombine(hash, uint32(len(complex.Selectors)))
+		for _, sel := range complex.Selectors {
+			if sel.TypeSelector != nil {
+				hash = helpers.HashCombineString(hash, sel.TypeSelector.Name.Text)
+			} else {
+				hash = helpers.HashCombine(hash, 0)
+			}
+			hash = helpers.HashCombine(hash, uint32(len(sel.SubclassSelectors)))
+			for _, sub := range sel.SubclassSelectors {
+				hash = helpers.HashCombine(hash, sub.Hash())
+			}
+			hash = helpers.HashCombine(hash, uint32(sel.Combinator))
+		}
+	}
+	return hash
+}
+
+func (s ComplexSelector) CloneWithoutLeadingCombinator() ComplexSelector {
+	clone := ComplexSelector{Selectors: make([]CompoundSelector, len(s.Selectors))}
+	for i, sel := range s.Selectors {
 		if i == 0 {
 			sel.Combinator = 0
 		}
-		tokens = sel.AppendToTokens(tokens)
+		clone.Selectors[i] = sel.Clone()
 	}
-	return tokens
+	return clone
 }
 
 func (sel ComplexSelector) IsRelative() bool {
@@ -618,8 +644,12 @@ func (sel ComplexSelector) IsRelative() bool {
 				return false
 			}
 			for _, ss := range inner.SubclassSelectors {
-				if class, ok := ss.(*SSPseudoClass); ok && tokensContainAmpersandRecursive(class.Args) {
-					return false
+				if pseudo, ok := ss.(*SSPseudoClassWithSelectorList); ok {
+					for _, nested := range pseudo.Selectors {
+						if !nested.IsRelative() {
+							return false
+						}
+					}
 				}
 			}
 		}
@@ -703,35 +733,23 @@ func (sel CompoundSelector) IsSingleAmpersand() bool {
 	return sel.HasNestingSelector && sel.Combinator == 0 && sel.TypeSelector == nil && len(sel.SubclassSelectors) == 0
 }
 
-func (sel CompoundSelector) AppendToTokens(tokens []Token) []Token {
-	if sel.Combinator != 0 {
-		switch sel.Combinator {
-		case '>':
-			tokens = append(tokens, Token{Kind: css_lexer.TDelimGreaterThan, Text: ">", Whitespace: WhitespaceAfter})
-		case '+':
-			tokens = append(tokens, Token{Kind: css_lexer.TDelimPlus, Text: "+", Whitespace: WhitespaceAfter})
-		case '~':
-			tokens = append(tokens, Token{Kind: css_lexer.TDelimTilde, Text: "~", Whitespace: WhitespaceAfter})
-		default:
-			panic("Internal error")
-		}
-	}
+func (sel CompoundSelector) Clone() CompoundSelector {
+	clone := sel
 
 	if sel.TypeSelector != nil {
-		tokens = sel.TypeSelector.AppendToTokens(tokens)
+		t := sel.TypeSelector.Clone()
+		clone.TypeSelector = &t
 	}
 
-	// Put this after the type selector in case it's substituted for ":is()"
-	// ".foo { > &a, > &b {} }" => ".foo > :is(b.foo, c.foo) {}" (we don't want to get ".foo > :is(.foob, .fooc) {}" instead)
-	if sel.HasNestingSelector {
-		tokens = append(tokens, Token{Kind: css_lexer.TDelimAmpersand, Text: "&"})
+	if sel.SubclassSelectors != nil {
+		selectors := make([]SS, len(sel.SubclassSelectors))
+		for i, ss := range sel.SubclassSelectors {
+			selectors[i] = ss.Clone()
+		}
+		clone.SubclassSelectors = selectors
 	}
 
-	for _, ss := range sel.SubclassSelectors {
-		tokens = ss.AppendToTokens(tokens)
-	}
-
-	return tokens
+	return clone
 }
 
 type NameToken struct {
@@ -747,14 +765,13 @@ type NamespacedName struct {
 	Name NameToken
 }
 
-func (n NamespacedName) AppendToTokens(tokens []Token) []Token {
+func (n NamespacedName) Clone() NamespacedName {
+	clone := n
 	if n.NamespacePrefix != nil {
-		tokens = append(tokens,
-			Token{Kind: n.NamespacePrefix.Kind, Text: n.NamespacePrefix.Text},
-			Token{Kind: css_lexer.TDelimBar, Text: "|"},
-		)
+		prefix := *n.NamespacePrefix
+		clone.NamespacePrefix = &prefix
 	}
-	return append(tokens, Token{Kind: n.Name.Kind, Text: n.Name.Text})
+	return clone
 }
 
 func (a NamespacedName) Equal(b NamespacedName) bool {
@@ -765,48 +782,49 @@ func (a NamespacedName) Equal(b NamespacedName) bool {
 type SS interface {
 	Equal(ss SS, check *CrossFileEqualityCheck) bool
 	Hash() uint32
-	AppendToTokens(tokens []Token) []Token
+	Clone() SS
 }
 
 type SSHash struct {
-	Name string
+	Name ast.LocRef
 }
 
 func (a *SSHash) Equal(ss SS, check *CrossFileEqualityCheck) bool {
 	b, ok := ss.(*SSHash)
-	return ok && a.Name == b.Name
+	return ok && a.Name.Ref == b.Name.Ref
 }
 
 func (ss *SSHash) Hash() uint32 {
 	hash := uint32(1)
-	hash = helpers.HashCombineString(hash, ss.Name)
+	hash = helpers.HashCombine(hash, ss.Name.Ref.SourceIndex)
+	hash = helpers.HashCombine(hash, ss.Name.Ref.InnerIndex)
 	return hash
 }
 
-func (ss *SSHash) AppendToTokens(tokens []Token) []Token {
-	return append(tokens, Token{Kind: css_lexer.THash, Text: ss.Name})
+func (ss *SSHash) Clone() SS {
+	clone := *ss
+	return &clone
 }
 
 type SSClass struct {
-	Name string
+	Name ast.LocRef
 }
 
 func (a *SSClass) Equal(ss SS, check *CrossFileEqualityCheck) bool {
 	b, ok := ss.(*SSClass)
-	return ok && a.Name == b.Name
+	return ok && a.Name.Ref == b.Name.Ref
 }
 
 func (ss *SSClass) Hash() uint32 {
 	hash := uint32(2)
-	hash = helpers.HashCombineString(hash, ss.Name)
+	hash = helpers.HashCombine(hash, ss.Name.Ref.SourceIndex)
+	hash = helpers.HashCombine(hash, ss.Name.Ref.InnerIndex)
 	return hash
 }
 
-func (ss *SSClass) AppendToTokens(tokens []Token) []Token {
-	return append(tokens,
-		Token{Kind: css_lexer.TDelimDot, Text: "."},
-		Token{Kind: css_lexer.TIdent, Text: ss.Name},
-	)
+func (ss *SSClass) Clone() SS {
+	clone := *ss
+	return &clone
 }
 
 type SSAttribute struct {
@@ -830,53 +848,10 @@ func (ss *SSAttribute) Hash() uint32 {
 	return hash
 }
 
-func (ss *SSAttribute) AppendToTokens(tokens []Token) []Token {
-	var children []Token
-	children = ss.NamespacedName.AppendToTokens(children)
-
-	if ss.MatcherOp != "" {
-		switch ss.MatcherOp {
-		case "=":
-			children = append(children, Token{Kind: css_lexer.TDelimEquals, Text: "="})
-		case "~=":
-			children = append(children, Token{Kind: css_lexer.TDelimTilde, Text: "~"}, Token{Kind: css_lexer.TDelimEquals, Text: "="})
-		case "|=":
-			children = append(children, Token{Kind: css_lexer.TDelimBar, Text: "|"}, Token{Kind: css_lexer.TDelimEquals, Text: "="})
-		case "^=":
-			children = append(children, Token{Kind: css_lexer.TDelimCaret, Text: "^"}, Token{Kind: css_lexer.TDelimEquals, Text: "="})
-		case "$=":
-			children = append(children, Token{Kind: css_lexer.TDelimDollar, Text: "$"}, Token{Kind: css_lexer.TDelimEquals, Text: "="})
-		case "*=":
-			children = append(children, Token{Kind: css_lexer.TDelimAsterisk, Text: "*"}, Token{Kind: css_lexer.TDelimEquals, Text: "="})
-		default:
-			panic("Internal error")
-		}
-		printAsIdent := false
-
-		// Print the value as an identifier if it's possible
-		if css_lexer.WouldStartIdentifierWithoutEscapes(ss.MatcherValue) {
-			printAsIdent = true
-			for _, c := range ss.MatcherValue {
-				if !css_lexer.IsNameContinue(c) {
-					printAsIdent = false
-					break
-				}
-			}
-		}
-
-		if printAsIdent {
-			children = append(children, Token{Kind: css_lexer.TIdent, Text: ss.MatcherValue})
-		} else {
-			children = append(children, Token{Kind: css_lexer.TString, Text: ss.MatcherValue})
-		}
-	}
-
-	if ss.MatcherModifier != 0 {
-		children = append(children, Token{Kind: css_lexer.TIdent, Text: string(rune(ss.MatcherModifier)), Whitespace: WhitespaceBefore})
-	}
-
-	tokens = append(tokens, Token{Kind: css_lexer.TOpenBracket, Text: "[", Children: &children})
-	return tokens
+func (ss *SSAttribute) Clone() SS {
+	clone := *ss
+	clone.NamespacedName = ss.NamespacedName.Clone()
+	return &clone
 }
 
 type SSPseudoClass struct {
@@ -897,20 +872,67 @@ func (ss *SSPseudoClass) Hash() uint32 {
 	return hash
 }
 
-func (ss *SSPseudoClass) AppendToTokens(tokens []Token) []Token {
-	if ss.IsElement {
-		tokens = append(tokens, Token{Kind: css_lexer.TColon, Text: ":"})
-	}
-
+func (ss *SSPseudoClass) Clone() SS {
+	clone := *ss
 	if ss.Args != nil {
-		return append(tokens,
-			Token{Kind: css_lexer.TColon, Text: ":"},
-			Token{Kind: css_lexer.TFunction, Text: ss.Name, Children: &ss.Args},
-		)
+		ss.Args = CloneTokensWithoutImportRecords(ss.Args)
 	}
+	return &clone
+}
 
-	return append(tokens,
-		Token{Kind: css_lexer.TColon, Text: ":"},
-		Token{Kind: css_lexer.TIdent, Text: ss.Name},
-	)
+type PseudoClassKind uint8
+
+const (
+	PseudoClassGlobal PseudoClassKind = iota
+	PseudoClassHas
+	PseudoClassIs
+	PseudoClassLocal
+	PseudoClassNot
+	PseudoClassWhere
+)
+
+func (kind PseudoClassKind) String() string {
+	switch kind {
+	case PseudoClassGlobal:
+		return "global"
+	case PseudoClassHas:
+		return "has"
+	case PseudoClassIs:
+		return "is"
+	case PseudoClassLocal:
+		return "local"
+	case PseudoClassNot:
+		return "not"
+	case PseudoClassWhere:
+		return "where"
+	default:
+		panic("Internal error")
+	}
+}
+
+// See https://drafts.csswg.org/selectors/#grouping
+type SSPseudoClassWithSelectorList struct {
+	Kind      PseudoClassKind
+	Selectors []ComplexSelector
+}
+
+func (a *SSPseudoClassWithSelectorList) Equal(ss SS, check *CrossFileEqualityCheck) bool {
+	b, ok := ss.(*SSPseudoClassWithSelectorList)
+	return ok && a.Kind == b.Kind && ComplexSelectorsEqual(a.Selectors, b.Selectors, check)
+}
+
+func (ss *SSPseudoClassWithSelectorList) Hash() uint32 {
+	hash := uint32(5)
+	hash = helpers.HashCombine(hash, uint32(ss.Kind))
+	hash = HashComplexSelectors(hash, ss.Selectors)
+	return hash
+}
+
+func (ss *SSPseudoClassWithSelectorList) Clone() SS {
+	clone := *ss
+	clone.Selectors = make([]ComplexSelector, len(ss.Selectors))
+	for i, sel := range ss.Selectors {
+		clone.Selectors[i] = sel.CloneWithoutLeadingCombinator()
+	}
+	return &clone
 }

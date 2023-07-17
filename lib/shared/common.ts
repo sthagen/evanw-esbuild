@@ -147,6 +147,7 @@ function pushCommonFlags(flags: string[], options: CommonOptions, keys: OptionKe
   let minifyIdentifiers = getFlag(options, keys, 'minifyIdentifiers', mustBeBoolean)
   let lineLimit = getFlag(options, keys, 'lineLimit', mustBeInteger)
   let drop = getFlag(options, keys, 'drop', mustBeArray)
+  let dropLabels = getFlag(options, keys, 'dropLabels', mustBeArray)
   let charset = getFlag(options, keys, 'charset', mustBeString)
   let treeShaking = getFlag(options, keys, 'treeShaking', mustBeBoolean)
   let ignoreAnnotations = getFlag(options, keys, 'ignoreAnnotations', mustBeBoolean)
@@ -185,6 +186,7 @@ function pushCommonFlags(flags: string[], options: CommonOptions, keys: OptionKe
   if (treeShaking !== void 0) flags.push(`--tree-shaking=${treeShaking}`)
   if (ignoreAnnotations) flags.push(`--ignore-annotations`)
   if (drop) for (let what of drop) flags.push(`--drop:${validateStringValue(what, 'drop')}`)
+  if (dropLabels) flags.push(`--drop-labels=${Array.from(dropLabels).map(what => validateStringValue(what, 'dropLabels')).join(',')}`)
   if (mangleProps) flags.push(`--mangle-props=${mangleProps.source}`)
   if (reserveProps) flags.push(`--reserve-props=${reserveProps.source}`)
   if (mangleQuoted !== void 0) flags.push(`--mangle-quoted=${mangleQuoted}`)
@@ -601,7 +603,15 @@ export function createChannel(streamIn: StreamIn): StreamOut {
 
       throw new Error(`Invalid command: ` + request.command)
     } catch (e) {
-      sendResponse(id, { errors: [extractErrorMessageV8(e, streamIn, null, void 0, '')] } as any)
+      const errors = [extractErrorMessageV8(e, streamIn, null, void 0, '')]
+      try {
+        sendResponse(id, { errors } as any)
+      } catch {
+        // This may fail if the esbuild process is no longer running, but
+        // that's ok. Catch and swallow this exception so that we don't
+        // cause an unhandled promise rejection. Our caller isn't expecting
+        // this call to fail and doesn't handle the promise rejection.
+      }
     }
   }
 

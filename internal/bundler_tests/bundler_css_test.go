@@ -167,7 +167,7 @@ func TestCSSFromJSMissingStarImport(t *testing.T) {
 	})
 }
 
-func TestImportCSSFromJS(t *testing.T) {
+func TestImportGlobalCSSFromJS(t *testing.T) {
 	css_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
@@ -175,15 +175,15 @@ func TestImportCSSFromJS(t *testing.T) {
 				import "./b.js"
 			`,
 			"/a.js": `
-				import "./a.css";
-				console.log('a')
+				import * as stylesA from "./a.css"
+				console.log('a', stylesA.a, stylesA.default.a)
 			`,
 			"/a.css": `
 				.a { color: red }
 			`,
 			"/b.js": `
-				import "./b.css";
-				console.log('b')
+				import * as stylesB from "./b.css"
+				console.log('b', stylesB.b, stylesB.default.b)
 			`,
 			"/b.css": `
 				.b { color: blue }
@@ -193,6 +193,218 @@ func TestImportCSSFromJS(t *testing.T) {
 		options: config.Options{
 			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",
+		},
+	})
+}
+
+func TestImportLocalCSSFromJS(t *testing.T) {
+	css_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				import "./a.js"
+				import "./b.js"
+			`,
+			"/a.js": `
+				import * as stylesA from "./dir1/style.css"
+				console.log('file 1', stylesA.button, stylesA.default.a)
+			`,
+			"/dir1/style.css": `
+				.a { color: red }
+				.button { display: none }
+			`,
+			"/b.js": `
+				import * as stylesB from "./dir2/style.css"
+				console.log('file 2', stylesB.button, stylesB.default.b)
+			`,
+			"/dir2/style.css": `
+				.b { color: blue }
+				.button { display: none }
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+			ExtensionToLoader: map[string]config.Loader{
+				".js":  config.LoaderJS,
+				".css": config.LoaderLocalCSS,
+			},
+		},
+	})
+}
+
+func TestImportLocalCSSFromJSMinifyIdentifiers(t *testing.T) {
+	css_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				import "./a.js"
+				import "./b.js"
+			`,
+			"/a.js": `
+				import * as stylesA from "./dir1/style.css"
+				console.log('file 1', stylesA.button, stylesA.default.a)
+			`,
+			"/dir1/style.css": `
+				.a { color: red }
+				.button { display: none }
+			`,
+			"/b.js": `
+				import * as stylesB from "./dir2/style.css"
+				console.log('file 2', stylesB.button, stylesB.default.b)
+			`,
+			"/dir2/style.css": `
+				.b { color: blue }
+				.button { display: none }
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+			ExtensionToLoader: map[string]config.Loader{
+				".js":  config.LoaderJS,
+				".css": config.LoaderLocalCSS,
+			},
+			MinifyIdentifiers: true,
+		},
+	})
+}
+
+func TestImportLocalCSSFromJSMinifyIdentifiersAvoidGlobalNames(t *testing.T) {
+	css_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				import "./global.css"
+				import "./local.module.css"
+			`,
+			"/global.css": `
+				:is(.a, .b, .c, .d, .e, .f, .g, .h, .i, .j, .k, .l, .m, .n, .o, .p, .q, .r, .s, .t, .u, .v, .w, .x, .y, .z),
+				:is(.A, .B, .C, .D, .E, .F, .G, .H, .I, .J, .K, .L, .M, .N, .O, .P, .Q, .R, .S, .T, .U, .V, .W, .X, .Y, .Z),
+				._ { color: red }
+			`,
+			"/local.module.css": `
+				.rename-this { color: blue }
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+			ExtensionToLoader: map[string]config.Loader{
+				".js":         config.LoaderJS,
+				".css":        config.LoaderCSS,
+				".module.css": config.LoaderLocalCSS,
+			},
+			MinifyIdentifiers: true,
+		},
+	})
+}
+
+func TestImportCSSFromJSLocalVsGlobal(t *testing.T) {
+	css_suite.expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				import "./foo.css"
+				import "./bar.module.css"
+			`,
+			"/foo.css": `
+				.GLOBAL { color: #000 }
+
+				:global(.GLOBAL) { color: #001 }
+				:local(.local) { color: #002 }
+
+				div:global(.GLOBAL) { color: #003 }
+				div:local(.local) { color: #004 }
+
+				.GLOBAL:global(div) { color: #005 }
+				.GLOBAL:local(div) { color: #006 }
+
+				:global(div.GLOBAL) { color: #007 }
+				:local(div.local) { color: #008 }
+
+				div:global(span.GLOBAL) { color: #009 }
+				div:local(span.local) { color: #00A }
+
+				div:global(#GLOBAL0.GLOBAL1.GLOBAL2):local(.local0.local1#local2) { color: #00B }
+				div:global(#GLOBAL0 .GLOBAL1 .GLOBAL2):local(.local0 .local1 #local2) { color: #00C }
+
+				.nested {
+					:global(&.GLOBAL) { color: #00D }
+					:local(&.local) { color: #00E }
+
+					&:global(.GLOBAL) { color: #00F }
+					&:local(.local) { color: #010 }
+				}
+
+				:global(.GLOBAL0, .GLOBAL1) { color: #011 }
+				:local(.local0, .local1) { color: #012 }
+
+				div:global(.GLOBAL0, .GLOBAL1) { color: #013 }
+				div:local(.local0, .local1) { color: #014 }
+
+				div :global(.GLOBAL0, .GLOBAL1) span { color: #015 }
+				div :local(.local0, .local1) span { color: #016 }
+
+				div :global(.GLOBAL0 .GLOBAL1) span { color: #017 }
+				div :local(.local0 .local1) span { color: #018 }
+
+				div > :global(.GLOBAL0 ~ .GLOBAL1) + span { color: #019 }
+				div > :local(.local0 ~ .local1) + span { color: #01A }
+			`,
+			"/bar.module.css": `
+				.local { color: #000 }
+
+				:global(.GLOBAL) { color: #001 }
+				:local(.local) { color: #002 }
+
+				div:global(.GLOBAL) { color: #003 }
+				div:local(.local) { color: #004 }
+
+				.local:global(div) { color: #005 }
+				.local:local(div) { color: #006 }
+
+				:global(div.GLOBAL) { color: #007 }
+				:local(div.local) { color: #008 }
+
+				div:global(span.GLOBAL) { color: #009 }
+				div:local(span.local) { color: #00A }
+
+				div:global(#GLOBAL0.GLOBAL1.GLOBAL2):local(.local0.local1#local2) { color: #00B }
+				div:global(#GLOBAL0 .GLOBAL1 .GLOBAL2):local(.local0 .local1 #local2) { color: #00C }
+
+				.nested {
+					:global(&.GLOBAL) { color: #00D }
+					:local(&.local) { color: #00E }
+
+					&:global(.GLOBAL) { color: #00F }
+					&:local(.local) { color: #010 }
+				}
+
+				:global(.GLOBAL0, .GLOBAL1) { color: #011 }
+				:local(.local0, .local1) { color: #012 }
+
+				div:global(.GLOBAL0, .GLOBAL1) { color: #013 }
+				div:local(.local0, .local1) { color: #014 }
+
+				div :global(.GLOBAL0, .GLOBAL1) span { color: #015 }
+				div :local(.local0, .local1) span { color: #016 }
+
+				div :global(.GLOBAL0 .GLOBAL1) span { color: #017 }
+				div :local(.local0 .local1) span { color: #018 }
+
+				div > :global(.GLOBAL0 ~ .GLOBAL1) + span { color: #019 }
+				div > :local(.local0 ~ .local1) + span { color: #01A }
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		options: config.Options{
+			Mode:         config.ModeBundle,
+			AbsOutputDir: "/out",
+			ExtensionToLoader: map[string]config.Loader{
+				".js":         config.LoaderJS,
+				".css":        config.LoaderCSS,
+				".module.css": config.LoaderLocalCSS,
+			},
 		},
 	})
 }

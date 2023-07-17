@@ -70,8 +70,9 @@ tests.push(
   }),
 )
 
-// Test TypeScript enum scope merging
+// Test TypeScript enum stuff
 tests.push(
+  // Scope merging
   test(['entry.ts', '--bundle', '--minify', '--outfile=node.js'], {
     'entry.ts': `
       const id = x => x
@@ -142,6 +143,40 @@ tests.push(
       namespace x { export const z = y * 3 }
       namespace x { bar = z }
       if (foo !== 1 || bar !== 3) throw 'fail'
+    `,
+  }),
+
+  // https://github.com/evanw/esbuild/issues/3205
+  test(['entry.ts', '--outfile=node.js'], {
+    'entry.ts': `
+      // Note: The parentheses are important here
+      let x = (() => {
+        const enum E { a = 123 }
+        return () => E.a
+      })
+      if (x()() !== 123) throw 'fail'
+    `,
+  }),
+
+  // https://github.com/evanw/esbuild/issues/3210
+  test(['entry.ts', '--bundle', '--outfile=node.js'], {
+    'entry.ts': `
+      import { MyEnum } from './enums';
+      enum MyEnum2 {
+        'A.A' = 'a',
+        'aa' = 'aa',
+      }
+      if (
+        MyEnum['A.A'] !== 'a' || MyEnum2['A.A'] !== 'a' ||
+        MyEnum.aa !== 'aa' || MyEnum2['aa'] !== 'aa' ||
+        MyEnum['aa'] !== 'aa' || MyEnum2.aa !== 'aa'
+      ) throw 'fail'
+    `,
+    'enums.ts': `
+      export enum MyEnum {
+        'A.A' = 'a',
+        'aa' = 'aa',
+      }
     `,
   }),
 )

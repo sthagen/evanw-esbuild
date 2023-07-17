@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/evanw/esbuild/internal/ast"
 	"github.com/evanw/esbuild/internal/compat"
 	"github.com/evanw/esbuild/internal/config"
 	"github.com/evanw/esbuild/internal/css_printer"
@@ -16,7 +17,7 @@ func expectPrintedCommon(t *testing.T, name string, contents string, expected st
 	t.Run(name, func(t *testing.T) {
 		t.Helper()
 		log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug, nil)
-		tree := Parse(log, test.SourceForTest(contents), OptionsFromConfig(&options))
+		tree := Parse(log, test.SourceForTest(contents), OptionsFromConfig(config.LoaderCSS, &options))
 		msgs := log.Done()
 		text := ""
 		if expectedLog != nil {
@@ -32,7 +33,9 @@ func expectPrintedCommon(t *testing.T, name string, contents string, expected st
 			}
 			test.AssertEqualWithDiff(t, text, "")
 		}
-		result := css_printer.Print(tree, css_printer.Options{
+		symbols := ast.NewSymbolMap(1)
+		symbols.SymbolsForSource[0] = tree.Symbols
+		result := css_printer.Print(tree, symbols, css_printer.Options{
 			MinifyWhitespace: options.MinifyWhitespace,
 		})
 		test.AssertEqualWithDiff(t, string(result.CSS), expected)
@@ -648,7 +651,7 @@ func TestSelector(t *testing.T) {
 	expectPrinted(t, "[a|b |= \"c\"]{}", "[a|b|=c] {\n}\n")
 	expectParseError(t, "[a||b] {}", "[a||b] {\n}\n", "<stdin>: WARNING: Expected identifier but found \"|\"\n")
 	expectParseError(t, "[* | b] {}", "[* | b] {\n}\n", "<stdin>: WARNING: Expected \"|\" but found whitespace\n")
-	expectParseError(t, "[a | b] {}", "[a|=b] {\n}\n", "<stdin>: WARNING: Expected \"=\" but found whitespace\n")
+	expectParseError(t, "[a | b] {}", "[a | b] {\n}\n", "<stdin>: WARNING: Expected \"=\" but found whitespace\n")
 
 	expectPrinted(t, "[b=\"c\"] {}", "[b=c] {\n}\n")
 	expectPrinted(t, "[b=\"c d\"] {}", "[b=\"c d\"] {\n}\n")
@@ -905,14 +908,14 @@ func TestNestedSelector(t *testing.T) {
 	expectPrintedLower(t, ".bar:before { :hover & { color: red } }", ":hover :is() {\n  color: red;\n}\n")
 	expectPrintedLower(t, ".xy { :where(&.foo) { color: red } }", ":where(.xy.foo) {\n  color: red;\n}\n")
 	expectPrintedLower(t, "div { :where(&.foo) { color: red } }", ":where(div.foo) {\n  color: red;\n}\n")
-	expectPrintedLower(t, ".xy { :where(.foo&) { color: red } }", ":where(.foo.xy) {\n  color: red;\n}\n")
-	expectPrintedLower(t, "div { :where(.foo&) { color: red } }", ":where(.foo:is(div)) {\n  color: red;\n}\n")
-	expectPrintedLower(t, ".xy { :where([href]&) { color: red } }", ":where([href].xy) {\n  color: red;\n}\n")
-	expectPrintedLower(t, "div { :where([href]&) { color: red } }", ":where([href]:is(div)) {\n  color: red;\n}\n")
-	expectPrintedLower(t, ".xy { :where(:hover&) { color: red } }", ":where(:hover.xy) {\n  color: red;\n}\n")
-	expectPrintedLower(t, "div { :where(:hover&) { color: red } }", ":where(:hover:is(div)) {\n  color: red;\n}\n")
-	expectPrintedLower(t, ".xy { :where(:is(.foo)&) { color: red } }", ":where(:is(.foo).xy) {\n  color: red;\n}\n")
-	expectPrintedLower(t, "div { :where(:is(.foo)&) { color: red } }", ":where(:is(.foo):is(div)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(.foo&) { color: red } }", ":where(.xy.foo) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(.foo&) { color: red } }", ":where(div.foo) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where([href]&) { color: red } }", ":where(.xy[href]) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where([href]&) { color: red } }", ":where(div[href]) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(:hover&) { color: red } }", ":where(.xy:hover) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(:hover&) { color: red } }", ":where(div:hover) {\n  color: red;\n}\n")
+	expectPrintedLower(t, ".xy { :where(:is(.foo)&) { color: red } }", ":where(.xy:is(.foo)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "div { :where(:is(.foo)&) { color: red } }", ":where(div:is(.foo)) {\n  color: red;\n}\n")
 	expectPrintedLower(t, ".xy { :where(.foo + &) { color: red } }", ":where(.foo + .xy) {\n  color: red;\n}\n")
 	expectPrintedLower(t, "div { :where(.foo + &) { color: red } }", ":where(.foo + div) {\n  color: red;\n}\n")
 	expectPrintedLower(t, ".xy { :where(&, span:is(.foo &)) { color: red } }", ":where(.xy, span:is(.foo .xy)) {\n  color: red;\n}\n")
@@ -924,7 +927,7 @@ func TestNestedSelector(t *testing.T) {
 	expectPrintedLower(t, "a { > b, + c { color: red } }", "a > b,\na + c {\n  color: red;\n}\n")
 	expectPrintedLower(t, "a { & > b, & > c { color: red } }", "a > :is(b, c) {\n  color: red;\n}\n")
 	expectPrintedLower(t, "a { & > b, & + c { color: red } }", "a > b,\na + c {\n  color: red;\n}\n")
-	expectPrintedLower(t, "a { > b&, > c& { color: red } }", "a > :is(b:is(a), c:is(a)) {\n  color: red;\n}\n")
+	expectPrintedLower(t, "a { > b&, > c& { color: red } }", "a > :is(a:is(b), a:is(c)) {\n  color: red;\n}\n")
 	expectPrintedLower(t, "a { > b&, + c& { color: red } }", "a > a:is(b),\na + a:is(c) {\n  color: red;\n}\n")
 	expectPrintedLower(t, "a { > &.b, > &.c { color: red } }", "a > :is(a.b, a.c) {\n  color: red;\n}\n")
 	expectPrintedLower(t, "a { > &.b, + &.c { color: red } }", "a > a.b,\na + a.c {\n  color: red;\n}\n")
@@ -2175,8 +2178,8 @@ func TestPrefixInsertion(t *testing.T) {
 	// Special-case tests
 	expectPrintedWithAllPrefixes(t, "a { appearance: none }", "a {\n  -webkit-appearance: none;\n  -moz-appearance: none;\n  appearance: none;\n}\n")
 	expectPrintedWithAllPrefixes(t, "a { background-clip: not-text }", "a {\n  background-clip: not-text;\n}\n")
-	expectPrintedWithAllPrefixes(t, "a { background-clip: text !important }", "a {\n  -webkit-background-clip: text !important;\n  background-clip: text !important;\n}\n")
-	expectPrintedWithAllPrefixes(t, "a { background-clip: text }", "a {\n  -webkit-background-clip: text;\n  background-clip: text;\n}\n")
+	expectPrintedWithAllPrefixes(t, "a { background-clip: text !important }", "a {\n  -webkit-background-clip: text !important;\n  -ms-background-clip: text !important;\n  background-clip: text !important;\n}\n")
+	expectPrintedWithAllPrefixes(t, "a { background-clip: text }", "a {\n  -webkit-background-clip: text;\n  -ms-background-clip: text;\n  background-clip: text;\n}\n")
 	expectPrintedWithAllPrefixes(t, "a { hyphens: auto }", "a {\n  -webkit-hyphens: auto;\n  -moz-hyphens: auto;\n  -ms-hyphens: auto;\n  hyphens: auto;\n}\n")
 	expectPrintedWithAllPrefixes(t, "a { position: absolute }", "a {\n  position: absolute;\n}\n")
 	expectPrintedWithAllPrefixes(t, "a { position: sticky !important }", "a {\n  position: -webkit-sticky !important;\n  position: sticky !important;\n}\n")
@@ -2185,7 +2188,7 @@ func TestPrefixInsertion(t *testing.T) {
 	expectPrintedWithAllPrefixes(t, "a { text-decoration-color: none }", "a {\n  -webkit-text-decoration-color: none;\n  -moz-text-decoration-color: none;\n  text-decoration-color: none;\n}\n")
 	expectPrintedWithAllPrefixes(t, "a { text-decoration-line: none }", "a {\n  -webkit-text-decoration-line: none;\n  -moz-text-decoration-line: none;\n  text-decoration-line: none;\n}\n")
 	expectPrintedWithAllPrefixes(t, "a { text-size-adjust: none }", "a {\n  -webkit-text-size-adjust: none;\n  -ms-text-size-adjust: none;\n  text-size-adjust: none;\n}\n")
-	expectPrintedWithAllPrefixes(t, "a { user-select: none }", "a {\n  -webkit-user-select: none;\n  -moz-user-select: -moz-none;\n  -ms-user-select: none;\n  user-select: none;\n}\n")
+	expectPrintedWithAllPrefixes(t, "a { user-select: none }", "a {\n  -webkit-user-select: none;\n  -khtml-user-select: none;\n  -moz-user-select: -moz-none;\n  -ms-user-select: none;\n  user-select: none;\n}\n")
 
 	// Check that we insert prefixed rules each time an unprefixed rule is
 	// encountered. This matches the behavior of the popular "autoprefixer" tool.

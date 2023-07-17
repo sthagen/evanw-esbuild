@@ -11,6 +11,7 @@ import (
 	"github.com/evanw/esbuild/internal/css_ast"
 	"github.com/evanw/esbuild/internal/css_lexer"
 	"github.com/evanw/esbuild/internal/helpers"
+	"github.com/evanw/esbuild/internal/logger"
 	"github.com/evanw/esbuild/internal/sourcemap"
 )
 
@@ -18,6 +19,7 @@ const quoteForURL byte = 0
 
 type printer struct {
 	options                Options
+	symbols                ast.SymbolMap
 	importRecords          []ast.ImportRecord
 	css                    []byte
 	hasLegalComment        map[string]struct{}
@@ -36,6 +38,9 @@ type Options struct {
 	// If we're writing out a source map, this table of line start indices lets
 	// us do binary search on to figure out what line a given AST node came from
 	LineOffsetTables []sourcemap.LineOffsetTable
+
+	// Local symbol renaming results go here
+	LocalNames map[ast.Ref]string
 
 	LineLimit           int
 	UnsupportedFeatures compat.CSSFeature
@@ -58,9 +63,10 @@ type PrintResult struct {
 	SourceMapChunk sourcemap.Chunk
 }
 
-func Print(tree css_ast.AST, options Options) PrintResult {
+func Print(tree css_ast.AST, symbols ast.SymbolMap, options Options) PrintResult {
 	p := printer{
 		options:       options,
+		symbols:       symbols,
 		importRecords: tree.ImportRecords,
 		builder:       sourcemap.MakeChunkBuilder(options.InputSourceMap, options.LineOffsetTables, options.ASCIIOnly),
 	}
@@ -164,6 +170,9 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 		}
 		indent++
 		for _, block := range r.Blocks {
+			if p.options.AddSourceMappings {
+				p.builder.AddSourceMapping(block.Loc, "", p.css)
+			}
 			if !p.options.MinifyWhitespace {
 				p.printIndent(indent)
 			}
@@ -180,12 +189,15 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 			if !p.options.MinifyWhitespace {
 				p.print(" ")
 			}
-			p.printRuleBlock(block.Rules, indent)
+			p.printRuleBlock(block.Rules, indent, block.CloseBraceLoc)
 			if !p.options.MinifyWhitespace {
 				p.print("\n")
 			}
 		}
 		indent--
+		if p.options.AddSourceMappings && r.CloseBraceLoc.Start != 0 {
+			p.builder.AddSourceMapping(r.CloseBraceLoc, "", p.css)
+		}
 		if !p.options.MinifyWhitespace {
 			p.printIndent(indent)
 		}
@@ -208,7 +220,7 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 			if !p.options.MinifyWhitespace && len(r.Prelude) > 0 {
 				p.print(" ")
 			}
-			p.printRuleBlock(r.Rules, indent)
+			p.printRuleBlock(r.Rules, indent, r.CloseBraceLoc)
 		}
 
 	case *css_ast.RUnknownAt:
@@ -232,18 +244,18 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 		}
 
 	case *css_ast.RSelector:
-		p.printComplexSelectors(r.Selectors, indent)
+		p.printComplexSelectors(r.Selectors, indent, layoutMultiLine)
 		if !p.options.MinifyWhitespace {
 			p.print(" ")
 		}
-		p.printRuleBlock(r.Rules, indent)
+		p.printRuleBlock(r.Rules, indent, r.CloseBraceLoc)
 
 	case *css_ast.RQualified:
 		hasWhitespaceAfter := p.printTokens(r.Prelude, printTokensOpts{})
 		if !hasWhitespaceAfter && !p.options.MinifyWhitespace {
 			p.print(" ")
 		}
-		p.printRuleBlock(r.Rules, indent)
+		p.printRuleBlock(r.Rules, indent, r.CloseBraceLoc)
 
 	case *css_ast.RDeclaration:
 		p.printIdent(r.KeyText, identNormal, canDiscardWhitespaceAfter)
@@ -289,7 +301,7 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 			if !p.options.MinifyWhitespace {
 				p.print(" ")
 			}
-			p.printRuleBlock(r.Rules, indent)
+			p.printRuleBlock(r.Rules, indent, r.CloseBraceLoc)
 		}
 
 	default:
@@ -322,7 +334,7 @@ func (p *printer) printIndentedComment(indent int32, text string) {
 	p.print(text)
 }
 
-func (p *printer) printRuleBlock(rules []css_ast.Rule, indent int32) {
+func (p *printer) printRuleBlock(rules []css_ast.Rule, indent int32, closeBraceLoc logger.Loc) {
 	if p.options.MinifyWhitespace {
 		p.print("{")
 	} else {
@@ -334,13 +346,23 @@ func (p *printer) printRuleBlock(rules []css_ast.Rule, indent int32) {
 		p.printRule(decl, indent+1, omitTrailingSemicolon)
 	}
 
+	if p.options.AddSourceMappings && closeBraceLoc.Start != 0 {
+		p.builder.AddSourceMapping(closeBraceLoc, "", p.css)
+	}
 	if !p.options.MinifyWhitespace {
 		p.printIndent(indent)
 	}
 	p.print("}")
 }
 
-func (p *printer) printComplexSelectors(selectors []css_ast.ComplexSelector, indent int32) {
+type selectorLayout uint8
+
+const (
+	layoutMultiLine selectorLayout = iota
+	layoutSingleLine
+)
+
+func (p *printer) printComplexSelectors(selectors []css_ast.ComplexSelector, indent int32, layout selectorLayout) {
 	for i, complex := range selectors {
 		if i > 0 {
 			if p.options.MinifyWhitespace {
@@ -348,9 +370,11 @@ func (p *printer) printComplexSelectors(selectors []css_ast.ComplexSelector, ind
 				if p.options.LineLimit > 0 {
 					p.printNewlinePastLineLimit(indent)
 				}
-			} else {
+			} else if layout == layoutMultiLine {
 				p.print(",\n")
 				p.printIndent(indent)
+			} else {
+				p.print(", ")
 			}
 		}
 
@@ -408,11 +432,11 @@ func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bo
 
 			// This deliberately does not use identHash. From the specification:
 			// "In <id-selector>, the <hash-token>'s value must be an identifier."
-			p.printIdent(s.Name, identNormal, whitespace)
+			p.printSymbol(s.Name.Loc, s.Name.Ref, identNormal, whitespace)
 
 		case *css_ast.SSClass:
 			p.print(".")
-			p.printIdent(s.Name, identNormal, whitespace)
+			p.printSymbol(s.Name.Loc, s.Name.Ref, identNormal, whitespace)
 
 		case *css_ast.SSAttribute:
 			p.print("[")
@@ -446,6 +470,16 @@ func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bo
 
 		case *css_ast.SSPseudoClass:
 			p.printPseudoClassSelector(*s, whitespace)
+
+		case *css_ast.SSPseudoClassWithSelectorList:
+			p.print(":")
+			p.print(s.Kind.String())
+			p.print("(")
+			p.printComplexSelectors(s.Selectors, indent, layoutSingleLine)
+			p.print(")")
+
+		default:
+			panic("Internal error")
 		}
 	}
 }
@@ -783,6 +817,18 @@ func (p *printer) printIdent(text string, mode identMode, whitespace trailingWhi
 		mayNeedWhitespaceAfter := whitespace == mayNeedWhitespaceAfter && escape != escapeNone && i+utf8.RuneLen(c) == n
 		p.printWithEscape(c, escape, text[i:], mayNeedWhitespaceAfter)
 	}
+}
+
+func (p *printer) printSymbol(loc logger.Loc, ref ast.Ref, mode identMode, whitespace trailingWhitespace) {
+	ref = ast.FollowSymbols(p.symbols, ref)
+	originalName := p.symbols.Get(ref).OriginalName
+	name, ok := p.options.LocalNames[ref]
+	if !ok {
+		name = originalName
+	} else if p.options.AddSourceMappings && name != originalName {
+		p.builder.AddSourceMapping(loc, originalName, p.css)
+	}
+	p.printIdent(name, mode, whitespace)
 }
 
 func (p *printer) printIndent(indent int32) {

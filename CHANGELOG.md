@@ -1,5 +1,205 @@
 # Changelog
 
+## Unreleased
+
+* Implement local CSS names ([#20](https://github.com/evanw/esbuild/issues/20))
+
+    This release introduces a new loader called `local-css` and two new pseudo-class selectors `:local()` and `:global()`. This is a partial implementation of the popular [CSS modules](https://github.com/css-modules/css-modules) approach for avoiding unintentional name collisions in CSS. I'm not calling this feature "CSS modules" because although some people in the community call it that, other people in the community have started using "CSS modules" to refer to [something completely different](https://github.com/WICG/webcomponents/blob/60c9f682b63c622bfa0d8222ea6b1f3b659e007c/proposals/css-modules-v1-explainer.md) and now CSS modules is an overloaded term.
+
+    Here's how this new local CSS name feature works with esbuild:
+
+    * Identifiers that look like `.className` and `#idName` are global with the `css` loader and local with the `local-css` loader. Global identifiers are the same across all files (the way CSS normally works) but local identifiers are different between different files. If two separate CSS files use the same local identifier `.button`, esbuild will automatically rename one of them so that they don't collide. This is analogous to how esbuild automatically renames JS local variables with the same name in separate JS files to avoid name collisions.
+
+    * It only makes sense to use local CSS names with esbuild when you are also using esbuild's bundler to bundle JS files that import CSS files. When you do that, esbuild will generate one export for each local name in the CSS file. The JS code can import these names and use them when constructing HTML DOM. For example:
+
+        ```js
+        // app.js
+        import { outerShell } from './app.css'
+        const div = document.createElement('div')
+        div.className = outerShell
+        document.body.appendChild(div)
+        ```
+
+        ```css
+        /* app.css */
+        .outerShell {
+          position: absolute;
+          inset: 0;
+        }
+        ```
+
+        When you bundle this with `esbuild app.js --bundle --loader:.css=local-css --outdir=out` you'll now get this (notice how the local CSS name `outerShell` has been renamed):
+
+        ```js
+        // out/app.js
+        (() => {
+          // app.css
+          var outerShell = "app_outerShell";
+
+          // app.js
+          var div = document.createElement("div");
+          div.className = outerShell;
+          document.body.appendChild(div);
+        })();
+        ```
+
+        ```css
+        /* out/app.css */
+        .app_outerShell {
+          position: absolute;
+          inset: 0;
+        }
+        ```
+
+        This feature only makes sense to use when bundling is enabled both because your code needs to `import` the renamed local names so that it can use them, and because esbuild needs to be able to process all CSS files containing local names in a single bundling operation so that it can successfully rename conflicting local names to avoid collisions.
+
+    * If you are in a global CSS file (with the `css` loader) you can create a local name using `:local()`, and if you are in a local CSS file (with the `local-css` loader) you can create a global name with `:global()`. So the choice of the `css` loader vs. the `local-css` loader just sets the default behavior for identifiers, but you can override it on a case-by-case basis as necessary. For example:
+
+        ```css
+        :local(.button) {
+          color: red;
+        }
+        :global(.button) {
+          color: blue;
+        }
+        ```
+
+        Processing this CSS file with esbuild will result in something like this:
+
+        ```css
+        .stdin_button {
+          color: red;
+        }
+        .button {
+          color: blue;
+        }
+        ```
+
+    * The names that esbuild generates for local CSS names are an implementation detail and are not intended to be hard-coded anywhere. The only way you should be referencing the local CSS names in your JS or HTML is with an `import` statement in JS that is bundled with esbuild, as demonstrated above. For example, when `--minify` is enabled esbuild will use a different name generation algorithm which generates names that are as short as possible (analogous to how esbuild minifies local identifiers in JS).
+
+    * You can easily use both global CSS files and local CSS files simultaneously if you give them different file extensions. For example, you could pass `--loader:.module.css=local-css` to esbuild so that `.css` files still use global names by default but `.module.css` files use local names by default.
+
+    Note that esbuild's implementation does not currently have feature parity with other implementations of modular CSS in similar tools. This is only a preliminary release with a partial implementation that includes some basic behavior to get the process started. Additional behavior may be added in future releases. In particular, this release does not implement:
+
+    * The `composes` pragma
+    * Tree shaking for unused local CSS
+    * Local names for keyframe animations, grid lines, `@container`, `@counter-style`, etc.
+
+    Issue [#20](https://github.com/evanw/esbuild/issues/20) (the issue for this feature) is esbuild's most-upvoted issue! While this release still leaves that issue open, it's an important first step in that direction.
+
+* Parse `:is`, `:has`, `:not`, and `:where` in CSS
+
+    With this release, esbuild will now parse the contents of these pseudo-class selectors as a selector list. This means you will now get syntax warnings within these selectors for invalid selector syntax. It also means that esbuild's CSS nesting transform behaves slightly differently than before because esbuild is now operating on an AST instead of a token stream. For example:
+
+    ```css
+    /* Original code */
+    div {
+      :where(.foo&) {
+        color: red;
+      }
+    }
+
+    /* Old output (with --target=chrome90) */
+    :where(.foo:is(div)) {
+      color: red;
+    }
+
+    /* New output (with --target=chrome90) */
+    :where(div.foo) {
+      color: red;
+    }
+    ```
+
+## 0.18.13
+
+* Add the `--drop-labels=` option ([#2398](https://github.com/evanw/esbuild/issues/2398))
+
+    If you want to conditionally disable some development-only code and have it not be present in the final production bundle, right now the most straightforward way of doing this is to use the `--define:` flag along with a specially-named global variable. For example, consider the following code:
+
+    ```js
+    function main() {
+      DEV && doAnExpensiveCheck()
+    }
+    ```
+
+    You can build this for development and production like this:
+
+    * Development: `esbuild --define:DEV=true`
+    * Production: `esbuild --define:DEV=false`
+
+    One drawback of this approach is that the resulting code crashes if you don't provide a value for `DEV` with `--define:`. In practice this isn't that big of a problem, and there are also various ways to work around this.
+
+    However, another approach that avoids this drawback is to use JavaScript label statements instead. That's what the `--drop-labels=` flag implements. For example, consider the following code:
+
+    ```js
+    function main() {
+      DEV: doAnExpensiveCheck()
+    }
+    ```
+
+    With this release, you can now build this for development and production like this:
+
+    * Development: `esbuild`
+    * Production: `esbuild --drop-labels=DEV`
+
+    This means that code containing optional development-only checks can now be written such that it's safe to run without any additional configuration. The `--drop-labels=` flag takes comma-separated list of multiple label names to drop.
+
+* Avoid causing `unhandledRejection` during shutdown ([#3219](https://github.com/evanw/esbuild/issues/3219))
+
+    All pending esbuild JavaScript API calls are supposed to fail if esbuild's underlying child process is unexpectedly terminated. This can happen if `SIGINT` is sent to the parent `node` process with Ctrl+C, for example. Previously doing this could also cause an unhandled promise rejection when esbuild attempted to communicate this failure to its own child process that no longer exists. This release now swallows this communication failure, which should prevent this internal unhandled promise rejection. This change means that you can now use esbuild's JavaScript API with a custom `SIGINT` handler that extends the lifetime of the `node` process without esbuild's internals causing an early exit due to an unhandled promise rejection.
+
+* Update browser compatibility table scripts
+
+    The scripts that esbuild uses to compile its internal browser compatibility table have been overhauled. Briefly:
+
+    * Converted from JavaScript to TypeScript
+    * Fixed some bugs that resulted in small changes to the table
+    * Added [`caniuse-lite`](https://www.npmjs.com/package/caniuse-lite) and [`@mdn/browser-compat-data`](https://www.npmjs.com/package/@mdn/browser-compat-data) as new data sources (replacing manually-copied information)
+
+    This change means it's now much easier to keep esbuild's internal compatibility tables up to date. You can review the table changes here if you need to debug something about this change:
+
+    * [JS table changes](https://github.com/evanw/esbuild/compare/d259b8fac717ee347c19bd8299f2c26d7c87481a...af1d35c372f78c14f364b63e819fd69548508f55#diff-1649eb68992c79753469f02c097de309adaf7231b45cc816c50bf751af400eb4)
+    * [CSS table changes](https://github.com/evanw/esbuild/commit/95feb2e09877597cb929469ce43811bdf11f50c1#diff-4e1c4f269e02c5ea31cbd5138d66751e32cf0e240524ee8a966ac756f0e3c3cd)
+
+## 0.18.12
+
+* Fix a panic with `const enum` inside parentheses ([#3205](https://github.com/evanw/esbuild/issues/3205))
+
+    This release fixes an edge case where esbuild could potentially panic if a TypeScript `const enum` statement was used inside of a parenthesized expression and was followed by certain other scope-related statements. Here's a minimal example that triggers this edge case:
+
+    ```ts
+    (() => {
+      const enum E { a };
+      () => E.a
+    })
+    ```
+
+* Allow a newline in the middle of TypeScript `export type` statement ([#3225](https://github.com/evanw/esbuild/issues/3225))
+
+    Previously esbuild incorrectly rejected the following valid TypeScript code:
+
+    ```ts
+    export type
+    { T };
+
+    export type
+    * as foo from 'bar';
+    ```
+
+    Code that uses a newline after `export type` is now allowed starting with this release.
+
+* Fix cross-module inlining of string enums ([#3210](https://github.com/evanw/esbuild/issues/3210))
+
+    A refactoring typo in version 0.18.9 accidentally introduced a regression with cross-module inlining of string enums when combined with computed property accesses. This regression has been fixed.
+
+* Rewrite `.js` to `.ts` inside packages with `exports` ([#3201](https://github.com/evanw/esbuild/issues/3201))
+
+    Packages with the `exports` field are supposed to disable node's path resolution behavior that allows you to import a file with a different extension than the one in the source code (for example, importing `foo/bar` to get `foo/bar.js`). And TypeScript has behavior where you can import a non-existent `.js` file and you will get the `.ts` file instead. Previously the presence of the `exports` field caused esbuild to disable all extension manipulation stuff which included both node's implicit file extension searching and TypeScript's file extension swapping. However, TypeScript appears to always apply file extension swapping even in this case. So with this release, esbuild will now rewrite `.js` to `.ts` even inside packages with `exports`.
+
+* Fix a redirect edge case in esbuild's development server ([#3208](https://github.com/evanw/esbuild/issues/3208))
+
+    The development server canonicalizes directory URLs by adding a trailing slash. For example, visiting `/about` redirects to `/about/` if `/about/index.html` would be served. However, if the requested path begins with two slashes, then the redirect incorrectly turned into a protocol-relative URL. For example, visiting `//about` redirected to `//about/` which the browser turns into `http://about/`. This release fixes the bug by canonicalizing the URL path when doing this redirect.
+
 ## 0.18.11
 
 * Fix a TypeScript code generation edge case ([#3199](https://github.com/evanw/esbuild/issues/3199))

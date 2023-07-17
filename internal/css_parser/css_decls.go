@@ -246,6 +246,9 @@ func (p *parser) processDeclarations(rules []css_ast.Rule) (rewrittenRules []css
 			if (prefixes & compat.WebkitPrefix) != 0 {
 				rewrittenRules = p.insertPrefixedDeclaration(rewrittenRules, "-webkit-", rule.Loc, decl)
 			}
+			if (prefixes & compat.KhtmlPrefix) != 0 {
+				rewrittenRules = p.insertPrefixedDeclaration(rewrittenRules, "-khtml-", rule.Loc, decl)
+			}
 			if (prefixes & compat.MozPrefix) != 0 {
 				rewrittenRules = p.insertPrefixedDeclaration(rewrittenRules, "-moz-", rule.Loc, decl)
 			}
@@ -307,9 +310,7 @@ func (p *parser) insertPrefixedDeclaration(rules []css_ast.Rule, prefix string, 
 		}
 	}
 
-	// Clone the import records so that the duplicate has its own copy
-	var value []css_ast.Token
-	value, p.importRecords = css_ast.CloneTokensWithImportRecords(decl.Value, p.importRecords, nil, p.importRecords)
+	value := css_ast.CloneTokensWithoutImportRecords(decl.Value)
 
 	// Additional special cases for how to transform the contents
 	switch decl.Key {
