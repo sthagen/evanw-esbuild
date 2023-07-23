@@ -128,7 +128,19 @@ func (p *printer) printRule(rule css_ast.Rule, indent int32, omitTrailingSemicol
 	}
 
 	if p.options.AddSourceMappings {
-		p.builder.AddSourceMapping(rule.Loc, "", p.css)
+		shouldPrintMapping := true
+		if indent == 0 || p.options.MinifyWhitespace {
+			switch rule.Data.(type) {
+			case *css_ast.RSelector, *css_ast.RQualified, *css_ast.RBadDeclaration:
+				// These rules will begin with a potentially more accurate mapping. We
+				// shouldn't print a mapping here if there's no indent in between this
+				// mapping and the rule.
+				shouldPrintMapping = false
+			}
+		}
+		if shouldPrintMapping {
+			p.builder.AddSourceMapping(rule.Loc, "", p.css)
+		}
 	}
 
 	if !p.options.MinifyWhitespace {
@@ -385,7 +397,7 @@ func (p *printer) printComplexSelectors(selectors []css_ast.ComplexSelector, ind
 }
 
 func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bool, isLast bool, indent int32) {
-	if !isFirst && sel.Combinator == 0 {
+	if !isFirst && sel.Combinator.Byte == 0 {
 		// A space is required in between compound selectors if there is no
 		// combinator in the middle. It's fine to convert "a + b" into "a+b"
 		// but not to convert "a b" into "ab".
@@ -394,11 +406,16 @@ func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bo
 		}
 	}
 
-	if sel.Combinator != 0 {
+	if sel.Combinator.Byte != 0 {
 		if !isFirst && !p.options.MinifyWhitespace {
 			p.print(" ")
 		}
-		p.css = append(p.css, sel.Combinator)
+
+		if p.options.AddSourceMappings {
+			p.builder.AddSourceMapping(sel.Combinator.Loc, "", p.css)
+		}
+		p.css = append(p.css, sel.Combinator.Byte)
+
 		if (p.options.LineLimit <= 0 || !p.printNewlinePastLineLimit(indent)) && !p.options.MinifyWhitespace {
 			p.print(" ")
 		}
@@ -414,11 +431,15 @@ func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bo
 		p.printNamespacedName(*sel.TypeSelector, whitespace)
 	}
 
-	if sel.HasNestingSelector {
+	if sel.HasNestingSelector() {
+		if p.options.AddSourceMappings {
+			p.builder.AddSourceMapping(logger.Loc{Start: int32(sel.NestingSelectorLoc.GetIndex())}, "", p.css)
+		}
+
 		p.print("&")
 	}
 
-	for i, sub := range sel.SubclassSelectors {
+	for i, ss := range sel.SubclassSelectors {
 		whitespace := mayNeedWhitespaceAfter
 
 		// There is no chance of whitespace between subclass selectors
@@ -426,7 +447,11 @@ func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bo
 			whitespace = canDiscardWhitespaceAfter
 		}
 
-		switch s := sub.(type) {
+		if p.options.AddSourceMappings {
+			p.builder.AddSourceMapping(ss.Loc, "", p.css)
+		}
+
+		switch s := ss.Data.(type) {
 		case *css_ast.SSHash:
 			p.print("#")
 
@@ -485,10 +510,14 @@ func (p *printer) printCompoundSelector(sel css_ast.CompoundSelector, isFirst bo
 }
 
 func (p *printer) printNamespacedName(nsName css_ast.NamespacedName, whitespace trailingWhitespace) {
-	if nsName.NamespacePrefix != nil {
-		switch nsName.NamespacePrefix.Kind {
+	if prefix := nsName.NamespacePrefix; prefix != nil {
+		if p.options.AddSourceMappings {
+			p.builder.AddSourceMapping(prefix.Loc, "", p.css)
+		}
+
+		switch prefix.Kind {
 		case css_lexer.TIdent:
-			p.printIdent(nsName.NamespacePrefix.Text, identNormal, canDiscardWhitespaceAfter)
+			p.printIdent(prefix.Text, identNormal, canDiscardWhitespaceAfter)
 		case css_lexer.TDelimAsterisk:
 			p.print("*")
 		default:
@@ -496,6 +525,10 @@ func (p *printer) printNamespacedName(nsName css_ast.NamespacedName, whitespace 
 		}
 
 		p.print("|")
+	}
+
+	if p.options.AddSourceMappings {
+		p.builder.AddSourceMapping(nsName.Name.Loc, "", p.css)
 	}
 
 	switch nsName.Name.Kind {
@@ -825,7 +858,11 @@ func (p *printer) printSymbol(loc logger.Loc, ref ast.Ref, mode identMode, white
 	name, ok := p.options.LocalNames[ref]
 	if !ok {
 		name = originalName
-	} else if p.options.AddSourceMappings && name != originalName {
+	}
+	if p.options.AddSourceMappings {
+		if originalName == name {
+			originalName = ""
+		}
 		p.builder.AddSourceMapping(loc, originalName, p.css)
 	}
 	p.printIdent(name, mode, whitespace)
@@ -880,6 +917,10 @@ func (p *printer) printTokens(tokens []css_ast.Token, opts printTokensOpts) bool
 		whitespace := mayNeedWhitespaceAfter
 		if !hasWhitespaceAfter {
 			whitespace = canDiscardWhitespaceAfter
+		}
+
+		if p.options.AddSourceMappings {
+			p.builder.AddSourceMapping(t.Loc, "", p.css)
 		}
 
 		switch t.Kind {

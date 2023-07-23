@@ -46,6 +46,9 @@ type Token struct {
 	// contains the decoded string contents for "TString" tokens.
 	Text string // 16 bytes
 
+	// The source location at the start of the token
+	Loc logger.Loc // 4 bytes
+
 	// URL tokens have an associated import record at the top-level of the AST.
 	// This index points to that import record.
 	ImportRecordIndex uint32 // 4 bytes
@@ -617,10 +620,10 @@ func HashComplexSelectors(hash uint32, selectors []ComplexSelector) uint32 {
 				hash = helpers.HashCombine(hash, 0)
 			}
 			hash = helpers.HashCombine(hash, uint32(len(sel.SubclassSelectors)))
-			for _, sub := range sel.SubclassSelectors {
-				hash = helpers.HashCombine(hash, sub.Hash())
+			for _, ss := range sel.SubclassSelectors {
+				hash = helpers.HashCombine(hash, ss.Data.Hash())
 			}
-			hash = helpers.HashCombine(hash, uint32(sel.Combinator))
+			hash = helpers.HashCombine(hash, uint32(sel.Combinator.Byte))
 		}
 	}
 	return hash
@@ -630,7 +633,7 @@ func (s ComplexSelector) CloneWithoutLeadingCombinator() ComplexSelector {
 	clone := ComplexSelector{Selectors: make([]CompoundSelector, len(s.Selectors))}
 	for i, sel := range s.Selectors {
 		if i == 0 {
-			sel.Combinator = 0
+			sel.Combinator = Combinator{}
 		}
 		clone.Selectors[i] = sel.Clone()
 	}
@@ -638,13 +641,13 @@ func (s ComplexSelector) CloneWithoutLeadingCombinator() ComplexSelector {
 }
 
 func (sel ComplexSelector) IsRelative() bool {
-	if sel.Selectors[0].Combinator == 0 {
+	if sel.Selectors[0].Combinator.Byte == 0 {
 		for _, inner := range sel.Selectors {
-			if inner.HasNestingSelector {
+			if inner.HasNestingSelector() {
 				return false
 			}
 			for _, ss := range inner.SubclassSelectors {
-				if pseudo, ok := ss.(*SSPseudoClassWithSelectorList); ok {
+				if pseudo, ok := ss.Data.(*SSPseudoClassWithSelectorList); ok {
 					for _, nested := range pseudo.Selectors {
 						if !nested.IsRelative() {
 							return false
@@ -671,8 +674,8 @@ func tokensContainAmpersandRecursive(tokens []Token) bool {
 
 func (sel ComplexSelector) UsesPseudoElement() bool {
 	for _, sel := range sel.Selectors {
-		for _, sub := range sel.SubclassSelectors {
-			if class, ok := sub.(*SSPseudoClass); ok {
+		for _, ss := range sel.SubclassSelectors {
+			if class, ok := ss.Data.(*SSPseudoClass); ok {
 				if class.IsElement {
 					return true
 				}
@@ -699,7 +702,7 @@ func (a ComplexSelector) Equal(b ComplexSelector, check *CrossFileEqualityCheck)
 
 	for i, ai := range a.Selectors {
 		bi := b.Selectors[i]
-		if ai.HasNestingSelector != bi.HasNestingSelector || ai.Combinator != bi.Combinator {
+		if ai.HasNestingSelector() != bi.HasNestingSelector() || ai.Combinator.Byte != bi.Combinator.Byte {
 			return false
 		}
 
@@ -713,7 +716,7 @@ func (a ComplexSelector) Equal(b ComplexSelector, check *CrossFileEqualityCheck)
 			return false
 		}
 		for j, aj := range ai.SubclassSelectors {
-			if !aj.Equal(bi.SubclassSelectors[j], check) {
+			if !aj.Data.Equal(bi.SubclassSelectors[j].Data, check) {
 				return false
 			}
 		}
@@ -722,15 +725,41 @@ func (a ComplexSelector) Equal(b ComplexSelector, check *CrossFileEqualityCheck)
 	return true
 }
 
+type Combinator struct {
+	Loc  logger.Loc
+	Byte uint8 // Optional, may be 0 for no combinator
+}
+
 type CompoundSelector struct {
 	TypeSelector       *NamespacedName
-	SubclassSelectors  []SS
-	Combinator         uint8 // Optional, may be 0
-	HasNestingSelector bool  // "&"
+	SubclassSelectors  []SubclassSelector
+	NestingSelectorLoc ast.Index32 // "&"
+	Combinator         Combinator  // Optional, may be 0
+}
+
+func (sel *CompoundSelector) HasNestingSelector() bool {
+	return sel.NestingSelectorLoc.IsValid()
 }
 
 func (sel CompoundSelector) IsSingleAmpersand() bool {
-	return sel.HasNestingSelector && sel.Combinator == 0 && sel.TypeSelector == nil && len(sel.SubclassSelectors) == 0
+	return sel.HasNestingSelector() && sel.Combinator.Byte == 0 && sel.TypeSelector == nil && len(sel.SubclassSelectors) == 0
+}
+
+func (sel CompoundSelector) IsInvalidBecauseEmpty() bool {
+	return !sel.HasNestingSelector() && sel.TypeSelector == nil && len(sel.SubclassSelectors) == 0
+}
+
+func (sel CompoundSelector) FirstLoc() logger.Loc {
+	var firstLoc ast.Index32
+	if sel.TypeSelector != nil {
+		firstLoc = ast.MakeIndex32(uint32(sel.TypeSelector.FirstLoc().Start))
+	} else if len(sel.SubclassSelectors) > 0 {
+		firstLoc = ast.MakeIndex32(uint32(sel.SubclassSelectors[0].Loc.Start))
+	}
+	if firstLoc.IsValid() && (!sel.NestingSelectorLoc.IsValid() || firstLoc.GetIndex() < sel.NestingSelectorLoc.GetIndex()) {
+		return logger.Loc{Start: int32(firstLoc.GetIndex())}
+	}
+	return logger.Loc{Start: int32(sel.NestingSelectorLoc.GetIndex())}
 }
 
 func (sel CompoundSelector) Clone() CompoundSelector {
@@ -742,9 +771,10 @@ func (sel CompoundSelector) Clone() CompoundSelector {
 	}
 
 	if sel.SubclassSelectors != nil {
-		selectors := make([]SS, len(sel.SubclassSelectors))
+		selectors := make([]SubclassSelector, len(sel.SubclassSelectors))
 		for i, ss := range sel.SubclassSelectors {
-			selectors[i] = ss.Clone()
+			ss.Data = ss.Data.Clone()
+			selectors[i] = ss
 		}
 		clone.SubclassSelectors = selectors
 	}
@@ -754,7 +784,12 @@ func (sel CompoundSelector) Clone() CompoundSelector {
 
 type NameToken struct {
 	Text string
+	Loc  logger.Loc
 	Kind css_lexer.T
+}
+
+func (a NameToken) Equal(b NameToken) bool {
+	return a.Text == b.Text && a.Kind == b.Kind
 }
 
 type NamespacedName struct {
@@ -763,6 +798,13 @@ type NamespacedName struct {
 
 	// This is an identifier or "*"
 	Name NameToken
+}
+
+func (n NamespacedName) FirstLoc() logger.Loc {
+	if n.NamespacePrefix != nil {
+		return n.NamespacePrefix.Loc
+	}
+	return n.Name.Loc
 }
 
 func (n NamespacedName) Clone() NamespacedName {
@@ -775,8 +817,13 @@ func (n NamespacedName) Clone() NamespacedName {
 }
 
 func (a NamespacedName) Equal(b NamespacedName) bool {
-	return a.Name == b.Name && (a.NamespacePrefix == nil) == (b.NamespacePrefix == nil) &&
-		(a.NamespacePrefix == nil || b.NamespacePrefix == nil || *a.NamespacePrefix == *b.NamespacePrefix)
+	return a.Name.Equal(b.Name) && (a.NamespacePrefix == nil) == (b.NamespacePrefix == nil) &&
+		(a.NamespacePrefix == nil || b.NamespacePrefix == nil || a.NamespacePrefix.Equal(b.Name))
+}
+
+type SubclassSelector struct {
+	Data SS
+	Loc  logger.Loc
 }
 
 type SS interface {

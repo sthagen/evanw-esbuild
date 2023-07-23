@@ -1,14 +1,144 @@
 # Changelog
 
-## Unreleased
+## 0.18.16
+
+* Fix a regression with whitespace inside `:is()` ([#3265](https://github.com/evanw/esbuild/issues/3265))
+
+    The change to parse the contents of `:is()` in version 0.18.14 introduced a regression that incorrectly flagged the contents as a syntax error if the contents started with a whitespace token (for example `div:is( .foo ) {}`). This regression has been fixed.
+
+## 0.18.15
+
+* Add the `--serve-fallback=` option ([#2904](https://github.com/evanw/esbuild/issues/2904))
+
+    The web server built into esbuild serves the latest in-memory results of the configured build. If the requested path doesn't match any in-memory build result, esbuild also provides the `--servedir=` option to tell esbuild to serve the requested path from that directory instead. And if the requested path doesn't match either of those things, esbuild will either automatically generate a directory listing (for directories) or return a 404 error.
+
+    Starting with this release, that last step can now be replaced with telling esbuild to serve a specific HTML file using the `--serve-fallback=` option. This can be used to provide a "not found" page for missing URLs. It can also be used to implement a [single-page app](https://en.wikipedia.org/wiki/Single-page_application) that mutates the current URL and therefore requires the single app entry point to be served when the page is loaded regardless of whatever the current URL is.
+
+* Use the `tsconfig` field in `package.json` during `extends` resolution ([#3247](https://github.com/evanw/esbuild/issues/3247))
+
+     This release adds a feature from [TypeScript 3.2](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-2.html#tsconfigjson-inheritance-via-nodejs-packages) where if a `tsconfig.json` file specifies a package name in the `extends` field and that package's `package.json` file has a `tsconfig` field, the contents of that field are used in the search for the base `tsconfig.json` file.
+
+* Implement CSS nesting without `:is()` when possible ([#1945](https://github.com/evanw/esbuild/issues/1945))
+
+    Previously esbuild would always produce a warning when transforming nested CSS for a browser that doesn't support the `:is()` pseudo-class. This was because the nesting transform needs to generate an `:is()` in some complex cases which means the transformed CSS would then not work in that browser. However, the CSS nesting transform can often be done without generating an `:is()`. So with this release, esbuild will no longer warn when targeting browsers that don't support `:is()` in the cases where an `:is()` isn't needed to represent the nested CSS.
+
+    In addition, esbuild's nested CSS transform has been updated to avoid generating an `:is()` in cases where an `:is()` is preferable but there's a longer alternative that is also equivalent. This update means esbuild can now generate a combinatorial explosion of CSS for complex CSS nesting syntax when targeting browsers that don't support `:is()`. This combinatorial explosion is necessary to accurately represent the original semantics. For example:
+
+    ```css
+    /* Original code */
+    .first,
+    .second,
+    .third {
+      & > & {
+        color: red;
+      }
+    }
+
+    /* Old output (with --target=chrome80) */
+    :is(.first, .second, .third) > :is(.first, .second, .third) {
+      color: red;
+    }
+
+    /* New output (with --target=chrome80) */
+    .first > .first,
+    .first > .second,
+    .first > .third,
+    .second > .first,
+    .second > .second,
+    .second > .third,
+    .third > .first,
+    .third > .second,
+    .third > .third {
+      color: red;
+    }
+    ```
+
+    This change means you can now use CSS nesting with esbuild when targeting an older browser that doesn't support `:is()`. You'll now only get a warning from esbuild if you use complex CSS nesting syntax that esbuild can't represent in that older browser without using `:is()`. There are two such cases:
+
+    ```css
+    /* Case 1 */
+    a b {
+      .foo & {
+        color: red;
+      }
+    }
+
+    /* Case 2 */
+    a {
+      > b& {
+        color: red;
+      }
+    }
+    ```
+
+    These two cases still need to use `:is()`, both for different reasons, and cannot be used when targeting an older browser that doesn't support `:is()`:
+
+    ```css
+    /* Case 1 */
+    .foo :is(a b) {
+      color: red;
+    }
+
+    /* Case 2 */
+    a > a:is(b) {
+      color: red;
+    }
+    ```
+
+* Automatically lower `inset` in CSS for older browsers
+
+    With this release, esbuild will now automatically expand the `inset` property to the `top`, `right`, `bottom`, and `left` properties when esbuild's `target` is set to a browser that doesn't support `inset`:
+
+    ```css
+    /* Original code */
+    .app {
+      position: absolute;
+      inset: 10px 20px;
+    }
+
+    /* Old output (with --target=chrome80) */
+    .app {
+      position: absolute;
+      inset: 10px 20px;
+    }
+
+    /* New output (with --target=chrome80) */
+    .app {
+      position: absolute;
+      top: 10px;
+      right: 20px;
+      bottom: 10px;
+      left: 20px;
+    }
+    ```
+
+* Add support for the new [`@starting-style`](https://drafts.csswg.org/css-transitions-2/#defining-before-change-style-the-starting-style-rule) CSS rule ([#3249](https://github.com/evanw/esbuild/pull/3249))
+
+    This at rule allow authors to start CSS transitions on first style update. That is, you can now make the transition take effect when the `display` property changes from `none` to `block`.
+
+    ```css
+    /* Original code */
+    @starting-style {
+      h1 {
+        background-color: transparent;
+      }
+    }
+
+    /* Output */
+    @starting-style{h1{background-color:transparent}}
+    ```
+
+    This was contributed by [@yisibl](https://github.com/yisibl).
+
+## 0.18.14
 
 * Implement local CSS names ([#20](https://github.com/evanw/esbuild/issues/20))
 
-    This release introduces a new loader called `local-css` and two new pseudo-class selectors `:local()` and `:global()`. This is a partial implementation of the popular [CSS modules](https://github.com/css-modules/css-modules) approach for avoiding unintentional name collisions in CSS. I'm not calling this feature "CSS modules" because although some people in the community call it that, other people in the community have started using "CSS modules" to refer to [something completely different](https://github.com/WICG/webcomponents/blob/60c9f682b63c622bfa0d8222ea6b1f3b659e007c/proposals/css-modules-v1-explainer.md) and now CSS modules is an overloaded term.
+    This release introduces two new loaders called `global-css` and `local-css` and two new pseudo-class selectors `:local()` and `:global()`. This is a partial implementation of the popular [CSS modules](https://github.com/css-modules/css-modules) approach for avoiding unintentional name collisions in CSS. I'm not calling this feature "CSS modules" because although some people in the community call it that, other people in the community have started using "CSS modules" to refer to [something completely different](https://github.com/WICG/webcomponents/blob/60c9f682b63c622bfa0d8222ea6b1f3b659e007c/proposals/css-modules-v1-explainer.md) and now CSS modules is an overloaded term.
 
     Here's how this new local CSS name feature works with esbuild:
 
-    * Identifiers that look like `.className` and `#idName` are global with the `css` loader and local with the `local-css` loader. Global identifiers are the same across all files (the way CSS normally works) but local identifiers are different between different files. If two separate CSS files use the same local identifier `.button`, esbuild will automatically rename one of them so that they don't collide. This is analogous to how esbuild automatically renames JS local variables with the same name in separate JS files to avoid name collisions.
+    * Identifiers that look like `.className` and `#idName` are global with the `global-css` loader and local with the `local-css` loader. Global identifiers are the same across all files (the way CSS normally works) but local identifiers are different between different files. If two separate CSS files use the same local identifier `.button`, esbuild will automatically rename one of them so that they don't collide. This is analogous to how esbuild automatically renames JS local variables with the same name in separate JS files to avoid name collisions.
 
     * It only makes sense to use local CSS names with esbuild when you are also using esbuild's bundler to bundle JS files that import CSS files. When you do that, esbuild will generate one export for each local name in the CSS file. The JS code can import these names and use them when constructing HTML DOM. For example:
 
@@ -53,7 +183,7 @@
 
         This feature only makes sense to use when bundling is enabled both because your code needs to `import` the renamed local names so that it can use them, and because esbuild needs to be able to process all CSS files containing local names in a single bundling operation so that it can successfully rename conflicting local names to avoid collisions.
 
-    * If you are in a global CSS file (with the `css` loader) you can create a local name using `:local()`, and if you are in a local CSS file (with the `local-css` loader) you can create a global name with `:global()`. So the choice of the `css` loader vs. the `local-css` loader just sets the default behavior for identifiers, but you can override it on a case-by-case basis as necessary. For example:
+    * If you are in a global CSS file (with the `global-css` loader) you can create a local name using `:local()`, and if you are in a local CSS file (with the `local-css` loader) you can create a global name with `:global()`. So the choice of the `global-css` loader vs. the `local-css` loader just sets the default behavior for identifiers, but you can override it on a case-by-case basis as necessary. For example:
 
         ```css
         :local(.button) {
@@ -64,7 +194,7 @@
         }
         ```
 
-        Processing this CSS file with esbuild will result in something like this:
+        Processing this CSS file with esbuild with either the `global-css` or `local-css` loader will result in something like this:
 
         ```css
         .stdin_button {
@@ -77,7 +207,9 @@
 
     * The names that esbuild generates for local CSS names are an implementation detail and are not intended to be hard-coded anywhere. The only way you should be referencing the local CSS names in your JS or HTML is with an `import` statement in JS that is bundled with esbuild, as demonstrated above. For example, when `--minify` is enabled esbuild will use a different name generation algorithm which generates names that are as short as possible (analogous to how esbuild minifies local identifiers in JS).
 
-    * You can easily use both global CSS files and local CSS files simultaneously if you give them different file extensions. For example, you could pass `--loader:.module.css=local-css` to esbuild so that `.css` files still use global names by default but `.module.css` files use local names by default.
+    * You can easily use both global CSS files and local CSS files simultaneously if you give them different file extensions. For example, you could pass `--loader:.css=global-css` and `--loader:.module.css=local-css` to esbuild so that `.css` files still use global names by default but `.module.css` files use local names by default.
+
+    * Keep in mind that the `css` loader is different than the `global-css` loader. The `:local` and `:global` annotations are not enabled with the `css` loader and will be passed through unchanged. This allows you to have the option of using esbuild to process CSS containing while preserving these annotations. It also means that local CSS names are disabled by default for now (since the `css` loader is currently the default for CSS files). The `:local` and `:global` syntax may be enabled by default in a future release.
 
     Note that esbuild's implementation does not currently have feature parity with other implementations of modular CSS in similar tools. This is only a preliminary release with a partial implementation that includes some basic behavior to get the process started. Additional behavior may be added in future releases. In particular, this release does not implement:
 

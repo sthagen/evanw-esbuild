@@ -26,6 +26,7 @@ type parser struct {
 	symbols            []ast.Symbol
 	localSymbolMap     map[string]ast.Ref
 	globalSymbolMap    map[string]ast.Ref
+	nestingWarnings    map[logger.Loc]struct{}
 	tracker            logger.LineColumnTracker
 	index              int
 	end                int
@@ -34,6 +35,7 @@ type parser struct {
 	prevError          logger.Loc
 	options            Options
 	shouldLowerNesting bool
+	makeLocalSymbols   bool
 }
 
 type Options struct {
@@ -45,16 +47,32 @@ type Options struct {
 	optionsThatSupportStructuralEquality
 }
 
+type symbolMode uint8
+
+const (
+	symbolModeDisabled symbolMode = iota
+	symbolModeGlobal
+	symbolModeLocal
+)
+
 type optionsThatSupportStructuralEquality struct {
 	originalTargetEnv      string
 	unsupportedCSSFeatures compat.CSSFeature
 	minifySyntax           bool
 	minifyWhitespace       bool
 	minifyIdentifiers      bool
-	makeLocalSymbols       bool
+	symbolMode             symbolMode
 }
 
 func OptionsFromConfig(loader config.Loader, options *config.Options) Options {
+	var symbolMode symbolMode
+	switch loader {
+	case config.LoaderGlobalCSS:
+		symbolMode = symbolModeGlobal
+	case config.LoaderLocalCSS:
+		symbolMode = symbolModeLocal
+	}
+
 	return Options{
 		cssPrefixData: options.CSSPrefixData,
 
@@ -64,7 +82,7 @@ func OptionsFromConfig(loader config.Loader, options *config.Options) Options {
 			minifyIdentifiers:      options.MinifyIdentifiers,
 			unsupportedCSSFeatures: options.UnsupportedCSSFeatures,
 			originalTargetEnv:      options.OriginalTargetEnv,
-			makeLocalSymbols:       loader == config.LoaderLocalCSS,
+			symbolMode:             symbolMode,
 		},
 	}
 }
@@ -99,16 +117,17 @@ func Parse(log logger.Log, source logger.Source, options Options) css_ast.AST {
 		RecordAllComments: options.minifyIdentifiers,
 	})
 	p := parser{
-		log:             log,
-		source:          source,
-		tracker:         logger.MakeLineColumnTracker(&source),
-		options:         options,
-		tokens:          result.Tokens,
-		allComments:     result.AllComments,
-		legalComments:   result.LegalComments,
-		prevError:       logger.Loc{Start: -1},
-		localSymbolMap:  make(map[string]ast.Ref),
-		globalSymbolMap: make(map[string]ast.Ref),
+		log:              log,
+		source:           source,
+		tracker:          logger.MakeLineColumnTracker(&source),
+		options:          options,
+		tokens:           result.Tokens,
+		allComments:      result.AllComments,
+		legalComments:    result.LegalComments,
+		prevError:        logger.Loc{Start: -1},
+		localSymbolMap:   make(map[string]ast.Ref),
+		globalSymbolMap:  make(map[string]ast.Ref),
+		makeLocalSymbols: options.symbolMode == symbolModeLocal,
 	}
 	p.end = len(p.tokens)
 	rules := p.parseListOfRules(ruleContext{
@@ -286,7 +305,7 @@ func (p *parser) symbolForName(name string) ast.Ref {
 	var kind ast.SymbolKind
 	var scope map[string]ast.Ref
 
-	if p.options.makeLocalSymbols {
+	if p.makeLocalSymbols {
 		kind = ast.SymbolLocalCSS
 		scope = p.globalSymbolMap
 	} else {
@@ -401,8 +420,8 @@ loop:
 			}
 
 			// Lower CSS nesting if it's not supported (but only at the top level)
-			if context.isTopLevel && p.shouldLowerNesting {
-				rules = lowerNestingInRule(rule, rules)
+			if p.shouldLowerNesting && p.options.unsupportedCSSFeatures.Has(compat.Nesting) && context.isTopLevel {
+				rules = p.lowerNestingInRule(rule, rules)
 			} else {
 				rules = append(rules, rule)
 			}
@@ -429,8 +448,8 @@ loop:
 		}
 
 		// Lower CSS nesting if it's not supported (but only at the top level)
-		if context.isTopLevel && p.shouldLowerNesting {
-			rules = lowerNestingInRule(rule, rules)
+		if p.shouldLowerNesting && p.options.unsupportedCSSFeatures.Has(compat.Nesting) && context.isTopLevel {
+			rules = p.lowerNestingInRule(rule, rules)
 		} else {
 			rules = append(rules, rule)
 		}
@@ -487,7 +506,7 @@ func (p *parser) parseListOfDeclarations(opts listOfDeclarationsOpts) (list []cs
 
 		case css_lexer.TAtKeyword:
 			if p.inSelectorSubtree > 0 {
-				p.reportUseOfNesting(p.current().Range, false)
+				p.shouldLowerNesting = true
 			}
 			list = append(list, p.parseAtRule(atRuleContext{
 				isDeclarationList:    true,
@@ -505,7 +524,7 @@ func (p *parser) parseListOfDeclarations(opts listOfDeclarationsOpts) (list []cs
 			css_lexer.TDelimPlus,
 			css_lexer.TDelimGreaterThan,
 			css_lexer.TDelimTilde:
-			p.reportUseOfNesting(p.current().Range, false)
+			p.shouldLowerNesting = true
 			list = append(list, p.parseSelectorRuleFrom(p.index, false, parseSelectorOpts{isDeclarationContext: true}))
 			foundNesting = true
 
@@ -786,12 +805,12 @@ var nonDeprecatedElementsSupportedByIE7 = map[string]bool{
 func isSafeSelectors(complexSelectors []css_ast.ComplexSelector) bool {
 	for _, complex := range complexSelectors {
 		for _, compound := range complex.Selectors {
-			if compound.HasNestingSelector {
+			if compound.HasNestingSelector() {
 				// Bail because this is an extension: https://drafts.csswg.org/css-nesting-1/
 				return false
 			}
 
-			if compound.Combinator != 0 {
+			if compound.Combinator.Byte != 0 {
 				// "Before Internet Explorer 10, the combinator only works in standards mode"
 				// Reference: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors
 				return false
@@ -811,7 +830,7 @@ func isSafeSelectors(complexSelectors []css_ast.ComplexSelector) bool {
 			}
 
 			for _, ss := range compound.SubclassSelectors {
-				switch s := ss.(type) {
+				switch s := ss.Data.(type) {
 				case *css_ast.SSAttribute:
 					if s.MatcherModifier != 0 {
 						// Bail if we hit a case modifier, which doesn't work in IE at all
@@ -966,6 +985,10 @@ var specialAtRules = map[string]atRuleKind{
 	// Container Queries
 	// Reference: https://drafts.csswg.org/css-contain-3/#container-rule
 	"container": atRuleInheritContext,
+
+	// Defining before-change style: the @starting-style rule
+	// Reference: https://drafts.csswg.org/css-transitions-2/#defining-before-change-style-the-starting-style-rule
+	"starting-style": atRuleInheritContext,
 }
 
 var atKnownRuleCanBeRemovedIfEmpty = map[string]bool{
@@ -1455,19 +1478,6 @@ func (p *parser) expectValidLayerNameIdent() (string, bool) {
 	return text, true
 }
 
-func (p *parser) reportUseOfNesting(r logger.Range, didWarnAlready bool) {
-	if p.options.unsupportedCSSFeatures.Has(compat.Nesting) {
-		p.shouldLowerNesting = true
-		if p.options.unsupportedCSSFeatures.Has(compat.IsPseudoClass) && !didWarnAlready {
-			text := "CSS nesting syntax is not supported in the configured target environment"
-			if p.options.originalTargetEnv != "" {
-				text = fmt.Sprintf("%s (%s)", text, p.options.originalTargetEnv)
-			}
-			p.log.AddID(logger.MsgID_CSS_UnsupportedCSSNesting, logger.Warning, &p.tracker, r, text)
-		}
-	}
-}
-
 func (p *parser) convertTokens(tokens []css_lexer.Token) []css_ast.Token {
 	result, _ := p.convertTokensHelper(tokens, css_lexer.TEndOfFile, convertTokensOpts{})
 	return result
@@ -1523,6 +1533,7 @@ loop:
 			break loop
 		}
 		token := css_ast.Token{
+			Loc:        t.Range.Loc,
 			Kind:       t.Kind,
 			Text:       t.DecodedText(p.source.Contents),
 			Whitespace: nextWhitespace,
@@ -1816,6 +1827,11 @@ func mangleNumber(t string) (string, bool) {
 }
 
 func (p *parser) parseSelectorRuleFrom(preludeStart int, isTopLevel bool, opts parseSelectorOpts) css_ast.Rule {
+	// Save and restore the local symbol state in case there are any bare
+	// ":global" or ":local" annotations. The effect of these should be scoped
+	// to within the selector rule.
+	local := p.makeLocalSymbols
+
 	// Try parsing the prelude as a selector list
 	if list, ok := p.parseSelectorList(opts); ok {
 		canInlineNoOpNesting := true
@@ -1844,9 +1860,11 @@ func (p *parser) parseSelectorRuleFrom(preludeStart int, isTopLevel bool, opts p
 			if p.expectWithMatchingLoc(css_lexer.TCloseBrace, matchingLoc) {
 				selector.CloseBraceLoc = closeBraceLoc
 			}
+			p.makeLocalSymbols = local
 			return css_ast.Rule{Loc: p.tokens[preludeStart].Range.Loc, Data: &selector}
 		}
 	}
+	p.makeLocalSymbols = local
 
 	// Otherwise, parse a generic qualified rule
 	return p.parseQualifiedRuleFrom(preludeStart, parseQualifiedRuleOpts{

@@ -39,8 +39,8 @@ var helpText = func(colors logger.Colors) string {
                         is browser and cjs when platform is node)
   --loader:X=L          Use loader L to load file extension X, where L is
                         one of: base64 | binary | copy | css | dataurl |
-                        empty | file | js | json | jsx | local-css | text |
-                        ts | tsx
+                        empty | file | global-css | js | json | jsx |
+                        local-css | text | ts | tsx
   --minify              Minify the output (sets all --minify-* flags)
   --outdir=...          The output directory (for multiple entry points)
   --outfile=...         The output file (for one entry point)
@@ -117,6 +117,7 @@ var helpText = func(colors logger.Colors) string {
   --reserve-props=...       Do not mangle these properties
   --resolve-extensions=...  A comma-separated list of implicit extensions
                             (default ".tsx,.ts,.jsx,.js,.css,.json")
+  --serve-fallback=...      Serve this HTML page when the request doesn't match
   --servedir=...            What to serve in addition to generated output files
   --source-root=...         Sets the "sourceRoot" field in generated source maps
   --sourcefile=...          Set the source file for the source map (for stdin)

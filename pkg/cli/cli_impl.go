@@ -842,6 +842,7 @@ func parseOptionsImpl(
 				"chunk-names":        true,
 				"color":              true,
 				"conditions":         true,
+				"drop-labels":        true,
 				"entry-names":        true,
 				"footer":             true,
 				"format":             true,
@@ -875,6 +876,7 @@ func parseOptionsImpl(
 				"public-path":        true,
 				"reserve-props":      true,
 				"resolve-extensions": true,
+				"serve-fallback":     true,
 				"serve":              true,
 				"servedir":           true,
 				"source-root":        true,
@@ -1075,36 +1077,73 @@ func splitWithEmptyCheck(s string, sep string) []string {
 	return strings.Split(s, sep)
 }
 
-func runImpl(osArgs []string) int {
-	analyze := false
-	analyzeVerbose := false
-	end := 0
+type analyzeMode uint8
 
+const (
+	analyzeDisabled analyzeMode = iota
+	analyzeEnabled
+	analyzeVerbose
+)
+
+func filterAnalyzeFlags(osArgs []string) ([]string, analyzeMode) {
+	analyze := analyzeDisabled
+	end := 0
 	for _, arg := range osArgs {
-		// Special-case running a server
-		if arg == "--serve" || strings.HasPrefix(arg, "--serve=") || strings.HasPrefix(arg, "--servedir=") {
+		switch arg {
+		case "--analyze":
+			analyze = analyzeEnabled
+		case "--analyze=verbose":
+			analyze = analyzeVerbose
+		default:
+			osArgs[end] = arg
+			end++
+		}
+	}
+	return osArgs[:end], analyze
+}
+
+// Print metafile analysis after the build if it's enabled
+func addAnalyzePlugin(buildOptions *api.BuildOptions, analyze analyzeMode, osArgs []string) {
+	buildOptions.Plugins = append(buildOptions.Plugins, api.Plugin{
+		Name: "PrintAnalysis",
+		Setup: func(build api.PluginBuild) {
+			color := logger.OutputOptionsForArgs(osArgs).Color
+			build.OnEnd(func(result *api.BuildResult) (api.OnEndResult, error) {
+				if result.Metafile != "" {
+					logger.PrintTextWithColor(os.Stderr, color, func(colors logger.Colors) string {
+						return api.AnalyzeMetafile(result.Metafile, api.AnalyzeMetafileOptions{
+							Color:   colors != logger.Colors{},
+							Verbose: analyze == analyzeVerbose,
+						})
+					})
+					os.Stderr.WriteString("\n")
+				}
+				return api.OnEndResult{}, nil
+			})
+		},
+	})
+
+	// Always generate a metafile if we're analyzing, even if it won't be written out
+	buildOptions.Metafile = true
+}
+
+func runImpl(osArgs []string) int {
+	// Special-case running a server
+	for _, arg := range osArgs {
+		if arg == "--serve" ||
+			strings.HasPrefix(arg, "--serve=") ||
+			strings.HasPrefix(arg, "--servedir=") ||
+			strings.HasPrefix(arg, "--serve-fallback=") {
 			serveImpl(osArgs)
 			return 1 // There was an error starting the server if we get here
 		}
-
-		// Special-case analyze just for our CLI
-		if arg == "--analyze" {
-			analyze = true
-			analyzeVerbose = false
-			continue
-		}
-		if arg == "--analyze=verbose" {
-			analyze = true
-			analyzeVerbose = true
-			continue
-		}
-
-		osArgs[end] = arg
-		end++
 	}
-	osArgs = osArgs[:end]
 
+	osArgs, analyze := filterAnalyzeFlags(osArgs)
 	buildOptions, transformOptions, extras, err := parseOptionsForRun(osArgs)
+	if analyze != analyzeDisabled {
+		addAnalyzePlugin(buildOptions, analyze, osArgs)
+	}
 
 	switch {
 	case buildOptions != nil:
@@ -1239,36 +1278,11 @@ func runImpl(osArgs []string) int {
 			}
 		}
 
-		// Print metafile analysis after the build if it's enabled
-		var printAnalysis func(metafile string)
-		if analyze {
-			printAnalysis = func(metafile string) {
-				if metafile == "" {
-					return
-				}
-				logger.PrintTextWithColor(os.Stderr, logger.OutputOptionsForArgs(osArgs).Color, func(colors logger.Colors) string {
-					return api.AnalyzeMetafile(metafile, api.AnalyzeMetafileOptions{
-						Color:   colors != logger.Colors{},
-						Verbose: analyzeVerbose,
-					})
-				})
-				os.Stderr.WriteString("\n")
-			}
-
-			// Always generate a metafile if we're analyzing, even if it won't be written out
-			buildOptions.Metafile = true
-		}
-
 		// Handle post-build actions with a plugin so they also work in watch mode
 		buildOptions.Plugins = append(buildOptions.Plugins, api.Plugin{
 			Name: "PostBuildActions",
 			Setup: func(build api.PluginBuild) {
 				build.OnEnd(func(result *api.BuildResult) (api.OnEndResult, error) {
-					// Print our analysis of the metafile
-					if printAnalysis != nil {
-						printAnalysis(result.Metafile)
-					}
-
 					// Write the metafile to the file system
 					if writeMetafile != nil {
 						writeMetafile(result.Metafile)
@@ -1339,6 +1353,7 @@ func parseServeOptionsImpl(osArgs []string) (api.ServeOptions, []string, error) 
 	servedir := ""
 	keyfile := ""
 	certfile := ""
+	fallback := ""
 
 	// Filter out server-specific flags
 	filteredArgs := make([]string, 0, len(osArgs))
@@ -1353,6 +1368,8 @@ func parseServeOptionsImpl(osArgs []string) (api.ServeOptions, []string, error) 
 			keyfile = arg[len("--keyfile="):]
 		} else if strings.HasPrefix(arg, "--certfile=") {
 			certfile = arg[len("--certfile="):]
+		} else if strings.HasPrefix(arg, "--serve-fallback=") {
+			fallback = arg[len("--serve-fallback="):]
 		} else {
 			filteredArgs = append(filteredArgs, arg)
 		}
@@ -1382,6 +1399,7 @@ func parseServeOptionsImpl(osArgs []string) (api.ServeOptions, []string, error) 
 		Servedir: servedir,
 		Keyfile:  keyfile,
 		Certfile: certfile,
+		Fallback: fallback,
 	}, filteredArgs, nil
 }
 
@@ -1398,10 +1416,14 @@ func serveImpl(osArgs []string) {
 	options.LogLimit = 5
 	options.LogLevel = api.LogLevelInfo
 
+	filteredArgs, analyze := filterAnalyzeFlags(filteredArgs)
 	extras, errWithNote := parseOptionsImpl(filteredArgs, &options, nil, kindInternal)
 	if errWithNote != nil {
 		logger.PrintErrorWithNoteToStderr(osArgs, errWithNote.Text, errWithNote.Note)
 		return
+	}
+	if analyze != analyzeDisabled {
+		addAnalyzePlugin(&options, analyze, osArgs)
 	}
 
 	serveOptions.OnRequest = func(args api.ServeOnRequestArgs) {
