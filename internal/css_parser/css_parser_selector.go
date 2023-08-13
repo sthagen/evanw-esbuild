@@ -2,6 +2,7 @@ package css_parser
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/evanw/esbuild/internal/ast"
 	"github.com/evanw/esbuild/internal/css_ast"
@@ -10,10 +11,12 @@ import (
 )
 
 type parseSelectorOpts struct {
+	composesContext        *composesContext
 	pseudoClassKind        css_ast.PseudoClassKind
 	isDeclarationContext   bool
 	stopOnCloseParen       bool
 	onlyOneComplexSelector bool
+	noLeadingCombinator    bool
 }
 
 func (p *parser) parseSelectorList(opts parseSelectorOpts) (list []css_ast.ComplexSelector, ok bool) {
@@ -36,6 +39,7 @@ func (p *parser) parseSelectorList(opts parseSelectorOpts) (list []css_ast.Compl
 				fmt.Sprintf("Unexpected \",\" inside %q", kind),
 				[]logger.MsgData{{Text: fmt.Sprintf("Different CSS tools behave differently in this case, so esbuild doesn't allow it. "+
 					"Either remove this comma or split this selector up into multiple comma-separated %q selectors instead.", kind)}})
+			return
 		}
 	} else {
 	skip:
@@ -111,7 +115,7 @@ func mergeCompoundSelectors(target *css_ast.CompoundSelector, source css_ast.Com
 			//
 			// But that just seems so obviously wrong that I'm not going to do that.
 			target.SubclassSelectors = append(target.SubclassSelectors, css_ast.SubclassSelector{
-				Loc: source.TypeSelector.FirstLoc(),
+				Range: source.TypeSelector.Range(),
 				Data: &css_ast.SSPseudoClassWithSelectorList{
 					Kind:      css_ast.PseudoClassIs,
 					Selectors: []css_ast.ComplexSelector{{Selectors: []css_ast.CompoundSelector{{TypeSelector: source.TypeSelector}}}},
@@ -206,11 +210,12 @@ func (p *parser) flattenLocalAndGlobalSelectors(list []css_ast.ComplexSelector, 
 		if len(selectors) == 0 {
 			// Treat a bare ":global" or ":local" as a bare "&" nesting selector
 			selectors = append(selectors, css_ast.CompoundSelector{
-				NestingSelectorLoc: ast.MakeIndex32(uint32(sel.Selectors[0].FirstLoc().Start)),
+				NestingSelectorLoc:        ast.MakeIndex32(uint32(sel.Selectors[0].Range().Loc.Start)),
+				WasEmptyFromLocalOrGlobal: true,
 			})
 
 			// Make sure we report that nesting is present so that it can be lowered
-			p.shouldLowerNesting = true
+			p.nestingIsPresent = true
 		}
 
 		sel.Selectors = selectors
@@ -258,10 +263,13 @@ type parseComplexSelectorOpts struct {
 
 func (p *parser) parseComplexSelector(opts parseComplexSelectorOpts) (result css_ast.ComplexSelector, ok bool) {
 	// This is an extension: https://drafts.csswg.org/css-nesting-1/
-	combinator := p.parseCombinator()
-	if combinator.Byte != 0 {
-		p.shouldLowerNesting = true
-		p.eat(css_lexer.TWhitespace)
+	var combinator css_ast.Combinator
+	if !opts.noLeadingCombinator {
+		combinator = p.parseCombinator()
+		if combinator.Byte != 0 {
+			p.nestingIsPresent = true
+			p.eat(css_lexer.TWhitespace)
+		}
 	}
 
 	// Parent
@@ -309,9 +317,9 @@ func (p *parser) parseComplexSelector(opts parseComplexSelectorOpts) (result css
 func (p *parser) nameToken() css_ast.NameToken {
 	t := p.current()
 	return css_ast.NameToken{
-		Kind: t.Kind,
-		Loc:  t.Range.Loc,
-		Text: p.decoded(),
+		Kind:  t.Kind,
+		Range: t.Range,
+		Text:  p.decoded(),
 	}
 }
 
@@ -321,7 +329,7 @@ func (p *parser) parseCompoundSelector(opts parseComplexSelectorOpts) (sel css_a
 	// This is an extension: https://drafts.csswg.org/css-nesting-1/
 	hasLeadingNestingSelector := p.peek(css_lexer.TDelimAmpersand)
 	if hasLeadingNestingSelector {
-		p.shouldLowerNesting = true
+		p.nestingIsPresent = true
 		sel.NestingSelectorLoc = ast.MakeIndex32(uint32(startLoc.Start))
 		p.advance()
 	}
@@ -364,21 +372,21 @@ subclassSelectors:
 			nameLoc := logger.Loc{Start: subclassToken.Range.Loc.Start + 1}
 			name := p.decoded()
 			sel.SubclassSelectors = append(sel.SubclassSelectors, css_ast.SubclassSelector{
-				Loc: subclassToken.Range.Loc,
+				Range: subclassToken.Range,
 				Data: &css_ast.SSHash{
-					Name: ast.LocRef{Loc: nameLoc, Ref: p.symbolForName(name)},
+					Name: p.symbolForName(nameLoc, name),
 				},
 			})
 			p.advance()
 
 		case css_lexer.TDelimDot:
 			p.advance()
-			nameLoc := p.current().Range.Loc
+			nameRange := p.current().Range
 			name := p.decoded()
 			sel.SubclassSelectors = append(sel.SubclassSelectors, css_ast.SubclassSelector{
-				Loc: subclassToken.Range.Loc,
+				Range: logger.Range{Loc: subclassToken.Range.Loc, Len: nameRange.End() - subclassToken.Range.Loc.Start},
 				Data: &css_ast.SSClass{
-					Name: ast.LocRef{Loc: nameLoc, Ref: p.symbolForName(name)},
+					Name: p.symbolForName(nameRange.Loc, name),
 				},
 			})
 			if !p.expect(css_lexer.TIdent) {
@@ -386,13 +394,13 @@ subclassSelectors:
 			}
 
 		case css_lexer.TOpenBracket:
-			attr, good := p.parseAttributeSelector()
-			if !good {
+			attr, r := p.parseAttributeSelector()
+			if r.Len == 0 {
 				return
 			}
 			sel.SubclassSelectors = append(sel.SubclassSelectors, css_ast.SubclassSelector{
-				Loc:  subclassToken.Range.Loc,
-				Data: &attr,
+				Range: r,
+				Data:  &attr,
 			})
 
 		case css_lexer.TColon:
@@ -404,7 +412,7 @@ subclassSelectors:
 					if isElement {
 						p.advance()
 					}
-					pseudo := p.parsePseudoClassSelector(isElement)
+					pseudo, r := p.parsePseudoClassSelector(firstColonLoc, isElement)
 
 					// https://www.w3.org/TR/selectors-4/#single-colon-pseudos
 					// The four Level 2 pseudo-elements (::before, ::after, ::first-line,
@@ -421,21 +429,22 @@ subclassSelectors:
 					}
 
 					sel.SubclassSelectors = append(sel.SubclassSelectors, css_ast.SubclassSelector{
-						Loc:  firstColonLoc,
-						Data: pseudo,
+						Range: r,
+						Data:  pseudo,
 					})
 				}
 				break subclassSelectors
 			}
 
+			pseudo, r := p.parsePseudoClassSelector(subclassToken.Range.Loc, false)
 			sel.SubclassSelectors = append(sel.SubclassSelectors, css_ast.SubclassSelector{
-				Loc:  subclassToken.Range.Loc,
-				Data: p.parsePseudoClassSelector(false),
+				Range: r,
+				Data:  pseudo,
 			})
 
 		case css_lexer.TDelimAmpersand:
 			// This is an extension: https://drafts.csswg.org/css-nesting-1/
-			p.shouldLowerNesting = true
+			p.nestingIsPresent = true
 			sel.NestingSelectorLoc = ast.MakeIndex32(uint32(subclassToken.Range.Loc.Start))
 			p.advance()
 
@@ -494,7 +503,7 @@ subclassSelectors:
 	return
 }
 
-func (p *parser) parseAttributeSelector() (attr css_ast.SSAttribute, ok bool) {
+func (p *parser) parseAttributeSelector() (attr css_ast.SSAttribute, r logger.Range) {
 	matchingLoc := p.current().Range.Loc
 	p.advance()
 
@@ -583,12 +592,15 @@ func (p *parser) parseAttributeSelector() (attr css_ast.SSAttribute, ok bool) {
 		}
 	}
 
-	p.expectWithMatchingLoc(css_lexer.TCloseBracket, matchingLoc)
-	ok = true
+	closeRange := p.current().Range
+	if !p.expectWithMatchingLoc(css_lexer.TCloseBracket, matchingLoc) {
+		closeRange.Len = 0
+	}
+	r = logger.Range{Loc: matchingLoc, Len: closeRange.End() - matchingLoc.Start}
 	return
 }
 
-func (p *parser) parsePseudoClassSelector(isElement bool) css_ast.SS {
+func (p *parser) parsePseudoClassSelector(loc logger.Loc, isElement bool) (css_ast.SS, logger.Range) {
 	p.advance()
 
 	if p.peek(css_lexer.TFunction) {
@@ -618,6 +630,14 @@ func (p *parser) parsePseudoClassSelector(isElement bool) css_ast.SS {
 				}
 			case "not":
 				kind = css_ast.PseudoClassNot
+			case "nth-child":
+				kind = css_ast.PseudoClassNthChild
+			case "nth-last-child":
+				kind = css_ast.PseudoClassNthLastChild
+			case "nth-of-type":
+				kind = css_ast.PseudoClassNthOfType
+			case "nth-last-of-type":
+				kind = css_ast.PseudoClassNthLastOfType
 			case "where":
 				kind = css_ast.PseudoClassWhere
 			default:
@@ -625,30 +645,80 @@ func (p *parser) parsePseudoClassSelector(isElement bool) css_ast.SS {
 			}
 			if ok {
 				old := p.index
-				p.eat(css_lexer.TWhitespace)
+				if kind.HasNthIndex() {
+					p.eat(css_lexer.TWhitespace)
 
-				// ":local" forces local names and ":global" forces global names
-				oldLocal := p.makeLocalSymbols
-				p.makeLocalSymbols = local
-				selectors, ok := p.parseSelectorList(parseSelectorOpts{
-					pseudoClassKind:        kind,
-					stopOnCloseParen:       true,
-					onlyOneComplexSelector: kind == css_ast.PseudoClassGlobal || kind == css_ast.PseudoClassLocal,
-				})
-				p.makeLocalSymbols = oldLocal
+					// Parse the "An+B" syntax
+					if index, ok := p.parseNthIndex(); ok {
+						var selectors []css_ast.ComplexSelector
 
-				if ok && p.expectWithMatchingLoc(css_lexer.TCloseParen, matchingLoc) {
-					return &css_ast.SSPseudoClassWithSelectorList{Kind: kind, Selectors: selectors}
+						// Parse the optional "of" clause
+						if (kind == css_ast.PseudoClassNthChild || kind == css_ast.PseudoClassNthLastChild) &&
+							p.peek(css_lexer.TIdent) && p.decoded() == "of" {
+							p.advance()
+							p.eat(css_lexer.TWhitespace)
+
+							// Contain the effects of ":local" and ":global"
+							oldLocal := p.makeLocalSymbols
+							selectors, ok = p.parseSelectorList(parseSelectorOpts{
+								stopOnCloseParen:    true,
+								noLeadingCombinator: true,
+							})
+							p.makeLocalSymbols = oldLocal
+						}
+
+						// "2n+0" => "2n"
+						if p.options.minifySyntax {
+							index.Minify()
+						}
+
+						// Match the closing ")"
+						if ok {
+							closeRange := p.current().Range
+							if !p.expectWithMatchingLoc(css_lexer.TCloseParen, matchingLoc) {
+								closeRange.Len = 0
+							}
+							return &css_ast.SSPseudoClassWithSelectorList{Kind: kind, Selectors: selectors, Index: index},
+								logger.Range{Loc: loc, Len: closeRange.End() - loc.Start}
+						}
+					}
+				} else {
+					p.eat(css_lexer.TWhitespace)
+
+					// ":local" forces local names and ":global" forces global names
+					oldLocal := p.makeLocalSymbols
+					p.makeLocalSymbols = local
+					selectors, ok := p.parseSelectorList(parseSelectorOpts{
+						pseudoClassKind:        kind,
+						stopOnCloseParen:       true,
+						onlyOneComplexSelector: kind == css_ast.PseudoClassGlobal || kind == css_ast.PseudoClassLocal,
+					})
+					p.makeLocalSymbols = oldLocal
+
+					// Match the closing ")"
+					if ok {
+						closeRange := p.current().Range
+						if !p.expectWithMatchingLoc(css_lexer.TCloseParen, matchingLoc) {
+							closeRange.Len = 0
+						}
+						return &css_ast.SSPseudoClassWithSelectorList{Kind: kind, Selectors: selectors},
+							logger.Range{Loc: loc, Len: closeRange.End() - loc.Start}
+					}
 				}
-
 				p.index = old
 			}
 		}
+
 		args := p.convertTokens(p.parseAnyValue())
-		p.expectWithMatchingLoc(css_lexer.TCloseParen, matchingLoc)
-		return &css_ast.SSPseudoClass{IsElement: isElement, Name: text, Args: args}
+		closeRange := p.current().Range
+		if !p.expectWithMatchingLoc(css_lexer.TCloseParen, matchingLoc) {
+			closeRange.Len = 0
+		}
+		return &css_ast.SSPseudoClass{IsElement: isElement, Name: text, Args: args},
+			logger.Range{Loc: loc, Len: closeRange.End() - loc.Start}
 	}
 
+	nameRange := p.current().Range
 	name := p.decoded()
 	sel := css_ast.SSPseudoClass{IsElement: isElement}
 	if p.expect(css_lexer.TIdent) {
@@ -664,8 +734,10 @@ func (p *parser) parsePseudoClassSelector(isElement bool) css_ast.SS {
 				p.makeLocalSymbols = false
 			}
 		}
+	} else {
+		nameRange.Len = 0
 	}
-	return &sel
+	return &sel, logger.Range{Loc: loc, Len: nameRange.End() - loc.Start}
 }
 
 func (p *parser) parseAnyValue() []css_lexer.Token {
@@ -731,4 +803,177 @@ func (p *parser) parseCombinator() css_ast.Combinator {
 	default:
 		return css_ast.Combinator{}
 	}
+}
+
+func parseInteger(text string) (string, bool) {
+	n := len(text)
+	if n == 0 {
+		return "", false
+	}
+
+	// Trim leading zeros
+	start := 0
+	for start < n && text[start] == '0' {
+		start++
+	}
+
+	// Make sure remaining characters are digits
+	if start == n {
+		return "0", true
+	}
+	for i := start; i < n; i++ {
+		if c := text[i]; c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return text[start:], true
+}
+
+func (p *parser) parseNthIndex() (css_ast.NthIndex, bool) {
+	type sign uint8
+	const (
+		none sign = iota
+		negative
+		positive
+	)
+
+	// Reference: https://drafts.csswg.org/css-syntax-3/#anb-microsyntax
+	t0 := p.current()
+	text0 := p.decoded()
+
+	// Handle "even" and "odd"
+	if t0.Kind == css_lexer.TIdent && (text0 == "even" || text0 == "odd") {
+		p.advance()
+		p.eat(css_lexer.TWhitespace)
+		return css_ast.NthIndex{B: text0}, true
+	}
+
+	// Handle a single number
+	if t0.Kind == css_lexer.TNumber {
+		bNeg := false
+		if strings.HasPrefix(text0, "-") {
+			bNeg = true
+			text0 = text0[1:]
+		} else if strings.HasPrefix(text0, "+") {
+			text0 = text0[1:]
+		}
+		if b, ok := parseInteger(text0); ok {
+			if bNeg {
+				b = "-" + b
+			}
+			p.advance()
+			p.eat(css_lexer.TWhitespace)
+			return css_ast.NthIndex{B: b}, true
+		}
+		p.unexpected()
+		return css_ast.NthIndex{}, false
+	}
+
+	aSign := none
+	if p.eat(css_lexer.TDelimPlus) {
+		aSign = positive
+		t0 = p.current()
+		text0 = p.decoded()
+	}
+
+	// Everything from here must be able to contain an "n"
+	if t0.Kind != css_lexer.TIdent && t0.Kind != css_lexer.TDimension {
+		p.unexpected()
+		return css_ast.NthIndex{}, false
+	}
+
+	// Check for a leading sign
+	if aSign == none {
+		if strings.HasPrefix(text0, "-") {
+			aSign = negative
+			text0 = text0[1:]
+		} else if strings.HasPrefix(text0, "+") {
+			text0 = text0[1:]
+		}
+	}
+
+	// The string must contain an "n"
+	n := strings.IndexByte(text0, 'n')
+	if n < 0 {
+		p.unexpected()
+		return css_ast.NthIndex{}, false
+	}
+
+	// Parse the number before the "n"
+	var a string
+	if n == 0 {
+		if aSign == negative {
+			a = "-1"
+		} else {
+			a = "1"
+		}
+	} else if aInt, ok := parseInteger(text0[:n]); ok {
+		if aSign == negative {
+			aInt = "-" + aInt
+		}
+		a = aInt
+	} else {
+		p.unexpected()
+		return css_ast.NthIndex{}, false
+	}
+	text0 = text0[n+1:]
+
+	// Parse the stuff after the "n"
+	bSign := none
+	if strings.HasPrefix(text0, "-") {
+		text0 = text0[1:]
+		if b, ok := parseInteger(text0); ok {
+			p.advance()
+			p.eat(css_lexer.TWhitespace)
+			return css_ast.NthIndex{A: a, B: "-" + b}, true
+		}
+		bSign = negative
+	}
+	if text0 != "" {
+		p.unexpected()
+		return css_ast.NthIndex{}, false
+	}
+	p.advance()
+	p.eat(css_lexer.TWhitespace)
+
+	// Parse an optional sign delimiter
+	if bSign == none {
+		if p.eat(css_lexer.TDelimMinus) {
+			bSign = negative
+			p.eat(css_lexer.TWhitespace)
+		} else if p.eat(css_lexer.TDelimPlus) {
+			bSign = positive
+			p.eat(css_lexer.TWhitespace)
+		}
+	}
+
+	// Parse an optional trailing number
+	t1 := p.current()
+	text1 := p.decoded()
+	if t1.Kind == css_lexer.TNumber {
+		if bSign == none {
+			if strings.HasPrefix(text1, "-") {
+				bSign = negative
+				text1 = text1[1:]
+			} else if strings.HasPrefix(text1, "+") {
+				text1 = text1[1:]
+			}
+		}
+		if b, ok := parseInteger(text1); ok {
+			if bSign == negative {
+				b = "-" + b
+			}
+			p.advance()
+			p.eat(css_lexer.TWhitespace)
+			return css_ast.NthIndex{A: a, B: b}, true
+		}
+	}
+
+	// If there is a trailing sign, then there must also be a trailing number
+	if bSign != none {
+		p.expect(css_lexer.TNumber)
+		return css_ast.NthIndex{}, false
+	}
+
+	return css_ast.NthIndex{A: a}, true
 }

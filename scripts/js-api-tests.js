@@ -47,24 +47,6 @@ let buildTests = {
     }
   },
 
-  async errorIfGlob({ esbuild }) {
-    try {
-      await esbuild.build({
-        entryPoints: ['./src/*.js'],
-        logLevel: 'silent',
-        write: false,
-      })
-      throw new Error('Expected build failure');
-    } catch (e) {
-      if (!e.errors || !e.errors[0] || e.errors[0].text !== 'Could not resolve "./src/*.js"' ||
-        e.errors[0].notes[0].text !== 'It looks like you are trying to use glob syntax (i.e. "*") with esbuild. ' +
-        'This syntax is typically handled by your shell, and isn\'t handled by esbuild itself. ' +
-        'You must expand glob syntax first before passing your paths to esbuild.') {
-        throw e;
-      }
-    }
-  },
-
   // Verify that it's possible to disable a loader by setting it to "default".
   // In particular, verify that it's possible to disable the special loader ""
   // for extensionless files.
@@ -923,8 +905,8 @@ export {
     const names2 = result2.outputFiles.map(x => path.basename(x.path)).sort()
 
     // Check that the public path is included in chunk hashes but not asset hashes
-    assert.deepStrictEqual(names1, ['data-BYATPJRB.bin', 'in-IN5VRZMW.js'])
-    assert.deepStrictEqual(names2, ['data-BYATPJRB.bin', 'in-7HV645WS.js'])
+    assert.deepStrictEqual(names1, ['data-BYATPJRB.bin', 'in-7SVE3DTC.js'])
+    assert.deepStrictEqual(names2, ['data-BYATPJRB.bin', 'in-E6EBO534.js'])
   },
 
   async fileLoaderPublicPath({ esbuild, testDir }) {
@@ -1638,8 +1620,10 @@ body {
     assert.strictEqual(value.outputFiles.length, 2)
     assert.strictEqual(value.outputFiles[0].path, output + '.map')
     assert.strictEqual(value.outputFiles[0].contents.constructor, Uint8Array)
+    assert.strictEqual(value.outputFiles[0].hash, 'BIjVBRZOQ5s')
     assert.strictEqual(value.outputFiles[1].path, output)
     assert.strictEqual(value.outputFiles[1].contents.constructor, Uint8Array)
+    assert.strictEqual(value.outputFiles[1].hash, 'zvyzJPvi96o')
 
     const sourceMap = JSON.parse(Buffer.from(value.outputFiles[0].contents).toString())
     const js = Buffer.from(value.outputFiles[1].contents).toString()
@@ -7061,6 +7045,7 @@ let syncTests = {
     assert.strictEqual(result.outputFiles[0].path, output)
     assert.strictEqual(result.outputFiles[0].text, text)
     assert.deepStrictEqual(result.outputFiles[0].contents, new Uint8Array(Buffer.from(text)))
+    assert.strictEqual(result.outputFiles[0].hash, 'H4KMzZ07fA0')
   },
 
   async transformSyncJSMap({ esbuild }) {

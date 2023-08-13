@@ -20,7 +20,7 @@ test-all:
 	@$(MAKE) --no-print-directory -j6 test-common test-deno ts-type-tests test-wasm-node test-wasm-browser lib-typecheck test-yarnpnp
 
 check-go-version:
-	@go version | grep ' go1\.20\.6 ' || (echo 'Please install Go version 1.20.6' && false)
+	@go version | grep ' go1\.20\.7 ' || (echo 'Please install Go version 1.20.7' && false)
 
 # Note: Don't add "-race" here by default. The Go race detector is currently
 # only supported on the following configurations:
@@ -119,7 +119,7 @@ lib/deno/lib.deno.d.ts:
 	deno types > lib/deno/lib.deno.d.ts
 
 # End-to-end tests
-test-e2e: test-e2e-npm test-e2e-pnpm test-e2e-yarn-berry test-e2e-deno
+test-e2e: test-e2e-npm test-e2e-pnpm test-e2e-yarn test-e2e-yarn-berry test-e2e-deno
 
 test-e2e-npm:
 	# Test normal install
@@ -188,6 +188,31 @@ test-e2e-pnpm:
 
 	# Clean up
 	rm -fr e2e-pnpm
+
+test-e2e-yarn:
+	# Test normal install
+	rm -fr e2e-yarn && mkdir e2e-yarn && cd e2e-yarn && echo {} > package.json && touch yarn.lock && yarn set version classic && yarn add esbuild
+	cd e2e-yarn && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
+	# Test CI reinstall
+	cd e2e-yarn && rm -fr node_modules && yarn install --immutable
+	cd e2e-yarn && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
+
+	# Test install without scripts
+	rm -fr e2e-yarn && mkdir e2e-yarn && cd e2e-yarn && echo {} > package.json && touch yarn.lock && echo 'enableScripts: false' > .yarnrc.yml && yarn set version classic && yarn add esbuild
+	cd e2e-yarn && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
+	# Test CI reinstall
+	cd e2e-yarn && rm -fr node_modules && yarn install --immutable
+	cd e2e-yarn && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
+
+	# Test install without optional dependencies
+	rm -fr e2e-yarn && mkdir e2e-yarn && cd e2e-yarn && echo {} > package.json && touch yarn.lock && yarn set version classic && yarn add esbuild
+	cd e2e-yarn && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
+	# Test CI reinstall
+	cd e2e-yarn && rm -fr node_modules && yarn install --immutable --ignore-optional
+	cd e2e-yarn && echo "1+2" | yarn esbuild && yarn node -p "require('esbuild').transformSync('1+2').code"
+
+	# Clean up
+	rm -fr e2e-yarn
 
 test-e2e-yarn-berry:
 	# Test normal install
@@ -632,7 +657,7 @@ compat-table: esbuild
 	node --enable-source-maps compat-table/out.js
 
 update-compat-table: esbuild
-	cd compat-table && npm update --silent
+	cd compat-table && npm i @mdn/browser-compat-data@latest caniuse-lite@latest --silent
 	./esbuild compat-table/src/index.ts --bundle --platform=node --external:./compat-table/repos/* --outfile=compat-table/out.js --log-level=warning --sourcemap
 	node --enable-source-maps compat-table/out.js --update
 

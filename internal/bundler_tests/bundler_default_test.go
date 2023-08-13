@@ -835,10 +835,10 @@ func TestExportMissingES6(t *testing.T) {
 				console.log(ns)
 			`,
 			"/foo.js": `
-				export {nope} from './bar'
+				export {buton} from './bar'
 			`,
 			"/bar.js": `
-				export const yep = 123
+				export const button = 123
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
@@ -846,7 +846,8 @@ func TestExportMissingES6(t *testing.T) {
 			Mode:          config.ModeBundle,
 			AbsOutputFile: "/out.js",
 		},
-		expectedCompileLog: `foo.js: ERROR: No matching export in "bar.js" for import "nope"
+		expectedCompileLog: `foo.js: ERROR: No matching export in "bar.js" for import "buton"
+bar.js: NOTE: Did you mean to import "button" instead?
 `,
 	})
 }
@@ -6451,15 +6452,15 @@ func TestEntryNamesNoSlashAfterDir(t *testing.T) {
 func TestEntryNamesNonPortableCharacter(t *testing.T) {
 	default_suite.expectBundled(t, bundled{
 		files: map[string]string{
-			"/entry1-*.ts": `console.log(1)`,
-			"/entry2-*.ts": `console.log(2)`,
+			"/entry1-:.ts": `console.log(1)`,
+			"/entry2-:.ts": `console.log(2)`,
 		},
 		entryPathsAdvanced: []bundler.EntryPoint{
-			// The "*" should turn into "_" for cross-platform Windows portability
-			{InputPath: "/entry1-*.ts"},
+			// The ":" should turn into "_" for cross-platform Windows portability
+			{InputPath: "/entry1-:.ts"},
 
-			// The "*" should be preserved since the user _really_ wants it
-			{InputPath: "/entry2-*.ts", OutputPath: "entry2-*"},
+			// The ":" should be preserved since the user _really_ wants it
+			{InputPath: "/entry2-:.ts", OutputPath: "entry2-*"},
 		},
 		options: config.Options{
 			Mode:         config.ModePassThrough,
@@ -7492,8 +7493,8 @@ func TestManglePropsKeyCommentMinify(t *testing.T) {
 				x[/* @__KEY__ */ '_mangleThisToo'] = 2
 				x['_doNotMangleThis'] = 3
 				x([
-					` + "`" + `foo.${/* @__KEY__ */ '_mangleThis'} = bar.${/* @__KEY__ */ '_mangleThisToo'}` + "`" + `,
-					` + "`" + `foo.${/* @__KEY__ */ 'notMangled'} = bar.${/* @__KEY__ */ 'notMangledEither'}` + "`" + `,
+					` + "`" + `${foo}.${/* @__KEY__ */ '_mangleThis'} = bar.${/* @__KEY__ */ '_mangleThisToo'}` + "`" + `,
+					` + "`" + `${foo}.${/* @__KEY__ */ 'notMangled'} = bar.${/* @__KEY__ */ 'notMangledEither'}` + "`" + `,
 				])
 		`,
 		},
@@ -8320,6 +8321,9 @@ func TestLineLimitNotMinified(t *testing.T) {
 	default_suite.expectBundled(t, bundled{
 		files: map[string]string{
 			"/script.jsx": `
+				import fileURL from './x.file'
+				import copyURL from './x.copy'
+				import dataURL from './x.data'
 				export const SignUpForm = (props) => {
 					return <p class="signup">
 						<label>Username: <input class="username" type="text"/></label>
@@ -8328,6 +8332,9 @@ func TestLineLimitNotMinified(t *testing.T) {
 							{props.buttonText}
 						</div>
 						<small>By signing up, you are agreeing to our <a href="/tos/">terms of service</a>.</small>
+						<img src={fileURL} />
+						<img src={copyURL} />
+						<img src={dataURL} />
 					</p>
 				}
 			`,
@@ -8342,16 +8349,30 @@ func TestLineLimitNotMinified(t *testing.T) {
 				`CIgZmlsbD0iI0ZGQ0YwMCIvPgogIDxwYXRoIGQ9Ik00Ny41IDUyLjVMOTUgMTAwbC00Ny41IDQ3LjVtNjAtOTVMM` +
 				`TU1IDEwMGwtNDcuNSA0Ny41IiBmaWxsPSJub25lIiBzdHJva2U9IiMxOTE5MTkiIHN0cm9rZS13aWR0aD0iMjQiL` +
 				`z4KPC9zdmc+Cg==);
+					cursor: url(x.file);
+					cursor: url(x.copy);
+					cursor: url(x.data);
 				}
 			`,
+			"/x.file": `...file...`,
+			"/x.copy": `...copy...`,
+			"/x.data": `...lots of long data...lots of long data...`,
 		},
 		entryPaths: []string{
 			"/script.jsx",
 			"/style.css",
 		},
 		options: config.Options{
+			Mode:         config.ModeBundle,
 			AbsOutputDir: "/out",
 			LineLimit:    32,
+			ExtensionToLoader: map[string]config.Loader{
+				".jsx":  config.LoaderJSX,
+				".css":  config.LoaderCSS,
+				".file": config.LoaderFile,
+				".copy": config.LoaderCopy,
+				".data": config.LoaderDataURL,
+			},
 		},
 	})
 }
