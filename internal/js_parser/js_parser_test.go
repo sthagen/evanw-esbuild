@@ -2636,6 +2636,12 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = !!(() => {})", "x = true;\n")
 	expectPrinted(t, "x = !!0n", "x = false;\n")
 	expectPrinted(t, "x = !!1n", "x = true;\n")
+	expectPrinted(t, "x = !!0b0n", "x = !!0b0n;\n")
+	expectPrinted(t, "x = !!0b1n", "x = !!0b1n;\n")
+	expectPrinted(t, "x = !!0o0n", "x = !!0o0n;\n")
+	expectPrinted(t, "x = !!0o1n", "x = !!0o1n;\n")
+	expectPrinted(t, "x = !!0x0n", "x = !!0x0n;\n")
+	expectPrinted(t, "x = !!0x1n", "x = !!0x1n;\n")
 
 	expectPrinted(t, "x = 1 ? a : b", "x = 1 ? a : b;\n")
 	expectPrinted(t, "x = 0 ? a : b", "x = 0 ? a : b;\n")
@@ -2762,7 +2768,19 @@ func TestConstantFolding(t *testing.T) {
 	expectPrinted(t, "x = Infinity === Infinity", "x = true;\n")
 	expectPrinted(t, "x = Infinity === -Infinity", "x = false;\n")
 
+	expectPrinted(t, "x = 0n === 0n", "x = true;\n")
+	expectPrinted(t, "x = 1n === 1n", "x = true;\n")
+	expectPrinted(t, "x = 0n === 1n", "x = false;\n")
+	expectPrinted(t, "x = 0n !== 1n", "x = true;\n")
+	expectPrinted(t, "x = 0n !== 0n", "x = false;\n")
 	expectPrinted(t, "x = 123n === 1_2_3n", "x = true;\n")
+
+	expectPrinted(t, "x = 0n === 0b0n", "x = 0n === 0b0n;\n")
+	expectPrinted(t, "x = 0n === 0o0n", "x = 0n === 0o0n;\n")
+	expectPrinted(t, "x = 0n === 0x0n", "x = 0n === 0x0n;\n")
+	expectPrinted(t, "x = 0b0n === 0b0n", "x = true;\n")
+	expectPrinted(t, "x = 0o0n === 0o0n", "x = true;\n")
+	expectPrinted(t, "x = 0x0n === 0x0n", "x = true;\n")
 
 	// We support folding strings from sibling AST nodes since that ends up being
 	// equivalent with string addition. For example, "(x + 'a') + 'b'" is the
@@ -3332,6 +3350,9 @@ func TestMangleIndex(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "x?.['y']()", "x?.[\"y\"]();\n", "x?.y();\n")
 	expectPrintedNormalAndMangle(t, "x?.['y z']()", "x?.[\"y z\"]();\n", "x?.[\"y z\"]();\n")
 
+	expectPrintedNormalAndMangle(t, "x['y' + 'z']", "x[\"yz\"];\n", "x.yz;\n")
+	expectPrintedNormalAndMangle(t, "x?.['y' + 'z']", "x?.[\"yz\"];\n", "x?.[\"yz\"];\n")
+
 	// Check the string-to-int optimization
 	expectPrintedNormalAndMangle(t, "x['0']", "x[\"0\"];\n", "x[0];\n")
 	expectPrintedNormalAndMangle(t, "x['123']", "x[\"123\"];\n", "x[123];\n")
@@ -3370,10 +3391,75 @@ func TestMangleAddEmptyString(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "a = '' + b", "a = \"\" + b;\n", "a = \"\" + b;\n")
 	expectPrintedNormalAndMangle(t, "a = b + ''", "a = b + \"\";\n", "a = b + \"\";\n")
 
+	expectPrintedNormalAndMangle(t, "a = [] + 0", "a = \"0\";\n", "a = \"0\";\n")
+	expectPrintedNormalAndMangle(t, "a = 0 + []", "a = \"0\";\n", "a = \"0\";\n")
+	expectPrintedNormalAndMangle(t, "a = [] + b", "a = [] + b;\n", "a = [] + b;\n")
+	expectPrintedNormalAndMangle(t, "a = b + []", "a = b + [];\n", "a = b + [];\n")
+	expectPrintedNormalAndMangle(t, "a = [b] + 0", "a = [b] + 0;\n", "a = [b] + 0;\n")
+	expectPrintedNormalAndMangle(t, "a = 0 + [b]", "a = 0 + [b];\n", "a = 0 + [b];\n")
+
+	expectPrintedNormalAndMangle(t, "a = [1, 2] + ''", "a = \"1,2\";\n", "a = \"1,2\";\n")
+	expectPrintedNormalAndMangle(t, "a = [1, 0, 2] + ''", "a = \"1,0,2\";\n", "a = \"1,0,2\";\n")
+	expectPrintedNormalAndMangle(t, "a = [1, null, 2] + ''", "a = \"1,,2\";\n", "a = \"1,,2\";\n")
+	expectPrintedNormalAndMangle(t, "a = [1, undefined, 2] + ''", "a = \"1,,2\";\n", "a = \"1,,2\";\n")
+	expectPrintedNormalAndMangle(t, "a = [1, true, 2] + ''", "a = \"1,true,2\";\n", "a = \"1,true,2\";\n")
+	expectPrintedNormalAndMangle(t, "a = [1, false, 2] + ''", "a = \"1,false,2\";\n", "a = \"1,false,2\";\n")
+	expectPrintedNormalAndMangle(t, "a = [1, , 2] + ''", "a = [1, , 2] + \"\";\n", "a = [1, , 2] + \"\";\n") // Note: Prototype hazards
+	expectPrintedNormalAndMangle(t, "a = [1, , ,] + ''", "a = [1, , ,] + \"\";\n", "a = [1, , ,] + \"\";\n") // Note: Prototype hazards
+
+	expectPrintedNormalAndMangle(t, "a = {} + 0", "a = \"[object Object]0\";\n", "a = \"[object Object]0\";\n")
+	expectPrintedNormalAndMangle(t, "a = 0 + {}", "a = \"0[object Object]\";\n", "a = \"0[object Object]\";\n")
+	expectPrintedNormalAndMangle(t, "a = {} + b", "a = {} + b;\n", "a = {} + b;\n")
+	expectPrintedNormalAndMangle(t, "a = b + {}", "a = b + {};\n", "a = b + {};\n")
+	expectPrintedNormalAndMangle(t, "a = {toString:()=>1} + 0", "a = { toString: () => 1 } + 0;\n", "a = { toString: () => 1 } + 0;\n")
+	expectPrintedNormalAndMangle(t, "a = 0 + {toString:()=>1}", "a = 0 + { toString: () => 1 };\n", "a = 0 + { toString: () => 1 };\n")
+
 	expectPrintedNormalAndMangle(t, "a = '' + `${b}`", "a = `${b}`;\n", "a = `${b}`;\n")
 	expectPrintedNormalAndMangle(t, "a = `${b}` + ''", "a = `${b}`;\n", "a = `${b}`;\n")
 	expectPrintedNormalAndMangle(t, "a = '' + typeof b", "a = typeof b;\n", "a = typeof b;\n")
 	expectPrintedNormalAndMangle(t, "a = typeof b + ''", "a = typeof b;\n", "a = typeof b;\n")
+
+	expectPrintedNormalAndMangle(t, "a = [] + `${b}`", "a = `${b}`;\n", "a = `${b}`;\n")
+	expectPrintedNormalAndMangle(t, "a = `${b}` + []", "a = `${b}`;\n", "a = `${b}`;\n")
+	expectPrintedNormalAndMangle(t, "a = [] + typeof b", "a = typeof b;\n", "a = typeof b;\n")
+	expectPrintedNormalAndMangle(t, "a = typeof b + []", "a = typeof b;\n", "a = typeof b;\n")
+	expectPrintedNormalAndMangle(t, "a = [b] + `${b}`", "a = [b] + `${b}`;\n", "a = [b] + `${b}`;\n")
+	expectPrintedNormalAndMangle(t, "a = `${b}` + [b]", "a = `${b}` + [b];\n", "a = `${b}` + [b];\n")
+
+	expectPrintedNormalAndMangle(t, "a = {} + `${b}`", "a = `[object Object]${b}`;\n", "a = `[object Object]${b}`;\n")
+	expectPrintedNormalAndMangle(t, "a = `${b}` + {}", "a = `${b}[object Object]`;\n", "a = `${b}[object Object]`;\n")
+	expectPrintedNormalAndMangle(t, "a = {} + typeof b", "a = {} + typeof b;\n", "a = {} + typeof b;\n")
+	expectPrintedNormalAndMangle(t, "a = typeof b + {}", "a = typeof b + {};\n", "a = typeof b + {};\n")
+	expectPrintedNormalAndMangle(t, "a = {toString:()=>1} + `${b}`", "a = { toString: () => 1 } + `${b}`;\n", "a = { toString: () => 1 } + `${b}`;\n")
+	expectPrintedNormalAndMangle(t, "a = `${b}` + {toString:()=>1}", "a = `${b}` + { toString: () => 1 };\n", "a = `${b}` + { toString: () => 1 };\n")
+
+	expectPrintedNormalAndMangle(t, "a = '' + false", "a = \"false\";\n", "a = \"false\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + true", "a = \"true\";\n", "a = \"true\";\n")
+	expectPrintedNormalAndMangle(t, "a = false + ''", "a = \"false\";\n", "a = \"false\";\n")
+	expectPrintedNormalAndMangle(t, "a = true + ''", "a = \"true\";\n", "a = \"true\";\n")
+	expectPrintedNormalAndMangle(t, "a = 1 + false + ''", "a = 1 + false + \"\";\n", "a = 1 + false + \"\";\n")
+	expectPrintedNormalAndMangle(t, "a = 0 + true + ''", "a = 0 + true + \"\";\n", "a = 0 + true + \"\";\n")
+
+	expectPrintedNormalAndMangle(t, "a = '' + null", "a = \"null\";\n", "a = \"null\";\n")
+	expectPrintedNormalAndMangle(t, "a = null + ''", "a = \"null\";\n", "a = \"null\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + undefined", "a = \"undefined\";\n", "a = \"undefined\";\n")
+	expectPrintedNormalAndMangle(t, "a = undefined + ''", "a = \"undefined\";\n", "a = \"undefined\";\n")
+
+	expectPrintedNormalAndMangle(t, "a = '' + 0n", "a = \"0\";\n", "a = \"0\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 1n", "a = \"1\";\n", "a = \"1\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 123n", "a = \"123\";\n", "a = \"123\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 1_2_3n", "a = \"123\";\n", "a = \"123\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 0b0n", "a = \"\" + 0b0n;\n", "a = \"\" + 0b0n;\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 0o0n", "a = \"\" + 0o0n;\n", "a = \"\" + 0o0n;\n")
+	expectPrintedNormalAndMangle(t, "a = '' + 0x0n", "a = \"\" + 0x0n;\n", "a = \"\" + 0x0n;\n")
+
+	expectPrintedNormalAndMangle(t, "a = '' + /a\\\\b/ig", "a = \"/a\\\\\\\\b/ig\";\n", "a = \"/a\\\\\\\\b/ig\";\n")
+	expectPrintedNormalAndMangle(t, "a = /a\\\\b/ig + ''", "a = \"/a\\\\\\\\b/ig\";\n", "a = \"/a\\\\\\\\b/ig\";\n")
+
+	expectPrintedNormalAndMangle(t, "a = '' + ''.constructor", "a = \"function String() { [native code] }\";\n", "a = \"function String() { [native code] }\";\n")
+	expectPrintedNormalAndMangle(t, "a = ''.constructor + ''", "a = \"function String() { [native code] }\";\n", "a = \"function String() { [native code] }\";\n")
+	expectPrintedNormalAndMangle(t, "a = '' + /./.constructor", "a = \"function RegExp() { [native code] }\";\n", "a = \"function RegExp() { [native code] }\";\n")
+	expectPrintedNormalAndMangle(t, "a = /./.constructor + ''", "a = \"function RegExp() { [native code] }\";\n", "a = \"function RegExp() { [native code] }\";\n")
 }
 
 func TestMangleStringLength(t *testing.T) {
@@ -3389,6 +3475,20 @@ func TestMangleStringLength(t *testing.T) {
 	expectPrintedMangle(t, "a = 'abc'.length", "a = 3;\n")
 	expectPrintedMangle(t, "a = 'ȧḃċ'.length", "a = 3;\n")
 	expectPrintedMangle(t, "a = '👯‍♂️'.length", "a = 5;\n")
+}
+
+func TestMangleStringIndex(t *testing.T) {
+	expectPrinted(t, "a = 'abc'[0]", "a = \"abc\"[0];\n")
+	expectPrintedMangle(t, "a = 'abc'[-1]", "a = \"abc\"[-1];\n")
+	expectPrintedMangle(t, "a = 'abc'[-0]", "a = \"a\";\n")
+	expectPrintedMangle(t, "a = 'abc'[0]", "a = \"a\";\n")
+	expectPrintedMangle(t, "a = 'abc'[2]", "a = \"c\";\n")
+	expectPrintedMangle(t, "a = 'abc'[3]", "a = \"abc\"[3];\n")
+	expectPrintedMangle(t, "a = 'abc'[NaN]", "a = \"abc\"[NaN];\n")
+	expectPrintedMangle(t, "a = 'abc'[-1e100]", "a = \"abc\"[-1e100];\n")
+	expectPrintedMangle(t, "a = 'abc'[1e100]", "a = \"abc\"[1e100];\n")
+	expectPrintedMangle(t, "a = 'abc'[-Infinity]", "a = \"abc\"[-Infinity];\n")
+	expectPrintedMangle(t, "a = 'abc'[Infinity]", "a = \"abc\"[Infinity];\n")
 }
 
 func TestMangleNot(t *testing.T) {
@@ -3497,6 +3597,91 @@ func TestMangleBigIntConstructor(t *testing.T) {
 
 	expectPrintedNormalAndMangle(t, "a = BigInt(0n)", "a = BigInt(0n);\n", "a = 0n;\n")
 	expectPrintedNormalAndMangle(t, "a = BigInt(b ? 0n : 1n)", "a = BigInt(b ? 0n : 1n);\n", "a = b ? 0n : 1n;\n")
+}
+
+func TestMangleCharCodeAt(t *testing.T) {
+	expectPrinted(t, "a = 'xy'.charCodeAt(0)", "a = \"xy\".charCodeAt(0);\n")
+
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt()", "a = 120;\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(0)", "a = 120;\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(1)", "a = 121;\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(-1)", "a = NaN;\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(2)", "a = NaN;\n")
+
+	expectPrintedMangle(t, "a = '🧀'.charCodeAt()", "a = 55358;\n")
+	expectPrintedMangle(t, "a = '🧀'.charCodeAt(0)", "a = 55358;\n")
+	expectPrintedMangle(t, "a = '🧀'.charCodeAt(1)", "a = 56768;\n")
+	expectPrintedMangle(t, "a = '🧀'.charCodeAt(-1)", "a = NaN;\n")
+	expectPrintedMangle(t, "a = '🧀'.charCodeAt(2)", "a = NaN;\n")
+
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(NaN)", "a = \"xy\".charCodeAt(NaN);\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(0.5)", "a = \"xy\".charCodeAt(0.5);\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(1e99)", "a = \"xy\".charCodeAt(1e99);\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt('1')", "a = \"xy\".charCodeAt(\"1\");\n")
+	expectPrintedMangle(t, "a = 'xy'.charCodeAt(1, 2)", "a = \"xy\".charCodeAt(1, 2);\n")
+}
+
+func TestMangleFromCharCode(t *testing.T) {
+	expectPrinted(t, "a = String.fromCharCode(120, 121)", "a = String.fromCharCode(120, 121);\n")
+
+	expectPrintedMangle(t, "a = String.fromCharCode()", "a = \"\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(0)", "a = \"\\0\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(120)", "a = \"x\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(120, 121)", "a = \"xy\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(55358, 56768)", "a = \"🧀\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(0x10000)", "a = \"\\0\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(0x10078, 0x10079)", "a = \"xy\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(0x1_0000_FFFF)", "a = \"\uFFFF\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(NaN)", "a = \"\\0\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(Infinity)", "a = \"\\0\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(null)", "a = \"\\0\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode(undefined)", "a = \"\\0\";\n")
+	expectPrintedMangle(t, "a = String.fromCharCode('123')", "a = \"{\";\n")
+
+	expectPrintedMangle(t, "a = String.fromCharCode(x)", "a = String.fromCharCode(x);\n")
+	expectPrintedMangle(t, "a = String.fromCharCode('x')", "a = String.fromCharCode(\"x\");\n")
+	expectPrintedMangle(t, "a = String.fromCharCode('0.5')", "a = String.fromCharCode(\"0.5\");\n")
+}
+
+func TestMangleToString(t *testing.T) {
+	expectPrinted(t, "a = \"xy\".toString()", "a = \"xy\".toString();\n")
+
+	expectPrintedMangle(t, "a = false.toString()", "a = \"false\";\n")
+	expectPrintedMangle(t, "a = true.toString()", "a = \"true\";\n")
+	expectPrintedMangle(t, "a = \"xy\".toString()", "a = \"xy\";\n")
+	expectPrintedMangle(t, "a = 0 .toString()", "a = \"0\";\n")
+	expectPrintedMangle(t, "a = (-0).toString()", "a = \"0\";\n")
+	expectPrintedMangle(t, "a = 123 .toString()", "a = \"123\";\n")
+	expectPrintedMangle(t, "a = (-123).toString()", "a = \"-123\";\n")
+	expectPrintedMangle(t, "a = NaN.toString()", "a = \"NaN\";\n")
+	expectPrintedMangle(t, "a = Infinity.toString()", "a = \"Infinity\";\n")
+	expectPrintedMangle(t, "a = (-Infinity).toString()", "a = \"-Infinity\";\n")
+	expectPrintedMangle(t, "a = /a\\\\b/ig.toString()", "a = \"/a\\\\\\\\b/ig\";\n")
+
+	// Handle a radix other than 10
+	expectPrintedMangle(t, "a = 100 .toString(0)", "a = 100 .toString(0);\n")
+	expectPrintedMangle(t, "a = 100 .toString(1)", "a = 100 .toString(1);\n")
+	expectPrintedMangle(t, "a = 100 .toString(2)", "a = \"1100100\";\n")
+	expectPrintedMangle(t, "a = 100 .toString(5)", "a = \"400\";\n")
+	expectPrintedMangle(t, "a = 100 .toString(8)", "a = \"144\";\n")
+	expectPrintedMangle(t, "a = 100 .toString(13)", "a = \"79\";\n")
+	expectPrintedMangle(t, "a = 100 .toString(16)", "a = \"64\";\n")
+	expectPrintedMangle(t, "a = 10000 .toString(19)", "a = \"18d6\";\n")
+	expectPrintedMangle(t, "a = 10000 .toString(23)", "a = \"iki\";\n")
+	expectPrintedMangle(t, "a = 1000000 .toString(29)", "a = \"1c01m\";\n")
+	expectPrintedMangle(t, "a = 1000000 .toString(31)", "a = \"12hi2\";\n")
+	expectPrintedMangle(t, "a = 1000000 .toString(36)", "a = \"lfls\";\n")
+	expectPrintedMangle(t, "a = (-1000000).toString(36)", "a = \"-lfls\";\n")
+	expectPrintedMangle(t, "a = 0 .toString(36)", "a = \"0\";\n")
+	expectPrintedMangle(t, "a = (-0).toString(36)", "a = \"0\";\n")
+
+	expectPrintedMangle(t, "a = false.toString(b)", "a = false.toString(b);\n")
+	expectPrintedMangle(t, "a = true.toString(b)", "a = true.toString(b);\n")
+	expectPrintedMangle(t, "a = \"xy\".toString(b)", "a = \"xy\".toString(b);\n")
+	expectPrintedMangle(t, "a = 123 .toString(b)", "a = 123 .toString(b);\n")
+	expectPrintedMangle(t, "a = 0.5.toString()", "a = 0.5.toString();\n")
+	expectPrintedMangle(t, "a = 1e99.toString(b)", "a = 1e99.toString(b);\n")
+	expectPrintedMangle(t, "a = /./.toString(b)", "a = /./.toString(b);\n")
 }
 
 func TestMangleIf(t *testing.T) {
@@ -3880,13 +4065,13 @@ func TestMangleNullOrUndefinedWithSideEffects(t *testing.T) {
 
 func TestMangleBooleanWithSideEffects(t *testing.T) {
 	falsyNoSideEffects := []string{"false", "\"\"", "0", "0n", "null", "void 0"}
-	truthyNoSideEffects := []string{"true", "\" \"", "1", "1n", "/./", "(() => {\n})", "function() {\n}"}
+	truthyNoSideEffects := []string{"true", "\" \"", "1", "1n", "/./", "(() => {\n})", "function() {\n}", "[1, 2]", "{ a: 0 }"}
 
 	for _, value := range falsyNoSideEffects {
 		expectPrintedMangle(t, "y(x && "+value+")", "y(x && "+value+");\n")
 		expectPrintedMangle(t, "y(x || "+value+")", "y(x || "+value+");\n")
 
-		expectPrintedMangle(t, "y(!(x && "+value+"))", "y(!(x && "+value+"));\n")
+		expectPrintedMangle(t, "y(!(x && "+value+"))", "y(!(x && false));\n")
 		expectPrintedMangle(t, "y(!(x || "+value+"))", "y(!x);\n")
 
 		expectPrintedMangle(t, "if (x && "+value+") y", "x;\n")
@@ -3898,8 +4083,8 @@ func TestMangleBooleanWithSideEffects(t *testing.T) {
 		expectPrintedMangle(t, "y(x && "+value+" ? y : z)", "y((x, z));\n")
 		expectPrintedMangle(t, "y(x || "+value+" ? y : z)", "y(x ? y : z);\n")
 
-		expectPrintedMangle(t, "while ("+value+") x()", "for (; "+value+"; )\n  x();\n")
-		expectPrintedMangle(t, "for (; "+value+"; ) x()", "for (; "+value+"; )\n  x();\n")
+		expectPrintedMangle(t, "while ("+value+") x()", "for (; false; )\n  x();\n")
+		expectPrintedMangle(t, "for (; "+value+"; ) x()", "for (; false; )\n  x();\n")
 	}
 
 	for _, value := range truthyNoSideEffects {
@@ -3907,7 +4092,7 @@ func TestMangleBooleanWithSideEffects(t *testing.T) {
 		expectPrintedMangle(t, "y(x || "+value+")", "y(x || "+value+");\n")
 
 		expectPrintedMangle(t, "y(!(x && "+value+"))", "y(!x);\n")
-		expectPrintedMangle(t, "y(!(x || "+value+"))", "y(!(x || "+value+"));\n")
+		expectPrintedMangle(t, "y(!(x || "+value+"))", "y(!(x || true));\n")
 
 		expectPrintedMangle(t, "if (x && "+value+") y", "x && y;\n")
 		expectPrintedMangle(t, "if (x || "+value+") y", "x, y;\n")
@@ -4374,15 +4559,32 @@ func TestMangleUnaryConstantFolding(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "x = ~5", "x = ~5;\n", "x = -6;\n")
 	expectPrintedNormalAndMangle(t, "x = !5", "x = false;\n", "x = false;\n")
 	expectPrintedNormalAndMangle(t, "x = typeof 5", "x = \"number\";\n", "x = \"number\";\n")
+
+	expectPrintedNormalAndMangle(t, "x = +''", "x = 0;\n", "x = 0;\n")
+	expectPrintedNormalAndMangle(t, "x = +[]", "x = 0;\n", "x = 0;\n")
+	expectPrintedNormalAndMangle(t, "x = +{}", "x = NaN;\n", "x = NaN;\n")
+	expectPrintedNormalAndMangle(t, "x = +/1/", "x = NaN;\n", "x = NaN;\n")
+	expectPrintedNormalAndMangle(t, "x = +[1]", "x = +[1];\n", "x = +[1];\n")
+	expectPrintedNormalAndMangle(t, "x = +'123'", "x = 123;\n", "x = 123;\n")
+	expectPrintedNormalAndMangle(t, "x = +'-123'", "x = -123;\n", "x = -123;\n")
+	expectPrintedNormalAndMangle(t, "x = +'0x10'", "x = +\"0x10\";\n", "x = +\"0x10\";\n")
+	expectPrintedNormalAndMangle(t, "x = +{toString:()=>1}", "x = +{ toString: () => 1 };\n", "x = +{ toString: () => 1 };\n")
+	expectPrintedNormalAndMangle(t, "x = +{valueOf:()=>1}", "x = +{ valueOf: () => 1 };\n", "x = +{ valueOf: () => 1 };\n")
 }
 
 func TestMangleBinaryConstantFolding(t *testing.T) {
-	expectPrintedNormalAndMangle(t, "x = 3 + 6", "x = 3 + 6;\n", "x = 3 + 6;\n")
-	expectPrintedNormalAndMangle(t, "x = 3 - 6", "x = 3 - 6;\n", "x = 3 - 6;\n")
+	expectPrintedNormalAndMangle(t, "x = 3 + 6", "x = 3 + 6;\n", "x = 9;\n")
+	expectPrintedNormalAndMangle(t, "x = 3 - 6", "x = 3 - 6;\n", "x = -3;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 * 6", "x = 3 * 6;\n", "x = 3 * 6;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 / 6", "x = 3 / 6;\n", "x = 3 / 6;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 % 6", "x = 3 % 6;\n", "x = 3 % 6;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 ** 6", "x = 3 ** 6;\n", "x = 3 ** 6;\n")
+
+	expectPrintedNormalAndMangle(t, "x = 0 / 0", "x = 0 / 0;\n", "x = NaN;\n")
+	expectPrintedNormalAndMangle(t, "x = 123 / 0", "x = 123 / 0;\n", "x = Infinity;\n")
+	expectPrintedNormalAndMangle(t, "x = 123 / -0", "x = 123 / -0;\n", "x = -Infinity;\n")
+	expectPrintedNormalAndMangle(t, "x = -123 / 0", "x = -123 / 0;\n", "x = -Infinity;\n")
+	expectPrintedNormalAndMangle(t, "x = -123 / -0", "x = -123 / -0;\n", "x = Infinity;\n")
 
 	expectPrintedNormalAndMangle(t, "x = 3 < 6", "x = 3 < 6;\n", "x = 3 < 6;\n")
 	expectPrintedNormalAndMangle(t, "x = 3 > 6", "x = 3 > 6;\n", "x = 3 > 6;\n")

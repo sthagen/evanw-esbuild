@@ -891,8 +891,10 @@ func duplicateCaseEquals(left js_ast.Expr, right js_ast.Expr) (equals bool, coul
 		return ok && helpers.UTF16EqualsUTF16(a.Value, b.Value), false
 
 	case *js_ast.EBigInt:
-		b, ok := right.Data.(*js_ast.EBigInt)
-		return ok && a.Value == b.Value, false
+		if b, ok := right.Data.(*js_ast.EBigInt); ok {
+			equal, ok := js_ast.CheckEqualityBigInt(a.Value, b.Value)
+			return ok && equal, false
+		}
 
 	case *js_ast.EIdentifier:
 		b, ok := right.Data.(*js_ast.EIdentifier)
@@ -8850,7 +8852,7 @@ func (p *parser) mangleStmts(stmts []js_ast.Stmt, kind stmtsKind) []js_ast.Stmt 
 							bodyLoc = body[0].Loc
 						}
 						return p.mangleIf(result, stmt.Loc, &js_ast.SIf{
-							Test: js_ast.SimplifyBooleanExpr(js_ast.Not(s.Test)),
+							Test: js_ast.SimplifyBooleanExpr(js_ast.Not(s.Test), p.isUnbound),
 							Yes:  stmtsToSingleStmt(bodyLoc, body, logger.Loc{}),
 						})
 					}
@@ -9702,7 +9704,6 @@ func (p *parser) mangleIf(stmts []js_ast.Stmt, loc logger.Loc, s *js_ast.SIf) []
 				}
 				return appendIfOrLabelBodyPreservingScope(stmts, s.Yes)
 			} else {
-				// We have to keep the "no" branch
 			}
 		} else {
 			// The test is falsy
@@ -9720,6 +9721,15 @@ func (p *parser) mangleIf(stmts []js_ast.Stmt, loc logger.Loc, s *js_ast.SIf) []
 				return appendIfOrLabelBodyPreservingScope(stmts, s.NoOrNil)
 			} else {
 				// We have to keep the "yes" branch
+			}
+		}
+
+		// Use "1" and "0" instead of "true" and "false" to be shorter
+		if sideEffects == js_ast.NoSideEffects {
+			if boolean {
+				s.Test.Data = &js_ast.ENumber{Value: 1}
+			} else {
+				s.Test.Data = &js_ast.ENumber{Value: 0}
 			}
 		}
 	}
@@ -10372,7 +10382,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		s.Body = p.visitLoopBody(s.Body)
 
 		if p.options.minifySyntax {
-			s.Test = js_ast.SimplifyBooleanExpr(s.Test)
+			s.Test = js_ast.SimplifyBooleanExpr(s.Test, p.isUnbound)
 
 			// A true value is implied
 			testOrNil := s.Test
@@ -10391,14 +10401,14 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		s.Test = p.visitExpr(s.Test)
 
 		if p.options.minifySyntax {
-			s.Test = js_ast.SimplifyBooleanExpr(s.Test)
+			s.Test = js_ast.SimplifyBooleanExpr(s.Test, p.isUnbound)
 		}
 
 	case *js_ast.SIf:
 		s.Test = p.visitExpr(s.Test)
 
 		if p.options.minifySyntax {
-			s.Test = js_ast.SimplifyBooleanExpr(s.Test)
+			s.Test = js_ast.SimplifyBooleanExpr(s.Test, p.isUnbound)
 		}
 
 		// Fold constants
@@ -10448,7 +10458,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 			s.TestOrNil = p.visitExpr(s.TestOrNil)
 
 			if p.options.minifySyntax {
-				s.TestOrNil = js_ast.SimplifyBooleanExpr(s.TestOrNil)
+				s.TestOrNil = js_ast.SimplifyBooleanExpr(s.TestOrNil, p.isUnbound)
 
 				// A true value is implied
 				if boolean, sideEffects, ok := js_ast.ToBooleanWithSideEffects(s.TestOrNil.Data); ok && boolean && sideEffects == js_ast.NoSideEffects {
@@ -13593,11 +13603,32 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			}
 		}
 
-		// "a['123']" => "a[123]" (this is done late to allow "'123'" to be mangled)
 		if p.options.minifySyntax {
-			if str, ok := e.Index.Data.(*js_ast.EString); ok {
-				if numberValue, ok := js_ast.StringToEquivalentNumberValue(str.Value); ok {
+			switch index := e.Index.Data.(type) {
+			case *js_ast.EString:
+				// "a['x' + 'y']" => "a.xy" (this is done late to allow for constant folding)
+				if js_ast.IsIdentifierUTF16(index.Value) {
+					return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EDot{
+						Target:                     e.Target,
+						Name:                       helpers.UTF16ToString(index.Value),
+						NameLoc:                    e.Index.Loc,
+						OptionalChain:              e.OptionalChain,
+						CanBeRemovedIfUnused:       e.CanBeRemovedIfUnused,
+						CallCanBeUnwrappedIfUnused: e.CallCanBeUnwrappedIfUnused,
+					}}, out
+				}
+
+				// "a['123']" => "a[123]" (this is done late to allow "'123'" to be mangled)
+				if numberValue, ok := js_ast.StringToEquivalentNumberValue(index.Value); ok {
 					e.Index.Data = &js_ast.ENumber{Value: numberValue}
+				}
+
+			case *js_ast.ENumber:
+				// "'abc'[1]" => "'b'"
+				if target, ok := e.Target.Data.(*js_ast.EString); ok {
+					if intValue := math.Floor(index.Value); index.Value == intValue && intValue >= 0 && intValue < float64(len(target.Value)) {
+						return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: []uint16{target.Value[int(intValue)]}}}, out
+					}
 				}
 			}
 		}
@@ -13656,7 +13687,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			switch e.Op {
 			case js_ast.UnOpNot:
 				if p.options.minifySyntax {
-					e.Value = js_ast.SimplifyBooleanExpr(e.Value)
+					e.Value = js_ast.SimplifyBooleanExpr(e.Value, p.isUnbound)
 				}
 
 				if boolean, sideEffects, ok := js_ast.ToBooleanWithSideEffects(e.Value.Data); ok && sideEffects == js_ast.NoSideEffects {
@@ -13722,7 +13753,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		e.Test = p.visitExpr(e.Test)
 
 		if p.options.minifySyntax {
-			e.Test = js_ast.SimplifyBooleanExpr(e.Test)
+			e.Test = js_ast.SimplifyBooleanExpr(e.Test, p.isUnbound)
 		}
 
 		// Propagate these flags into the branches
@@ -14405,7 +14436,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 						if len(e.Args) == 0 {
 							return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: false}}, exprOut{}
 						} else {
-							expr.Data = &js_ast.EUnary{Value: js_ast.SimplifyBooleanExpr(e.Args[0]), Op: js_ast.UnOpNot}
+							expr.Data = &js_ast.EUnary{Value: js_ast.SimplifyBooleanExpr(e.Args[0], p.isUnbound), Op: js_ast.UnOpNot}
 							return js_ast.Not(expr), exprOut{}
 						}
 
@@ -14520,6 +14551,85 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 						case *js_ast.ENull, *js_ast.EObject:
 							// Mark "Object.create(null)" and "Object.create({})" as pure
 							e.CanBeUnwrappedIfUnused = true
+						}
+					}
+				}
+			}
+
+			if p.options.minifySyntax {
+				switch t.Name {
+				case "charCodeAt":
+					// Recognize "charCodeAt()" calls
+					if str, ok := t.Target.Data.(*js_ast.EString); ok && len(e.Args) <= 1 {
+						index := 0
+						hasIndex := false
+						if len(e.Args) == 0 {
+							hasIndex = true
+						} else if num, ok := e.Args[0].Data.(*js_ast.ENumber); ok && num.Value == math.Trunc(num.Value) && math.Abs(num.Value) <= 0x7FFF_FFFF {
+							index = int(num.Value)
+							hasIndex = true
+						}
+						if hasIndex {
+							if index >= 0 && index < len(str.Value) {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: float64(str.Value[index])}}, exprOut{}
+							} else {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: math.NaN()}}, exprOut{}
+							}
+						}
+					}
+
+				case "fromCharCode":
+					// Recognize "fromCharCode()" calls
+					if id, ok := t.Target.Data.(*js_ast.EIdentifier); ok {
+						if symbol := &p.symbols[id.Ref.InnerIndex]; symbol.Kind == ast.SymbolUnbound && symbol.OriginalName == "String" {
+							charCodes := make([]uint16, 0, len(e.Args))
+							for _, arg := range e.Args {
+								arg, ok := js_ast.ToNumberWithoutSideEffects(arg.Data)
+								if !ok {
+									break
+								}
+								charCodes = append(charCodes, uint16(js_ast.ToInt32(arg)))
+							}
+							if len(charCodes) == len(e.Args) {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: charCodes}}, exprOut{}
+							}
+						}
+					}
+
+				case "toString":
+					switch target := t.Target.Data.(type) {
+					case *js_ast.ENumber:
+						radix := 0
+						if len(e.Args) == 0 {
+							radix = 10
+						} else if len(e.Args) == 1 {
+							if num, ok := e.Args[0].Data.(*js_ast.ENumber); ok && num.Value == math.Trunc(num.Value) && num.Value >= 2 && num.Value <= 36 {
+								radix = int(num.Value)
+							}
+						}
+						if radix != 0 {
+							if str, ok := js_ast.TryToStringOnNumberSafely(target.Value, radix); ok {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(str)}}, exprOut{}
+							}
+						}
+
+					case *js_ast.ERegExp:
+						if len(e.Args) == 0 {
+							return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(target.Value)}}, exprOut{}
+						}
+
+					case *js_ast.EBoolean:
+						if len(e.Args) == 0 {
+							if target.Value {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: helpers.StringToUTF16("true")}}, exprOut{}
+							} else {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: helpers.StringToUTF16("false")}}, exprOut{}
+							}
+						}
+
+					case *js_ast.EString:
+						if len(e.Args) == 0 {
+							return t.Target, exprOut{}
 						}
 					}
 				}
