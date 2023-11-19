@@ -2355,6 +2355,36 @@ func (p *printer) printExpr(expr js_ast.Expr, level js_ast.L, flags printExprFla
 					break
 				}
 			}
+
+			// Inline IIFEs that return expressions at print time
+			if len(e.Args) == 0 {
+				// Note: Do not inline async arrow functions as they are not IIFEs. In
+				// particular, they are not necessarily invoked immediately, and any
+				// exceptions involved in their evaluation will be swallowed without
+				// bubbling up to the surrounding context.
+				if arrow, ok := e.Target.Data.(*js_ast.EArrow); ok && len(arrow.Args) == 0 && !arrow.IsAsync {
+					stmts := arrow.Body.Block.Stmts
+
+					// "(() => {})()" => "void 0"
+					if len(stmts) == 0 {
+						value := js_ast.Expr{Loc: expr.Loc, Data: js_ast.EUndefinedShared}
+						p.printExpr(p.guardAgainstBehaviorChangeDueToSubstitution(value, flags), level, flags)
+						break
+					}
+
+					// "(() => 123)()" => "123"
+					if len(stmts) == 1 {
+						if stmt, ok := stmts[0].Data.(*js_ast.SReturn); ok {
+							value := stmt.ValueOrNil
+							if value.Data == nil {
+								value.Data = js_ast.EUndefinedShared
+							}
+							p.printExpr(p.guardAgainstBehaviorChangeDueToSubstitution(value, flags), level, flags)
+							break
+						}
+					}
+				}
+			}
 		}
 
 		wrap := level >= js_ast.LNew || (flags&forbidCall) != 0

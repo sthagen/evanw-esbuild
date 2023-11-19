@@ -2415,9 +2415,9 @@ func TestArrow(t *testing.T) {
 
 	expectPrinted(t, "(() => {})\n(0)", "/* @__PURE__ */ (() => {\n})(0);\n")
 	expectPrinted(t, "(x => {})\n(0)", "/* @__PURE__ */ ((x) => {\n})(0);\n")
-	expectPrinted(t, "(async () => {})\n(0)", "/* @__PURE__ */ (async () => {\n})(0);\n")
-	expectPrinted(t, "(async x => {})\n(0)", "/* @__PURE__ */ (async (x) => {\n})(0);\n")
-	expectPrinted(t, "(async (x) => {})\n(0)", "/* @__PURE__ */ (async (x) => {\n})(0);\n")
+	expectPrinted(t, "(async () => {})\n(0)", "(async () => {\n})(0);\n")
+	expectPrinted(t, "(async x => {})\n(0)", "(async (x) => {\n})(0);\n")
+	expectPrinted(t, "(async (x) => {})\n(0)", "(async (x) => {\n})(0);\n")
 
 	expectParseError(t, "y = () => {}(0)", "<stdin>: ERROR: Expected \";\" but found \"(\"\n")
 	expectParseError(t, "y = x => {}(0)", "<stdin>: ERROR: Expected \";\" but found \"(\"\n")
@@ -2439,9 +2439,9 @@ func TestArrow(t *testing.T) {
 
 	expectPrinted(t, "y = (() => {})\n(0)", "y = /* @__PURE__ */ (() => {\n})(0);\n")
 	expectPrinted(t, "y = (x => {})\n(0)", "y = /* @__PURE__ */ ((x) => {\n})(0);\n")
-	expectPrinted(t, "y = (async () => {})\n(0)", "y = /* @__PURE__ */ (async () => {\n})(0);\n")
-	expectPrinted(t, "y = (async x => {})\n(0)", "y = /* @__PURE__ */ (async (x) => {\n})(0);\n")
-	expectPrinted(t, "y = (async (x) => {})\n(0)", "y = /* @__PURE__ */ (async (x) => {\n})(0);\n")
+	expectPrinted(t, "y = (async () => {})\n(0)", "y = (async () => {\n})(0);\n")
+	expectPrinted(t, "y = (async x => {})\n(0)", "y = (async (x) => {\n})(0);\n")
+	expectPrinted(t, "y = (async (x) => {})\n(0)", "y = (async (x) => {\n})(0);\n")
 
 	expectParseError(t, "(() => {}(0))", "<stdin>: ERROR: Expected \")\" but found \"(\"\n")
 	expectParseError(t, "(x => {}(0))", "<stdin>: ERROR: Expected \")\" but found \"(\"\n")
@@ -2463,9 +2463,9 @@ func TestArrow(t *testing.T) {
 
 	expectPrinted(t, "((() => {})\n(0))", "/* @__PURE__ */ (() => {\n})(0);\n")
 	expectPrinted(t, "((x => {})\n(0))", "/* @__PURE__ */ ((x) => {\n})(0);\n")
-	expectPrinted(t, "((async () => {})\n(0))", "/* @__PURE__ */ (async () => {\n})(0);\n")
-	expectPrinted(t, "((async x => {})\n(0))", "/* @__PURE__ */ (async (x) => {\n})(0);\n")
-	expectPrinted(t, "((async (x) => {})\n(0))", "/* @__PURE__ */ (async (x) => {\n})(0);\n")
+	expectPrinted(t, "((async () => {})\n(0))", "(async () => {\n})(0);\n")
+	expectPrinted(t, "((async x => {})\n(0))", "(async (x) => {\n})(0);\n")
+	expectPrinted(t, "((async (x) => {})\n(0))", "(async (x) => {\n})(0);\n")
 
 	expectParseError(t, "y = (() => {}(0))", "<stdin>: ERROR: Expected \")\" but found \"(\"\n")
 	expectParseError(t, "y = (x => {}(0))", "<stdin>: ERROR: Expected \")\" but found \"(\"\n")
@@ -2487,9 +2487,9 @@ func TestArrow(t *testing.T) {
 
 	expectPrinted(t, "y = ((() => {})\n(0))", "y = /* @__PURE__ */ (() => {\n})(0);\n")
 	expectPrinted(t, "y = ((x => {})\n(0))", "y = /* @__PURE__ */ ((x) => {\n})(0);\n")
-	expectPrinted(t, "y = ((async () => {})\n(0))", "y = /* @__PURE__ */ (async () => {\n})(0);\n")
-	expectPrinted(t, "y = ((async x => {})\n(0))", "y = /* @__PURE__ */ (async (x) => {\n})(0);\n")
-	expectPrinted(t, "y = ((async (x) => {})\n(0))", "y = /* @__PURE__ */ (async (x) => {\n})(0);\n")
+	expectPrinted(t, "y = ((async () => {})\n(0))", "y = (async () => {\n})(0);\n")
+	expectPrinted(t, "y = ((async x => {})\n(0))", "y = (async (x) => {\n})(0);\n")
+	expectPrinted(t, "y = ((async (x) => {})\n(0))", "y = (async (x) => {\n})(0);\n")
 }
 
 func TestTemplate(t *testing.T) {
@@ -3239,6 +3239,43 @@ func TestWarningDuplicateClassMember(t *testing.T) {
 	expectParseError(t, "class Foo { static x() {}; x() {} }", "")
 	expectParseError(t, "class Foo { get x() {}; static get x() {} }", "")
 	expectParseError(t, "class Foo { set x(y) {}; static set x(y) {} }", "")
+}
+
+func TestWarningNullishCoalescing(t *testing.T) {
+	expectParseError(t, "x = null ?? y", "")
+	expectParseError(t, "x = undefined ?? y", "")
+	expectParseError(t, "x = false ?? y", "")
+	expectParseError(t, "x = true ?? y", "")
+	expectParseError(t, "x = 0 ?? y", "")
+	expectParseError(t, "x = 1 ?? y", "")
+
+	alwaysLeft := "<stdin>: WARNING: The \"??\" operator here will always return the left operand\n" +
+		"<stdin>: NOTE: The left operand of the \"??\" operator here will never be null or undefined, so it will always be returned. This usually indicates a bug in your code:\n"
+	alwaysRight := "<stdin>: WARNING: The \"??\" operator here will always return the right operand\n" +
+		"<stdin>: NOTE: The left operand of the \"??\" operator here will always be null or undefined, so it will never be returned. This usually indicates a bug in your code:\n"
+
+	expectParseError(t, "x = a === b ?? y", alwaysLeft)
+	expectParseError(t, "x = { ...a } ?? y", alwaysLeft)
+	expectParseError(t, "x = (a => b) ?? y", alwaysLeft)
+	expectParseError(t, "x = void a ?? y", alwaysRight)
+}
+
+func TestWarningLogicalOperator(t *testing.T) {
+	expectParseError(t, "x(a => b && a <= c)", "")
+	expectParseError(t, "x(a => b || a <= c)", "")
+	expectParseError(t, "x(a => (0 && a <= 1))", "")
+	expectParseError(t, "x(a => (-1 && a <= 0))", "")
+	expectParseError(t, "x(a => (0 || a <= -1))", "")
+	expectParseError(t, "x(a => (1 || a <= 0))", "")
+
+	expectParseError(t, "x(a => 0 && a <= 1)", "<stdin>: WARNING: The \"&&\" operator here will always return the left operand\n"+
+		"<stdin>: NOTE: The \"=>\" symbol creates an arrow function expression in JavaScript. Did you mean to use the greater-than-or-equal-to operator \">=\" here instead?\n")
+	expectParseError(t, "x(a => -1 && a <= 0)", "<stdin>: WARNING: The \"&&\" operator here will always return the right operand\n"+
+		"<stdin>: NOTE: The \"=>\" symbol creates an arrow function expression in JavaScript. Did you mean to use the greater-than-or-equal-to operator \">=\" here instead?\n")
+	expectParseError(t, "x(a => 0 || a <= -1)", "<stdin>: WARNING: The \"||\" operator here will always return the right operand\n"+
+		"<stdin>: NOTE: The \"=>\" symbol creates an arrow function expression in JavaScript. Did you mean to use the greater-than-or-equal-to operator \">=\" here instead?\n")
+	expectParseError(t, "x(a => 1 || a <= 0)", "<stdin>: WARNING: The \"||\" operator here will always return the left operand\n"+
+		"<stdin>: NOTE: The \"=>\" symbol creates an arrow function expression in JavaScript. Did you mean to use the greater-than-or-equal-to operator \">=\" here instead?\n")
 }
 
 func TestMangleFor(t *testing.T) {
@@ -4375,14 +4412,14 @@ func TestMangleIIFE(t *testing.T) {
 	expectPrintedNormalAndMangle(t, "(() => { return a() })()", "(() => {\n  return a();\n})();\n", "a();\n")
 	expectPrintedNormalAndMangle(t, "(() => { let b = a; b() })()", "(() => {\n  let b = a;\n  b();\n})();\n", "a();\n")
 	expectPrintedNormalAndMangle(t, "(() => { let b = a; return b() })()", "(() => {\n  let b = a;\n  return b();\n})();\n", "a();\n")
-	expectPrintedNormalAndMangle(t, "(async () => {})()", "/* @__PURE__ */ (async () => {\n})();\n", "")
+	expectPrintedNormalAndMangle(t, "(async () => {})()", "(async () => {\n})();\n", "")
 	expectPrintedNormalAndMangle(t, "(async () => { a() })()", "(async () => {\n  a();\n})();\n", "(async () => a())();\n")
 	expectPrintedNormalAndMangle(t, "(async () => { let b = a; b() })()", "(async () => {\n  let b = a;\n  b();\n})();\n", "(async () => a())();\n")
 
 	expectPrintedNormalAndMangle(t, "var a = (function() {})()", "var a = /* @__PURE__ */ function() {\n}();\n", "var a = /* @__PURE__ */ function() {\n}();\n")
 	expectPrintedNormalAndMangle(t, "(function() {})()", "/* @__PURE__ */ (function() {\n})();\n", "")
-	expectPrintedNormalAndMangle(t, "(function*() {})()", "/* @__PURE__ */ (function* () {\n})();\n", "")
-	expectPrintedNormalAndMangle(t, "(async function() {})()", "/* @__PURE__ */ (async function() {\n})();\n", "")
+	expectPrintedNormalAndMangle(t, "(function*() {})()", "(function* () {\n})();\n", "")
+	expectPrintedNormalAndMangle(t, "(async function() {})()", "(async function() {\n})();\n", "")
 	expectPrintedNormalAndMangle(t, "(function() { a() })()", "(function() {\n  a();\n})();\n", "(function() {\n  a();\n})();\n")
 	expectPrintedNormalAndMangle(t, "(function*() { a() })()", "(function* () {\n  a();\n})();\n", "(function* () {\n  a();\n})();\n")
 	expectPrintedNormalAndMangle(t, "(async function() { a() })()", "(async function() {\n  a();\n})();\n", "(async function() {\n  a();\n})();\n")
@@ -6399,8 +6436,13 @@ func TestUsing(t *testing.T) {
 	expectPrinted(t, "for (using x = y;;) ;", "for (using x = y; ; )\n  ;\n")
 	expectPrinted(t, "for (using x of y) ;", "for (using x of y)\n  ;\n")
 	expectPrinted(t, "for (using of x) ;", "for (using of x)\n  ;\n")
+	expectPrinted(t, "for (using of of) ;", "for (using of of)\n  ;\n")
+	expectPrinted(t, "for (await using of of x) ;", "for (await using of of x)\n  ;\n")
+	expectPrinted(t, "for (await using of of of) ;", "for (await using of of of)\n  ;\n")
 	expectPrinted(t, "for await (using x of y) ;", "for await (using x of y)\n  ;\n")
 	expectPrinted(t, "for await (using of x) ;", "for await (using of x)\n  ;\n")
+	expectParseError(t, "for (using of of x) ;", "<stdin>: ERROR: Expected \")\" but found \"x\"\n")
+	expectParseError(t, "for (using of of of) ;", "<stdin>: ERROR: Expected \")\" but found \"of\"\n")
 	expectParseError(t, "for (using x in y) ;", "<stdin>: ERROR: \"using\" declarations are not allowed here\n")
 	expectParseError(t, "for (using x;;) ;", "<stdin>: ERROR: The declaration \"x\" must be initialized\n")
 	expectParseError(t, "for (using x = y of z) ;", "<stdin>: ERROR: for-of loop variables cannot have an initializer\n")
@@ -6416,10 +6458,10 @@ func TestUsing(t *testing.T) {
 	expectParseError(t, "await using [x] = y", "<stdin>: ERROR: Invalid assignment target\n")
 	expectParseError(t, "for (await using x in y) ;", "<stdin>: ERROR: \"await using\" declarations are not allowed here\n")
 	expectParseError(t, "for (await using x = y;;) ;", "<stdin>: ERROR: \"await using\" declarations are not allowed here\n")
-	expectParseError(t, "for (await using of x) ;", "<stdin>: ERROR: Invalid assignment target\n")
+	expectParseError(t, "for (await using of x) ;", "<stdin>: ERROR: Expected \";\" but found \"x\"\n")
 	expectParseError(t, "for (await using x = y of z) ;", "<stdin>: ERROR: for-of loop variables cannot have an initializer\n")
 	expectParseError(t, "for (await using \n x of y) ;", "<stdin>: ERROR: Expected \";\" but found \"x\"\n")
-	expectParseError(t, "for await (await using of x) ;", "<stdin>: ERROR: Invalid assignment target\n")
+	expectParseError(t, "for await (await using of x) ;", "<stdin>: ERROR: Expected \"of\" but found \"x\"\n")
 	expectParseError(t, "for await (await using x = y of z) ;", "<stdin>: ERROR: for-of loop variables cannot have an initializer\n")
 	expectParseError(t, "for await (await using \n x of y) ;", "<stdin>: ERROR: Expected \"of\" but found \"x\"\n")
 

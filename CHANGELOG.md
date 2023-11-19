@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.6
 
 * Fix a constant folding bug with bigint equality
 
@@ -34,6 +34,114 @@
     // New output (with --minify)
     document.onkeydown=o=>o.keyCode===65&&console.log("🧀");
     ```
+
+    In addition, immediately-invoked function expressions (IIFEs) that return a single expression are now inlined when minifying. This makes it possible to use IIFEs in combination with `@__PURE__` annotations to annotate arbitrary expressions as side-effect free without the IIFE wrapper impacting code size. For example:
+
+    ```js
+    // Original code
+    const sideEffectFreeOffset = /* @__PURE__ */ (() => computeSomething())()
+    use(sideEffectFreeOffset)
+
+    // Old output (with --minify)
+    const e=(()=>computeSomething())();use(e);
+
+    // New output (with --minify)
+    const e=computeSomething();use(e);
+    ```
+
+* Automatically prefix the `mask-composite` CSS property for WebKit ([#3493](https://github.com/evanw/esbuild/issues/3493))
+
+    The `mask-composite` property will now be prefixed as `-webkit-mask-composite` for older WebKit-based browsers. In addition to prefixing the property name, handling older browsers also requires rewriting the values since WebKit uses non-standard names for the mask composite modes:
+
+    ```css
+    /* Original code */
+    div {
+      mask-composite: add, subtract, intersect, exclude;
+    }
+
+    /* New output (with --target=chrome100) */
+    div {
+      -webkit-mask-composite:
+        source-over,
+        source-out,
+        source-in,
+        xor;
+      mask-composite:
+        add,
+        subtract,
+        intersect,
+        exclude;
+    }
+    ```
+
+* Avoid referencing `this` from JSX elements in derived class constructors ([#3454](https://github.com/evanw/esbuild/issues/3454))
+
+    When you enable `--jsx=automatic` and `--jsx-dev`, the JSX transform is supposed to insert `this` as the last argument to the `jsxDEV` function. I'm not sure exactly why this is and I can't find any specification for it, but in any case this causes the generated code to crash when you use a JSX element in a derived class constructor before the call to `super()` as `this` is not allowed to be accessed at that point. For example
+
+    ```js
+    // Original code
+    class ChildComponent extends ParentComponent {
+      constructor() {
+        super(<div />)
+      }
+    }
+
+    // Problematic output (with --loader=jsx --jsx=automatic --jsx-dev)
+    import { jsxDEV } from "react/jsx-dev-runtime";
+    class ChildComponent extends ParentComponent {
+      constructor() {
+        super(/* @__PURE__ */ jsxDEV("div", {}, void 0, false, {
+          fileName: "<stdin>",
+          lineNumber: 3,
+          columnNumber: 15
+        }, this)); // The reference to "this" crashes here
+      }
+    }
+    ```
+
+    The TypeScript compiler doesn't handle this at all while the Babel compiler just omits `this` for the entire constructor (even after the call to `super()`). There seems to be no specification so I can't be sure that this change doesn't break anything important. But given that Babel is pretty loose with this and TypeScript doesn't handle this at all, I'm guessing this value isn't too important. React's blog post seems to indicate that this value was intended to be used for a React-specific migration warning at some point, so it could even be that this value is irrelevant now. Anyway the crash in this case should now be fixed.
+
+* Allow package subpath imports to map to node built-ins ([#3485](https://github.com/evanw/esbuild/issues/3485))
+
+    You are now able to use a [subpath import](https://nodejs.org/api/packages.html#subpath-imports) in your package to resolve to a node built-in module. For example, with a `package.json` file like this:
+
+    ```json
+    {
+      "type": "module",
+      "imports": {
+        "#stream": {
+          "node": "stream",
+          "default": "./stub.js"
+        }
+      }
+    }
+    ```
+
+    You can now import from node's `stream` module like this:
+
+    ```js
+    import * as stream from '#stream';
+    console.log(Object.keys(stream));
+    ```
+
+    This will import from node's `stream` module when the platform is `node` and from `./stub.js` otherwise.
+
+* No longer throw an error when a `Symbol` is missing ([#3453](https://github.com/evanw/esbuild/issues/3453))
+
+    Certain JavaScript syntax features use special properties on the global `Symbol` object. For example, the asynchronous iteration syntax uses `Symbol.asyncIterator`. Previously esbuild's generated code for older browsers required this symbol to be polyfilled. However, starting with this release esbuild will use [`Symbol.for()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/for) to construct these symbols if they are missing instead of throwing an error about a missing polyfill. This means your code no longer needs to include a polyfill for missing symbols as long as your code also uses `Symbol.for()` for missing symbols.
+
+* Parse upcoming changes to TypeScript syntax ([#3490](https://github.com/evanw/esbuild/issues/3490), [#3491](https://github.com/evanw/esbuild/pull/3491))
+
+    With this release, you can now use `from` as the name of a default type-only import in TypeScript code, as well as `of` as the name of an `await using` loop iteration variable:
+
+    ```ts
+    import type from from 'from'
+    for (await using of of of) ;
+    ```
+
+    This matches similar changes in the TypeScript compiler ([#56376](https://github.com/microsoft/TypeScript/issues/56376) and [#55555](https://github.com/microsoft/TypeScript/issues/55555)) which will start allowing this syntax in an upcoming version of TypeScript. Please never actually write code like this.
+
+    The type-only import syntax change was contributed by [@magic-akari](https://github.com/magic-akari).
 
 ## 0.19.5
 
