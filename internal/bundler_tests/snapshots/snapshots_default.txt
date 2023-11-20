@@ -300,7 +300,6 @@ export {
 ================================================================================
 TestCommentPreservation
 ---------- /out/entry.js ----------
-// entry.js
 console.log(
   import(
     /* before */
@@ -393,54 +392,54 @@ console.log(
     /* after */
   )
 );
-var [
+let [
   /* foo */
 ] = [
   /* bar */
 ];
-var [
+let [
   // foo
 ] = [
   // bar
 ];
-var [
+let [
   /*before*/
   ...s
 ] = [
   /*before*/
   ...s
 ];
-var [.../*before*/
+let [.../*before*/
 s2] = [.../*before*/
 s2];
-var {
+let {
   /* foo */
 } = {
   /* bar */
 };
-var {
+let {
   // foo
 } = {
   // bar
 };
-var {
+let {
   /*before*/
   ...s3
 } = {
   /*before*/
   ...s3
 };
-var { .../*before*/
+let { .../*before*/
 s4 } = { .../*before*/
 s4 };
-var [
+let [
   /* before */
   x
 ] = [
   /* before */
   x
 ];
-var [
+let [
   /* before */
   x2
   /* after */
@@ -449,7 +448,7 @@ var [
   x2
   /* after */
 ];
-var [
+let [
   // before
   x3
   // after
@@ -458,14 +457,14 @@ var [
   x3
   // after
 ];
-var {
+let {
   /* before */
   y
 } = {
   /* before */
   y
 };
-var {
+let {
   /* before */
   y2
   /* after */
@@ -474,7 +473,7 @@ var {
   y2
   /* after */
 };
-var {
+let {
   // before
   y3
   // after
@@ -483,21 +482,21 @@ var {
   y3
   // after
 };
-var {
+let {
   /* before */
   [y4]: y4
 } = {
   /* before */
   [y4]: y4
 };
-var { [
+let { [
   /* before */
   y5
 ]: y5 } = { [
   /* before */
   y5
 ]: y5 };
-var { [
+let { [
   y6
   /* after */
 ]: y6 } = { [
@@ -4148,6 +4147,77 @@ var shared_default = 123;
 
 // e39.js
 console.log(shared_default);
+
+================================================================================
+TestMetafileImportWithTypeJSON
+---------- /out/entry.js ----------
+// project/data.json
+var data_default = { some: "data" };
+
+// project/data.json with { type: 'json' }
+var data_default2 = { some: "data" };
+
+// project/entry.js
+x = [data_default, data_default, data_default2];
+---------- metafile.json ----------
+{
+  "inputs": {
+    "project/data.json": {
+      "bytes": 16,
+      "imports": []
+    },
+    "project/data.json with { type: 'json' }": {
+      "bytes": 16,
+      "imports": [],
+      "with": {
+        "type": "json"
+      }
+    },
+    "project/entry.js": {
+      "bytes": 164,
+      "imports": [
+        {
+          "path": "project/data.json",
+          "kind": "import-statement",
+          "original": "./data.json"
+        },
+        {
+          "path": "project/data.json",
+          "kind": "import-statement",
+          "original": "./data.json"
+        },
+        {
+          "path": "project/data.json with { type: 'json' }",
+          "kind": "import-statement",
+          "original": "./data.json",
+          "with": {
+            "type": "json"
+          }
+        }
+      ],
+      "format": "esm"
+    }
+  },
+  "outputs": {
+    "out/entry.js": {
+      "imports": [],
+      "exports": [],
+      "entryPoint": "project/entry.js",
+      "inputs": {
+        "project/data.json": {
+          "bytesInOutput": 37
+        },
+        "project/data.json with { type: 'json' }": {
+          "bytesInOutput": 38
+        },
+        "project/entry.js": {
+          "bytesInOutput": 49
+        }
+      },
+      "bytes": 210
+    }
+  }
+}
 
 ================================================================================
 TestMetafileNoBundle
