@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.19.8
+
+* Add a treemap chart to esbuild's bundle analyzer ([#2848](https://github.com/evanw/esbuild/issues/2848))
+
+    The bundler analyzer on esbuild's website (https://esbuild.github.io/analyze/) now has a treemap chart type in addition to the two existing chart types (sunburst and flame). This should be more familiar for people coming from other similar tools, as well as make better use of large screens.
 
 * Allow decorators after the `export` keyword ([#104](https://github.com/evanw/esbuild/issues/104))
 
