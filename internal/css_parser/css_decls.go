@@ -150,6 +150,22 @@ func (p *parser) processDeclarations(rules []css_ast.Rule, composesContext *comp
 				rewrittenRules = rewrittenRules[:len(rewrittenRules)-1]
 			}
 
+		case css_ast.DBackground:
+			wouldClamp := false
+			for i, t := range decl.Value {
+				decl.Value[i] = p.lowerAndMinifyColor(t, &wouldClamp)
+			}
+
+			// If this contains values outside of sRGB, duplicate and clamp
+			if wouldClamp && p.options.unsupportedCSSFeatures.Has(compat.ColorFunction) {
+				clamped := *decl
+				clamped.Value = css_ast.CloneTokensWithoutImportRecords(clamped.Value)
+				for i, t := range clamped.Value {
+					clamped.Value[i] = p.lowerAndMinifyColor(t, nil)
+				}
+				rewrittenRules = append(rewrittenRules[:len(rewrittenRules)-1], css_ast.Rule{Loc: rule.Loc, Data: &clamped}, rule)
+			}
+
 		case css_ast.DBackgroundColor,
 			css_ast.DBorderBlockEndColor,
 			css_ast.DBorderBlockStartColor,
@@ -173,13 +189,15 @@ func (p *parser) processDeclarations(rules []css_ast.Rule, composesContext *comp
 			css_ast.DTextEmphasisColor:
 
 			if len(decl.Value) == 1 {
-				decl.Value[0] = p.lowerColor(decl.Value[0])
+				wouldClamp := false
+				decl.Value[0] = p.lowerAndMinifyColor(decl.Value[0], &wouldClamp)
 
-				if p.options.minifySyntax {
-					t := decl.Value[0]
-					if hex, ok := parseColor(t); ok {
-						decl.Value[0] = p.mangleColor(t, hex)
-					}
+				// If this contains values outside of sRGB, duplicate and clamp
+				if wouldClamp && p.options.unsupportedCSSFeatures.Has(compat.ColorFunction) && len(decl.Value) == 1 {
+					clamped := *decl
+					clamped.Value = css_ast.CloneTokensWithoutImportRecords(clamped.Value)
+					clamped.Value[0] = p.lowerAndMinifyColor(clamped.Value[0], nil)
+					rewrittenRules = append(rewrittenRules[:len(rewrittenRules)-1], css_ast.Rule{Loc: rule.Loc, Data: &clamped}, rule)
 				}
 			}
 
@@ -189,8 +207,15 @@ func (p *parser) processDeclarations(rules []css_ast.Rule, composesContext *comp
 			}
 
 		case css_ast.DBoxShadow:
-			if p.options.minifySyntax {
-				decl.Value = p.mangleBoxShadows(decl.Value)
+			wouldClamp := false
+			decl.Value = p.lowerAndMangleBoxShadows(decl.Value, &wouldClamp)
+
+			// If this contains values outside of sRGB, duplicate and clamp
+			if wouldClamp && p.options.unsupportedCSSFeatures.Has(compat.ColorFunction) {
+				clamped := *decl
+				clamped.Value = css_ast.CloneTokensWithoutImportRecords(clamped.Value)
+				clamped.Value = p.lowerAndMangleBoxShadows(clamped.Value, nil)
+				rewrittenRules = append(rewrittenRules[:len(rewrittenRules)-1], css_ast.Rule{Loc: rule.Loc, Data: &clamped}, rule)
 			}
 
 		// Container name

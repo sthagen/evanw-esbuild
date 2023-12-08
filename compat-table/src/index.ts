@@ -89,7 +89,9 @@ export const jsFeatures = {
 
 export type CSSFeature = keyof typeof cssFeatures
 export const cssFeatures = {
+  ColorFunction: true,
   HexRGBA: true,
+  HWB: true,
   InlineStyle: true,
   InsetProperty: true,
   IsPseudoClass: true,
