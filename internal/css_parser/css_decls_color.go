@@ -3,7 +3,6 @@ package css_parser
 import (
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 
@@ -277,7 +276,7 @@ func lowerAlphaPercentageToNumber(token css_ast.Token) css_ast.Token {
 }
 
 // Convert newer color syntax to older color syntax for older browsers
-func (p *parser) lowerAndMinifyColor(token css_ast.Token, wouldClamp *bool) css_ast.Token {
+func (p *parser) lowerAndMinifyColor(token css_ast.Token, wouldClipColor *bool) css_ast.Token {
 	text := token.Text
 
 	switch token.Kind {
@@ -300,13 +299,13 @@ func (p *parser) lowerAndMinifyColor(token css_ast.Token, wouldClamp *bool) css_
 		}
 
 	case css_lexer.TIdent:
-		if text == "rebeccapurple" && p.options.unsupportedCSSFeatures.Has(compat.RebeccaPurple) {
+		if p.options.unsupportedCSSFeatures.Has(compat.RebeccaPurple) && strings.EqualFold(text, "rebeccapurple") {
 			token.Kind = css_lexer.THash
 			token.Text = "663399"
 		}
 
 	case css_lexer.TFunction:
-		switch text {
+		switch strings.ToLower(text) {
 		case "rgb", "rgba", "hsl", "hsla":
 			if p.options.unsupportedCSSFeatures.Has(compat.Modern_RGB_HSL) {
 				args := *token.Children
@@ -379,15 +378,15 @@ func (p *parser) lowerAndMinifyColor(token css_ast.Token, wouldClamp *bool) css_
 				}
 
 				if removeAlpha {
-					if text == "rgba" {
+					if strings.EqualFold(text, "rgba") {
 						token.Text = "rgb"
-					} else if text == "hsla" {
+					} else if strings.EqualFold(text, "hsla") {
 						token.Text = "hsl"
 					}
 				} else if addAlpha {
-					if text == "rgb" {
+					if strings.EqualFold(text, "rgb") {
 						token.Text = "rgba"
-					} else if text == "hsl" {
+					} else if strings.EqualFold(text, "hsl") {
 						token.Text = "hsla"
 					}
 				}
@@ -396,14 +395,14 @@ func (p *parser) lowerAndMinifyColor(token css_ast.Token, wouldClamp *bool) css_
 		case "hwb":
 			if p.options.unsupportedCSSFeatures.Has(compat.HWB) {
 				if color, ok := parseColor(token); ok {
-					return p.tryToGenerateColor(token, color, wouldClamp)
+					return p.tryToGenerateColor(token, color, wouldClipColor)
 				}
 			}
 
-		case "color":
-			if p.options.unsupportedCSSFeatures.Has(compat.ColorFunction) {
+		case "color", "lab", "lch", "oklab", "oklch":
+			if p.options.unsupportedCSSFeatures.Has(compat.ColorFunctions) {
 				if color, ok := parseColor(token); ok {
-					return p.tryToGenerateColor(token, color, wouldClamp)
+					return p.tryToGenerateColor(token, color, wouldClipColor)
 				}
 			}
 		}
@@ -413,7 +412,7 @@ func (p *parser) lowerAndMinifyColor(token css_ast.Token, wouldClamp *bool) css_
 	// the color because we always print it out using the shortest encoding.
 	if p.options.minifySyntax {
 		if hex, ok := parseColor(token); ok {
-			token = p.tryToGenerateColor(token, hex, wouldClamp)
+			token = p.tryToGenerateColor(token, hex, wouldClipColor)
 		}
 	}
 
@@ -424,6 +423,42 @@ type parsedColor struct {
 	x, y, z float64 // color if sRGB == false
 	hex     uint32  // color and alpha if sRGB == true, alpha if sRGB == false
 	sRGB    bool
+}
+
+func looksLikeColor(token css_ast.Token) bool {
+	switch token.Kind {
+	case css_lexer.TIdent:
+		if _, ok := colorNameToHex[strings.ToLower(token.Text)]; ok {
+			return true
+		}
+
+	case css_lexer.THash:
+		switch len(token.Text) {
+		case 3, 4, 6, 8:
+			if _, ok := parseHex(token.Text); ok {
+				return true
+			}
+		}
+
+	case css_lexer.TFunction:
+		switch strings.ToLower(token.Text) {
+		case
+			"color-mix",
+			"color",
+			"hsl",
+			"hsla",
+			"hwb",
+			"lab",
+			"lch",
+			"oklab",
+			"oklch",
+			"rgb",
+			"rgba":
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseColor(token css_ast.Token) (parsedColor, bool) {
@@ -463,7 +498,8 @@ func parseColor(token css_ast.Token) (parsedColor, bool) {
 		}
 
 	case css_lexer.TFunction:
-		switch text {
+		lowerText := strings.ToLower(text)
+		switch lowerText {
 		case "rgb", "rgba":
 			args := *token.Children
 			var r, g, b, a css_ast.Token
@@ -587,11 +623,11 @@ func parseColor(token css_ast.Token) (parsedColor, bool) {
 			}
 
 			if colorSpace.Kind == css_lexer.TIdent {
-				if v0, ok := args[1].NumberOrFractionForPercentage(); ok {
-					if v1, ok := args[2].NumberOrFractionForPercentage(); ok {
-						if v2, ok := args[3].NumberOrFractionForPercentage(); ok {
+				if v0, ok := args[1].NumberOrFractionForPercentage(1, 0); ok {
+					if v1, ok := args[2].NumberOrFractionForPercentage(1, 0); ok {
+						if v2, ok := args[3].NumberOrFractionForPercentage(1, 0); ok {
 							if a, ok := parseAlphaByte(alpha); ok {
-								switch colorSpace.Text {
+								switch strings.ToLower(colorSpace.Text) {
 								case "a98-rgb":
 									r, g, b := lin_a98rgb(v0, v1, v2)
 									x, y, z := lin_a98rgb_to_xyz(r, g, b)
@@ -603,7 +639,6 @@ func parseColor(token css_ast.Token) (parsedColor, bool) {
 									return parsedColor{x: x, y: y, z: z, hex: a}, true
 
 								case "prophoto-rgb":
-									fmt.Fprintf(os.Stderr, "v012 %f %f %f\n", v0, v1, v2)
 									r, g, b := lin_prophoto(v0, v1, v2)
 									x, y, z := lin_prophoto_to_xyz(r, g, b)
 									x, y, z = d50_to_d65(x, y, z)
@@ -632,6 +667,72 @@ func parseColor(token css_ast.Token) (parsedColor, bool) {
 
 								case "xyz-d65":
 									return parsedColor{x: v0, y: v1, z: v2, hex: a}, true
+								}
+							}
+						}
+					}
+				}
+			}
+
+		case "lab", "lch", "oklab", "oklch":
+			args := *token.Children
+			var v0, v1, v2, alpha css_ast.Token
+
+			switch len(args) {
+			case 3:
+				// "lab(1 2 3)"
+				v0, v1, v2 = args[0], args[1], args[2]
+
+			case 5:
+				// "lab(1 2 3 / 50%)"
+				if args[3].Kind == css_lexer.TDelimSlash {
+					v0, v1, v2, alpha = args[0], args[1], args[2], args[4]
+				}
+			}
+
+			if v0.Kind != css_lexer.T(0) {
+				if alpha, ok := parseAlphaByte(alpha); ok {
+					switch lowerText {
+					case "lab":
+						if v0, ok := v0.NumberOrFractionForPercentage(100, 0); ok {
+							if v1, ok := v1.NumberOrFractionForPercentage(125, css_ast.AllowAnyPercentage); ok {
+								if v2, ok := v2.NumberOrFractionForPercentage(125, css_ast.AllowAnyPercentage); ok {
+									x, y, z := lab_to_xyz(v0, v1, v2)
+									x, y, z = d50_to_d65(x, y, z)
+									return parsedColor{x: x, y: y, z: z, hex: alpha}, true
+								}
+							}
+						}
+
+					case "lch":
+						if v0, ok := v0.NumberOrFractionForPercentage(100, 0); ok {
+							if v1, ok := v1.NumberOrFractionForPercentage(125, css_ast.AllowPercentageAbove100); ok {
+								if v2, ok := degreesForAngle(v2); ok {
+									l, a, b := lch_to_lab(v0, v1, v2)
+									x, y, z := lab_to_xyz(l, a, b)
+									x, y, z = d50_to_d65(x, y, z)
+									return parsedColor{x: x, y: y, z: z, hex: alpha}, true
+								}
+							}
+						}
+
+					case "oklab":
+						if v0, ok := v0.NumberOrFractionForPercentage(1, 0); ok {
+							if v1, ok := v1.NumberOrFractionForPercentage(0.4, css_ast.AllowAnyPercentage); ok {
+								if v2, ok := v2.NumberOrFractionForPercentage(0.4, css_ast.AllowAnyPercentage); ok {
+									x, y, z := oklab_to_xyz(v0, v1, v2)
+									return parsedColor{x: x, y: y, z: z, hex: alpha}, true
+								}
+							}
+						}
+
+					case "oklch":
+						if v0, ok := v0.NumberOrFractionForPercentage(1, 0); ok {
+							if v1, ok := v1.NumberOrFractionForPercentage(0.4, css_ast.AllowPercentageAbove100); ok {
+								if v2, ok := degreesForAngle(v2); ok {
+									l, a, b := oklch_to_oklab(v0, v1, v2)
+									x, y, z := oklab_to_xyz(l, a, b)
+									return parsedColor{x: x, y: y, z: z, hex: alpha}, true
 								}
 							}
 						}
@@ -740,7 +841,7 @@ func parseColorByte(token css_ast.Token, scale float64) (uint32, bool) {
 	return uint32(i), ok
 }
 
-func (p *parser) tryToGenerateColor(token css_ast.Token, color parsedColor, wouldClamp *bool) css_ast.Token {
+func (p *parser) tryToGenerateColor(token css_ast.Token, color parsedColor, wouldClipColor *bool) css_ast.Token {
 	// Note: Do NOT remove color information from fully transparent colors.
 	// Safari behaves differently than other browsers for color interpolation:
 	// https://css-tricks.com/thing-know-gradients-transparent-black/
@@ -753,8 +854,8 @@ func (p *parser) tryToGenerateColor(token css_ast.Token, color parsedColor, woul
 	} else {
 		r, g, b := gam_srgb(xyz_to_lin_srgb(color.x, color.y, color.z))
 		if r < -0.5/255 || r > 255.5/255 || g < -0.5/255 || g > 255.5/255 || b < -0.5/255 || b > 255.5/255 {
-			if wouldClamp != nil {
-				*wouldClamp = true
+			if wouldClipColor != nil {
+				*wouldClipColor = true
 				return token
 			}
 			r, g, b = gamut_mapping_xyz_to_srgb(color.x, color.y, color.z)
