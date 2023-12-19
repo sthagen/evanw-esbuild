@@ -1,7 +1,7 @@
 {
-  "name": "@esbuild/linux-riscv64",
+  "name": "@esbuild/aix-ppc64",
   "version": "0.19.10",
-  "description": "The Linux RISC-V 64-bit binary for esbuild, a JavaScript bundler.",
+  "description": "The IBM AIX PowerPC 64-bit binary for esbuild, a JavaScript bundler.",
   "repository": "https://github.com/evanw/esbuild",
   "license": "MIT",
   "preferUnplugged": true,
@@ -9,9 +9,9 @@
     "node": ">=12"
   },
   "os": [
-    "linux"
+    "aix"
   ],
   "cpu": [
-    "riscv64"
+    "ppc64"
   ]
 }
