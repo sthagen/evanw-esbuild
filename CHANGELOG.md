@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.11
 
 * Fix TypeScript-specific class transform edge case ([#3559](https://github.com/evanw/esbuild/issues/3559))
 
@@ -39,6 +39,38 @@
       #private = 1;
       constructor() {
         super();
+      }
+    }
+    ```
+
+* Minifier: allow reording a primitive past a side-effect ([#3568](https://github.com/evanw/esbuild/issues/3568))
+
+    The minifier previously allowed reordering a side-effect past a primitive, but didn't handle the case of reordering a primitive past a side-effect. This additional case is now handled:
+
+    ```js
+    // Original code
+    function f() {
+      let x = false;
+      let y = x;
+      const boolean = y;
+      let frag = $.template(`<p contenteditable="${boolean}">hello world</p>`);
+      return frag;
+    }
+
+    // Old output (with --minify)
+    function f(){const e=!1;return $.template(`<p contenteditable="${e}">hello world</p>`)}
+
+    // New output (with --minify)
+    function f(){return $.template('<p contenteditable="false">hello world</p>')}
+    ```
+
+* Minifier: consider properties named using known `Symbol` instances to be side-effect free ([#3561](https://github.com/evanw/esbuild/issues/3561))
+
+    Many things in JavaScript can have side effects including property accesses and ToString operations, so using a symbol such as `Symbol.iterator` as a computed property name is not obviously side-effect free. This release adds a special case for known `Symbol` instances so that they are considered side-effect free when used as property names. For example, this class declaration will now be considered side-effect free:
+
+    ```js
+    class Foo {
+      *[Symbol.iterator]() {
       }
     }
     ```
