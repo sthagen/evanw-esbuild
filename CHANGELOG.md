@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.1
 
 * Fix a bug with the CSS nesting transform ([#3648](https://github.com/evanw/esbuild/issues/3648))
 
@@ -27,6 +27,64 @@
       color: red;
     }
     ```
+
+* Constant folding for JavaScript inequality operators ([#3645](https://github.com/evanw/esbuild/issues/3645))
+
+    This release introduces constant folding for the `< > <= >=` operators. The minifier will now replace these operators with `true` or `false` when both sides are compile-time numeric or string constants:
+
+    ```js
+    // Original code
+    console.log(1 < 2, '🍕' > '🧀')
+
+    // Old output (with --minify)
+    console.log(1<2,"🍕">"🧀");
+
+    // New output (with --minify)
+    console.log(!0,!1);
+    ```
+
+* Better handling of `__proto__` edge cases ([#3651](https://github.com/evanw/esbuild/pull/3651))
+
+    JavaScript object literal syntax contains a special case where a non-computed property with a key of `__proto__` sets the prototype of the object. This does not apply to computed properties or to properties that use the shorthand property syntax introduced in ES6. Previously esbuild didn't correctly preserve the "sets the prototype" status of properties inside an object literal, meaning a property that sets the prototype could accidentally be transformed into one that doesn't and vice versa. This has now been fixed:
+
+    ```js
+    // Original code
+    function foo(__proto__) {
+      return { __proto__: __proto__ } // Note: sets the prototype
+    }
+    function bar(__proto__, proto) {
+      {
+        let __proto__ = proto
+        return { __proto__ } // Note: doesn't set the prototype
+      }
+    }
+
+    // Old output
+    function foo(__proto__) {
+      return { __proto__ }; // Note: no longer sets the prototype (WRONG)
+    }
+    function bar(__proto__, proto) {
+      {
+        let __proto__2 = proto;
+        return { __proto__: __proto__2 }; // Note: now sets the prototype (WRONG)
+      }
+    }
+
+    // New output
+    function foo(__proto__) {
+      return { __proto__: __proto__ }; // Note: sets the prototype (correct)
+    }
+    function bar(__proto__, proto) {
+      {
+        let __proto__2 = proto;
+        return { ["__proto__"]: __proto__2 }; // Note: doesn't set the prototype (correct)
+      }
+    }
+    ```
+
+* Fix cross-platform non-determinism with CSS color space transformations ([#3650](https://github.com/evanw/esbuild/issues/3650))
+
+    The Go compiler takes advantage of "fused multiply and add" (FMA) instructions on certain processors which do the operation `x*y + z` without intermediate rounding. This causes esbuild's CSS color space math to differ on different processors (currently `ppc64le` and `s390x`), which breaks esbuild's guarantee of deterministic output. To avoid this, esbuild's color space math now inserts a `float64()` cast around every single math operation. This tells the Go compiler not to use the FMA optimization.
 
 * Fix a crash when resolving a path from a directory that doesn't exist ([#3634](https://github.com/evanw/esbuild/issues/3634))
 
