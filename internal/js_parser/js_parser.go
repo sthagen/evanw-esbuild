@@ -8355,6 +8355,9 @@ func shouldKeepStmtInDeadControlFlow(stmt js_ast.Stmt) bool {
 		for _, decl := range s.Decls {
 			identifiers = findIdentifiers(decl.Binding, identifiers)
 		}
+		if len(identifiers) == 0 {
+			return false
+		}
 		s.Decls = identifiers
 		return true
 
@@ -10699,6 +10702,14 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 			if c.ValueOrNil.Data != nil {
 				p.duplicateCaseChecker.check(p, c.ValueOrNil)
 			}
+		}
+
+		// Unwrap switch statements in dead code
+		if p.options.minifySyntax && p.isControlFlowDead {
+			for _, c := range s.Cases {
+				stmts = append(stmts, c.Body...)
+			}
+			return stmts
 		}
 
 		// "using" declarations inside switch statements must be special-cased
