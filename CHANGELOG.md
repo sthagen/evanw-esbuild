@@ -1,6 +1,66 @@
 # Changelog
 
-## Unreleased
+## 0.20.2
+
+* Support TypeScript experimental decorators on `abstract` class fields ([#3684](https://github.com/evanw/esbuild/issues/3684))
+
+    With this release, you can now use TypeScript experimental decorators on `abstract` class fields. This was silently compiled incorrectly in esbuild 0.19.7 and below, and was an error from esbuild 0.19.8 to esbuild 0.20.1. Code such as the following should now work correctly:
+
+    ```ts
+    // Original code
+    const log = (x: any, y: string) => console.log(y)
+    abstract class Foo { @log abstract foo: string }
+    new class extends Foo { foo = '' }
+
+    // Old output (with --loader=ts --tsconfig-raw={\"compilerOptions\":{\"experimentalDecorators\":true}})
+    const log = (x, y) => console.log(y);
+    class Foo {
+    }
+    new class extends Foo {
+      foo = "";
+    }();
+
+    // New output (with --loader=ts --tsconfig-raw={\"compilerOptions\":{\"experimentalDecorators\":true}})
+    const log = (x, y) => console.log(y);
+    class Foo {
+    }
+    __decorateClass([
+      log
+    ], Foo.prototype, "foo", 2);
+    new class extends Foo {
+      foo = "";
+    }();
+    ```
+
+* JSON loader now preserves `__proto__` properties ([#3700](https://github.com/evanw/esbuild/issues/3700))
+
+    Copying JSON source code into a JavaScript file will change its meaning if a JSON object contains the `__proto__` key. A literal `__proto__` property in a JavaScript object literal sets the prototype of the object instead of adding a property named `__proto__`, while a literal `__proto__` property in a JSON object literal just adds a property named `__proto__`. With this release, esbuild will now work around this problem by converting JSON to JavaScript with a computed property key in this case:
+
+    ```js
+    // Original code
+    import data from 'data:application/json,{"__proto__":{"fail":true}}'
+    if (Object.getPrototypeOf(data)?.fail) throw 'fail'
+
+    // Old output (with --bundle)
+    (() => {
+      // <data:application/json,{"__proto__":{"fail":true}}>
+      var json_proto_fail_true_default = { __proto__: { fail: true } };
+
+      // entry.js
+      if (Object.getPrototypeOf(json_proto_fail_true_default)?.fail)
+        throw "fail";
+    })();
+
+    // New output (with --bundle)
+    (() => {
+      // <data:application/json,{"__proto__":{"fail":true}}>
+      var json_proto_fail_true_default = { ["__proto__"]: { fail: true } };
+
+      // example.mjs
+      if (Object.getPrototypeOf(json_proto_fail_true_default)?.fail)
+        throw "fail";
+    })();
+    ```
 
 * Improve dead code removal of `switch` statements ([#3659](https://github.com/evanw/esbuild/issues/3659))
 
@@ -34,6 +94,10 @@
       return Foo2;
     })(Foo || {});
     ```
+
+* Handle Yarn Plug'n'Play edge case with `tsconfig.json` ([#3698](https://github.com/evanw/esbuild/issues/3698))
+
+    Previously a `tsconfig.json` file that `extends` another file in a package with an `exports` map failed to work when Yarn's Plug'n'Play resolution was active. This edge case should work now starting with this release.
 
 * Work around issues with Deno 1.31+ ([#3682](https://github.com/evanw/esbuild/issues/3682))
 
