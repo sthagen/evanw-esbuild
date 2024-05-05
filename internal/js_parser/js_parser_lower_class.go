@@ -780,7 +780,13 @@ func (ctx *lowerClassContext) enableNameCapture(p *parser, result visitClassResu
 //
 // If this returns true, the return property should be added to the class
 // body. Otherwise the property should be omitted from the class body.
-func (ctx *lowerClassContext) lowerField(p *parser, prop js_ast.Property, private *js_ast.EPrivateIdentifier, shouldOmitFieldInitializer bool, staticFieldToBlockAssign bool) (js_ast.Property, bool) {
+func (ctx *lowerClassContext) lowerField(
+	p *parser,
+	prop js_ast.Property,
+	private *js_ast.EPrivateIdentifier,
+	shouldOmitFieldInitializer bool,
+	staticFieldToBlockAssign bool,
+) (js_ast.Property, bool) {
 	mustLowerPrivate := private != nil && p.privateSymbolNeedsToBeLowered(private)
 
 	// The TypeScript compiler doesn't follow the JavaScript spec for
@@ -825,20 +831,16 @@ func (ctx *lowerClassContext) lowerField(p *parser, prop js_ast.Property, privat
 
 			// Add every newly-constructed instance into this map
 			key := js_ast.Expr{Loc: prop.Key.Loc, Data: &js_ast.EIdentifier{Ref: ref}}
-			var args []js_ast.Expr
-			if _, ok := init.Data.(*js_ast.EUndefined); ok {
-				args = []js_ast.Expr{target, key}
-			} else {
-				args = []js_ast.Expr{target, key, init}
+			args := []js_ast.Expr{target, key}
+			if _, ok := init.Data.(*js_ast.EUndefined); !ok {
+				args = append(args, init)
 			}
 			memberExpr = p.callRuntime(loc, "__privateAdd", args)
 			p.recordUsage(ref)
 		} else if private == nil && ctx.class.UseDefineForClassFields {
-			var args []js_ast.Expr
-			if _, ok := init.Data.(*js_ast.EUndefined); ok {
-				args = []js_ast.Expr{target, prop.Key}
-			} else {
-				args = []js_ast.Expr{target, prop.Key, init}
+			args := []js_ast.Expr{target, prop.Key}
+			if _, ok := init.Data.(*js_ast.EUndefined); !ok {
+				args = append(args, init)
 			}
 			memberExpr = js_ast.Expr{Loc: loc, Data: &js_ast.ECall{
 				Target: p.importFromRuntime(loc, "__publicField"),
@@ -1135,8 +1137,6 @@ func (ctx *lowerClassContext) hoistComputedProperties(p *parser, classLoweringIn
 		// If this key is referenced elsewhere, make sure to still preserve
 		// its side effects in the property's original location
 		if analysis.isComputedPropertyCopiedOrMoved {
-			inlineKey := prop.Key
-
 			// If this property is being duplicated instead of moved or removed, then
 			// we still need the assignment to the temporary so that we can reference
 			// it in multiple places, but we don't have to hoist the assignment to an
@@ -1168,6 +1168,8 @@ func (ctx *lowerClassContext) hoistComputedProperties(p *parser, classLoweringIn
 			//
 			// So only do the hoist if this property is being moved or removed.
 			if !analysis.rewriteAutoAccessorToGetSet && (analysis.mustLowerField || analysis.staticFieldToBlockAssign) {
+				inlineKey := prop.Key
+
 				if !analysis.needsValueOfKey {
 					// In certain cases, we only need to evaluate a property key for its
 					// side effects but we don't actually need the value of the key itself.
@@ -1201,14 +1203,13 @@ func (ctx *lowerClassContext) hoistComputedProperties(p *parser, classLoweringIn
 			// Otherwise, we keep the side effects in place (as described above) but
 			// just store the key in a temporary so we can refer to it later.
 			ref := p.generateTempRef(tempRefNeedsDeclare, "")
-			inlineKey = js_ast.Assign(js_ast.Expr{Loc: prop.Key.Loc, Data: &js_ast.EIdentifier{Ref: ref}}, prop.Key)
+			prop.Key = js_ast.Assign(js_ast.Expr{Loc: prop.Key.Loc, Data: &js_ast.EIdentifier{Ref: ref}}, prop.Key)
 			p.recordUsage(ref)
 
 			// Use this temporary when creating duplicate references to this key
 			if propertyKeyTempRefs == nil {
 				propertyKeyTempRefs = make(map[int]ast.Ref)
 			}
-			prop.Key = inlineKey
 			propertyKeyTempRefs[propIndex] = ref
 
 			// Deliberately continue to fall through to the "computed" case below:
@@ -1633,44 +1634,6 @@ func (ctx *lowerClassContext) insertInitializersIntoConstructor(p *parser, class
 }
 
 func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClassResult) ([]js_ast.Stmt, js_ast.Expr) {
-	// Pack the class back into an expression. We don't need to handle TypeScript
-	// experimental decorators for class expressions because TypeScript doesn't
-	// support them.
-	if ctx.kind == classKindExpr {
-		// Calling "nameFunc" will replace "classExpr", so make sure to do that first
-		// before joining "classExpr" with any other expressions
-		var nameToJoin js_ast.Expr
-		if ctx.didCaptureClassExpr ||
-			len(ctx.privateMembers) > 0 ||
-			len(ctx.staticPrivateMethods) > 0 ||
-			len(ctx.staticMembers) > 0 {
-			nameToJoin = ctx.nameFunc()
-		}
-
-		// Then join "classExpr" with any other expressions that apply
-		if ctx.computedPropertyChain.Data != nil {
-			ctx.classExpr = js_ast.JoinWithComma(ctx.computedPropertyChain, ctx.classExpr)
-		}
-		for _, value := range ctx.privateMembers {
-			ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, value)
-		}
-		for _, value := range ctx.staticPrivateMethods {
-			ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, value)
-		}
-		for _, value := range ctx.staticMembers {
-			ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, value)
-		}
-
-		// Finally join "classExpr" with the variable that holds the class object
-		if nameToJoin.Data != nil {
-			ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, nameToJoin)
-		}
-		if ctx.wrapFunc != nil {
-			ctx.classExpr = ctx.wrapFunc(ctx.classExpr)
-		}
-		return nil, ctx.classExpr
-	}
-
 	// When bundling is enabled, we convert top-level class statements to
 	// expressions:
 	//
@@ -1715,7 +1678,7 @@ func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClass
 	// statements to variables during parsing and b) don't yet know whether this
 	// module will need to be lazily-evaluated or not in the parser. So we always
 	// do this just in case it's needed.
-	mustConvertStmtToExpr := p.currentScope.Parent == nil && (p.options.mode == config.ModeBundle || p.willWrapModuleInTryCatchForUsing)
+	mustConvertStmtToExpr := ctx.kind != classKindExpr && p.currentScope.Parent == nil && (p.options.mode == config.ModeBundle || p.willWrapModuleInTryCatchForUsing)
 
 	var classExperimentalDecorators []js_ast.Decorator
 	if p.options.ts.Parse && p.options.ts.Config.ExperimentalDecorators == config.True {
@@ -1737,23 +1700,10 @@ func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClass
 			len(ctx.staticExperimentalDecorators) > 0 ||
 			len(classExperimentalDecorators) > 0)
 
-	// Pack the class back into a statement, with potentially some extra
-	// statements afterwards
-	var stmts []js_ast.Stmt
-	var outerClassNameDecl js_ast.Stmt
-	var nameForClassDecorators ast.LocRef
-	didGenerateLocalStmt := false
-
-	// Any of the computed property chain that we hoisted out of the class
-	// body needs to come before the class expression.
-	if ctx.computedPropertyChain.Data != nil {
-		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExpr{Value: ctx.computedPropertyChain}})
-	}
-
+	// If we need to represent the class as an expression (even if it's a
+	// statement), then generate another symbol to use as the class name
+	nameForClassDecorators := ast.LocRef{Ref: ast.InvalidRef}
 	if len(classExperimentalDecorators) > 0 || hasPotentialInnerClassNameEscape || mustConvertStmtToExpr {
-		didGenerateLocalStmt = true
-
-		// Determine the name to use for decorators
 		if ctx.kind == classKindExpr {
 			// For expressions, the inner and outer class names are the same
 			name := ctx.nameFunc()
@@ -1769,7 +1719,78 @@ func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClass
 			}
 			p.recordUsage(nameForClassDecorators.Ref)
 		}
+	}
 
+	var prefixExprs []js_ast.Expr
+	var middleExprs []js_ast.Expr
+	var suffixExprs []js_ast.Expr
+
+	// Any of the computed property chain that we hoisted out of the class
+	// body needs to come before the class expression.
+	if ctx.computedPropertyChain.Data != nil {
+		prefixExprs = append(prefixExprs, ctx.computedPropertyChain)
+	}
+
+	// The official TypeScript compiler adds generated code after the class body
+	// in this exact order. Matching this order is important for correctness.
+	middleExprs = append(middleExprs, ctx.privateMembers...)
+	middleExprs = append(middleExprs, ctx.staticPrivateMethods...)
+	middleExprs = append(middleExprs, ctx.staticMembers...)
+	middleExprs = append(middleExprs, ctx.instanceExperimentalDecorators...)
+	middleExprs = append(middleExprs, ctx.staticExperimentalDecorators...)
+
+	// Run TypeScript experimental class decorators at the end of class initialization
+	if len(classExperimentalDecorators) > 0 {
+		values := make([]js_ast.Expr, len(classExperimentalDecorators))
+		for i, decorator := range classExperimentalDecorators {
+			values[i] = decorator.Value
+		}
+		suffixExprs = append(suffixExprs, js_ast.Assign(
+			js_ast.Expr{Loc: nameForClassDecorators.Loc, Data: &js_ast.EIdentifier{Ref: nameForClassDecorators.Ref}},
+			p.callRuntime(ctx.classLoc, "__decorateClass", []js_ast.Expr{
+				{Loc: ctx.classLoc, Data: &js_ast.EArray{Items: values}},
+				{Loc: nameForClassDecorators.Loc, Data: &js_ast.EIdentifier{Ref: nameForClassDecorators.Ref}},
+			}),
+		))
+		p.recordUsage(nameForClassDecorators.Ref)
+		p.recordUsage(nameForClassDecorators.Ref)
+	}
+
+	// Our caller expects us to return the same form that was originally given to
+	// us. If the class was originally an expression, then return an expression.
+	if ctx.kind == classKindExpr {
+		// Calling "nameFunc" will replace "classExpr", so make sure to do that first
+		// before joining "classExpr" with any other expressions
+		var nameToJoin js_ast.Expr
+		if ctx.didCaptureClassExpr || len(middleExprs) > 0 || len(suffixExprs) > 0 {
+			nameToJoin = ctx.nameFunc()
+		}
+
+		// Insert expressions on either side of the class as appropriate
+		ctx.classExpr = js_ast.JoinWithComma(js_ast.JoinAllWithComma(prefixExprs), ctx.classExpr)
+		ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, js_ast.JoinAllWithComma(middleExprs))
+		ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, js_ast.JoinAllWithComma(suffixExprs))
+
+		// Finally join "classExpr" with the variable that holds the class object
+		ctx.classExpr = js_ast.JoinWithComma(ctx.classExpr, nameToJoin)
+		if ctx.wrapFunc != nil {
+			ctx.classExpr = ctx.wrapFunc(ctx.classExpr)
+		}
+		return nil, ctx.classExpr
+	}
+
+	// Otherwise, the class was originally a statement. Return an array of
+	// statements instead.
+	var stmts []js_ast.Stmt
+	var outerClassNameDecl js_ast.Stmt
+
+	// Insert expressions before the class as appropriate
+	for _, expr := range prefixExprs {
+		stmts = append(stmts, js_ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
+	}
+
+	// Handle converting a class statement to a class expression
+	if nameForClassDecorators.Ref != ast.InvalidRef {
 		classExpr := js_ast.EClass{Class: *ctx.class}
 		ctx.class = &classExpr.Class
 		init := js_ast.Expr{Loc: ctx.classLoc, Data: &classExpr}
@@ -1844,6 +1865,7 @@ func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClass
 			}})
 		}
 	} else {
+		// Generate the specific kind of class statement that was passed in to us
 		switch ctx.kind {
 		case classKindStmt:
 			stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SClass{Class: *ctx.class}})
@@ -1873,43 +1895,22 @@ func (ctx *lowerClassContext) finishAndGenerateCode(p *parser, result visitClass
 		}
 	}
 
-	// The official TypeScript compiler adds generated code after the class body
-	// in this exact order. Matching this order is important for correctness.
-	for _, expr := range ctx.privateMembers {
-		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExpr{Value: expr}})
+	// Insert expressions in between the class body and the outer class declaration
+	for _, expr := range middleExprs {
+		stmts = append(stmts, js_ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
 	}
-	for _, expr := range ctx.staticPrivateMethods {
-		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExpr{Value: expr}})
-	}
-	for _, expr := range ctx.staticMembers {
-		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExpr{Value: expr}})
-	}
-	for _, expr := range ctx.instanceExperimentalDecorators {
-		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExpr{Value: expr}})
-	}
-	for _, expr := range ctx.staticExperimentalDecorators {
-		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExpr{Value: expr}})
-	}
+
 	if outerClassNameDecl.Data != nil {
 		// This must come after the class body initializers have finished
 		stmts = append(stmts, outerClassNameDecl)
 	}
-	if len(classExperimentalDecorators) > 0 {
-		values := make([]js_ast.Expr, len(classExperimentalDecorators))
-		for i, decorator := range classExperimentalDecorators {
-			values[i] = decorator.Value
-		}
-		stmts = append(stmts, js_ast.AssignStmt(
-			js_ast.Expr{Loc: nameForClassDecorators.Loc, Data: &js_ast.EIdentifier{Ref: nameForClassDecorators.Ref}},
-			p.callRuntime(ctx.classLoc, "__decorateClass", []js_ast.Expr{
-				{Loc: ctx.classLoc, Data: &js_ast.EArray{Items: values}},
-				{Loc: nameForClassDecorators.Loc, Data: &js_ast.EIdentifier{Ref: nameForClassDecorators.Ref}},
-			}),
-		))
-		p.recordUsage(nameForClassDecorators.Ref)
-		p.recordUsage(nameForClassDecorators.Ref)
+
+	// Insert expressions after the class as appropriate
+	for _, expr := range suffixExprs {
+		stmts = append(stmts, js_ast.Stmt{Loc: expr.Loc, Data: &js_ast.SExpr{Value: expr}})
 	}
-	if didGenerateLocalStmt && ctx.kind == classKindExportDefaultStmt {
+
+	if nameForClassDecorators.Ref != ast.InvalidRef && ctx.kind == classKindExportDefaultStmt {
 		// "export default class x {}" => "class x {} export {x as default}"
 		stmts = append(stmts, js_ast.Stmt{Loc: ctx.classLoc, Data: &js_ast.SExportClause{
 			Items: []js_ast.ClauseItem{{Alias: "default", Name: ctx.defaultName}},
