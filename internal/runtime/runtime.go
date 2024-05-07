@@ -76,7 +76,7 @@ func Source(unsupportedJSFeatures compat.JSFeature) logger.Source {
 		var __reflectSet = Reflect.set
 
 		var __knownSymbol = (name, symbol) => (symbol = Symbol[name]) ? symbol : Symbol.for('Symbol.' + name)
-		var __throwTypeError = msg => { throw TypeError(msg) }
+		var __typeError = msg => { throw TypeError(msg) }
 
 		export var __pow = Math.pow
 
@@ -255,21 +255,68 @@ func Source(unsupportedJSFeatures compat.JSFeature) logger.Source {
 			for (var i = decorators.length - 1, decorator; i >= 0; i--)
 				if (decorator = decorators[i])
 					result = (kind ? decorator(target, key, result) : decorator(result)) || result
-			if (kind && result)
-				__defProp(target, key, result)
+			if (kind && result) __defProp(target, key, result)
 			return result
 		}
 		export var __decorateParam = (index, decorator) => (target, key) => decorator(target, key, index)
+
+		// For JavaScript decorators
+		var __decoratorStrings = ['class', 'method', 'getter', 'setter', 'accessor', 'field', 'value', 'get', 'set']
+		var __expectFn = fn => fn !== void 0 && typeof fn !== 'function' ? __typeError('Function expected') : fn
+		var __decoratorContext = (kind, name, done, fns) => ({ kind: __decoratorStrings[kind], name, addInitializer: fn =>
+			done._ ? __typeError('Already initialized') : fns.push(__expectFn(fn || null)), })
+		export var __runInitializers = (array, flags, value) => {
+			for (var i = 0, fns = array[flags >> 1], n = fns && fns.length; i < n; i++) flags & 1 ? fns[i].call(value) : value = (0, fns[i])(value)
+			return value
+		}
+		export var __decorateElement = (array, flags, name, decorators, target, extra) => {
+			var fn, it, done, ctx, access, k = flags & 7, s = !!(flags & 8), p = !!(flags & 16)
+			var j = k > 3 ? array.length + 1 : k ? s ? 1 : 2 : 0, key = __decoratorStrings[k + 5]
+			var initializers = k > 3 && (array[j - 1] = []), extraInitializers = array[j] || (array[j] = [])
+			var desc = k && (
+				!p && !s && (target = target.prototype),
+				k < 5 && (k > 3 || !p) &&
+			`
+
+	// Avoid object extensions when not using ES6
+	if !unsupportedJSFeatures.Has(compat.ObjectExtensions) {
+		text += `__getOwnPropDesc(k < 4 ? target : { get [name]() { return __privateGet(this, extra) }, set [name](x) { return __privateSet(this, extra, x) } }, name)`
+	} else {
+		text += `(k < 4 ? __getOwnPropDesc(target, name) : { get: () => __privateGet(this, extra), set: x => __privateSet(this, extra, x) })`
+	}
+
+	text += `
+			)
+			k ? p && k < 4 && __name(extra, (k > 2 ? 'set ' : k > 1 ? 'get ' : '') + name) : __name(target, name)
+
+			for (var i = decorators.length - 1; i >= 0; i--) {
+				ctx = __decoratorContext(k, name, done = {}, extraInitializers)
+
+				if (k) {
+					ctx.static = s, ctx.private = p, access = ctx.access = { has: p ? x => __privateIn(target, x) : x => name in x }
+					if (k ^ 3) access.get = p ? x => (k ^ 1 ? __privateGet : __privateMethod)(x, target, k ^ 4 ? extra : desc.get) : x => x[name]
+					if (k > 2) access.set = p ? (x, y) => __privateSet(x, target, y, k ^ 4 ? extra : desc.set) : (x, y) => x[name] = y
+				}
+
+				it = (0, decorators[i])(k ? k < 4 ? p ? extra : desc[key] : k > 4 ? void 0 : { get: desc.get, set: desc.set } : target, ctx), done._ = 1
+
+				if (k ^ 4 || it === void 0) __expectFn(it) && (k > 4 ? initializers.unshift(it) : k ? p ? extra = it : desc[key] = it : target = it)
+				else if (typeof it !== 'object' || it === null) __typeError('Object expected')
+				else __expectFn(fn = it.get) && (desc.get = fn), __expectFn(fn = it.set) && (desc.set = fn), __expectFn(fn = it.init) && initializers.unshift(fn)
+			}
+
+			return desc && __defProp(target, name, desc), p ? k ^ 4 ? extra : desc : target
+		}
 
 		// For class members
 		export var __publicField = (obj, key, value) => (
 			__defNormalProp(obj, typeof key !== 'symbol' ? key + '' : key, value)
 		)
 		var __accessCheck = (obj, member, msg) => (
-			member.has(obj) || __throwTypeError('Cannot ' + msg)
+			member.has(obj) || __typeError('Cannot ' + msg)
 		)
 		export var __privateIn = (member, obj) => (
-			Object(obj) !== obj ? __throwTypeError('Cannot use the "in" operator on this value') :
+			Object(obj) !== obj ? __typeError('Cannot use the "in" operator on this value') :
 			member.has(obj)
 		)
 		export var __privateGet = (obj, member, getter) => (
@@ -277,7 +324,7 @@ func Source(unsupportedJSFeatures compat.JSFeature) logger.Source {
 			getter ? getter.call(obj) : member.get(obj)
 		)
 		export var __privateAdd = (obj, member, value) => (
-			member.has(obj) ? __throwTypeError('Cannot add the same private member more than once') :
+			member.has(obj) ? __typeError('Cannot add the same private member more than once') :
 			member instanceof WeakSet ? member.add(obj) : member.set(obj, value)
 		)
 		export var __privateSet = (obj, member, value, setter) => (
@@ -401,7 +448,7 @@ func Source(unsupportedJSFeatures compat.JSFeature) logger.Source {
 						done: false,
 						value: new __await(new Promise(resolve => {
 							var x = obj[k](v)
-							if (!(x instanceof Object)) __throwTypeError('Object expected')
+							if (!(x instanceof Object)) __typeError('Object expected')
 							resolve(x)
 						}), 1),
 					}
@@ -453,11 +500,11 @@ func Source(unsupportedJSFeatures compat.JSFeature) logger.Source {
 		// These are for the "using" statement in TypeScript 5.2+
 		export var __using = (stack, value, async) => {
 			if (value != null) {
-				if (typeof value !== 'object' && typeof value !== 'function') __throwTypeError('Object expected')
+				if (typeof value !== 'object' && typeof value !== 'function') __typeError('Object expected')
 				var dispose
 				if (async) dispose = value[__knownSymbol('asyncDispose')]
 				if (dispose === void 0) dispose = value[__knownSymbol('dispose')]
-				if (typeof dispose !== 'function') __throwTypeError('Object not disposable')
+				if (typeof dispose !== 'function') __typeError('Object not disposable')
 				stack.push([async, dispose, value])
 			} else if (async) {
 				stack.push([async])
