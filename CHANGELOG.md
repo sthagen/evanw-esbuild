@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.21.5
+
+* Fix `Symbol.metadata` on classes without a class decorator ([#3781](https://github.com/evanw/esbuild/issues/3781))
+
+    This release fixes a bug with esbuild's support for the [decorator metadata proposal](https://github.com/tc39/proposal-decorator-metadata). Previously esbuild only added the `Symbol.metadata` property to decorated classes if there was a decorator on the class element itself. However, the proposal says that the `Symbol.metadata` property should be present on all classes that have any decorators at all, not just those with a decorator on the class element itself.
 
 * Allow unknown import attributes to be used with the `copy` loader ([#3792](https://github.com/evanw/esbuild/issues/3792))
 
