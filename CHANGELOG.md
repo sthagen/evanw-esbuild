@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+* Drop support for older platforms ([#3802](https://github.com/evanw/esbuild/issues/3802))
+
+    This release drops support for the following operating systems:
+
+    * Windows 7
+    * Windows 8
+    * Windows Server 2008
+    * Windows Server 2012
+
+    This is because the Go programming language dropped support for these operating system versions in [Go 1.21](https://go.dev/doc/go1.21#windows), and this release updates esbuild from Go 1.20 to Go 1.22.
+
+    Note that this only affects the binary esbuild executables that are published to the `esbuild` npm package. It's still possible to compile esbuild's source code for these older operating systems. If you need to, you can compile esbuild for yourself using an older version of the Go compiler (before Go version 1.21). That might look something like this:
+
+    ```
+    git clone https://github.com/evanw/esbuild.git
+    cd esbuild
+    go build ./cmd/esbuild
+    ./esbuild.exe --version
+    ```
+
+    In addition, this release increases the minimum required node version for esbuild's JavaScript API from node 12 to node 18. Node 18 is the oldest version of node that is still being supported (see node's [release schedule](https://nodejs.org/en/about/previous-releases) for more information). This increase is because of an incompatibility between the JavaScript that the Go compiler generates for the `esbuild-wasm` package and versions of node before node 17.4 (specifically the `crypto.getRandomValues` function).
+
 ## 0.21.5
 
 * Fix `Symbol.metadata` on classes without a class decorator ([#3781](https://github.com/evanw/esbuild/issues/3781))
