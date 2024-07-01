@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.22.0
+
+**This release deliberately contains backwards-incompatible changes.** To avoid automatically picking up releases like this, you should either be pinning the exact version of `esbuild` in your `package.json` file (recommended) or be using a version range syntax that only accepts patch upgrades such as `^0.21.0` or `~0.21.0`. See npm's documentation about [semver](https://docs.npmjs.com/cli/v6/using-npm/semver/) for more information.
+
+* Omit packages from bundles by default when targeting node ([#1874](https://github.com/evanw/esbuild/issues/1874), [#2830](https://github.com/evanw/esbuild/issues/2830), [#2846](https://github.com/evanw/esbuild/issues/2846), [#2915](https://github.com/evanw/esbuild/issues/2915), [#3145](https://github.com/evanw/esbuild/issues/3145), [#3294](https://github.com/evanw/esbuild/issues/3294), [#3323](https://github.com/evanw/esbuild/issues/3323), [#3582](https://github.com/evanw/esbuild/issues/3582), [#3809](https://github.com/evanw/esbuild/issues/3809), [#3815](https://github.com/evanw/esbuild/issues/3815))
+
+    This breaking change is an experiment. People are commonly confused when using esbuild to bundle code for node (i.e. for `--platform=node`) because some packages may not be intended for bundlers, and may use node-specific features that don't work with a bundler. Even though esbuild's "getting started" instructions say to use `--packages=external` to work around this problem, many people don't read the documentation and don't do this, and are then confused when it doesn't work. So arguably this is a bad default behavior for esbuild to have if people keep tripping over this.
+
+    With this release, esbuild will now omit packages from the bundle by default when the platform is `node` (i.e. the previous behavior of `--packages=external` is now the default in this case). _Note that your dependencies must now be present on the file system when your bundle is run._ If you don't want this behavior, you can do `--packages=bundle` to allow packages to be included in the bundle (i.e. the previous default behavior). Note that `--packages=bundle` doesn't mean all packages are bundled, just that packages are allowed to be bundled. You can still exclude individual packages from the bundle using `--external:` even when `--packages=bundle` is present.
+
+    The `--packages=` setting considers all import paths that "look like" package imports in the original source code to be package imports. Specifically import paths that don't start with a path segment of `/` or `.` or `..` are considered to be package imports. The only two exceptions to this rule are [subpath imports](https://nodejs.org/api/packages.html#subpath-imports) (which start with a `#` character) and TypeScript path remappings via `paths` and/or `baseUrl` in `tsconfig.json` (which are applied first).
 
 * Drop support for older platforms ([#3802](https://github.com/evanw/esbuild/issues/3802))
 
@@ -31,6 +41,30 @@
 * Allow `es2024` as a target environment
 
     The ECMAScript 2024 specification was just approved, so it has been added to esbuild as a possible compilation target. You can read more about the features that it adds here: [https://2ality.com/2024/06/ecmascript-2024.html](https://2ality.com/2024/06/ecmascript-2024.html). The only addition that's relevant for esbuild is the regular expression `/v` flag. With `--target=es2024`, regular expressions that use the `/v` flag will now be passed through untransformed instead of being transformed into a call to `new RegExp`.
+
+* Publish binaries for OpenBSD on 64-bit ARM ([#3665](https://github.com/evanw/esbuild/issues/3665), [#3674](https://github.com/evanw/esbuild/pull/3674))
+
+    With this release, you should now be able to install the `esbuild` npm package in OpenBSD on 64-bit ARM, such as on an Apple device with an M1 chip.
+
+    This was contributed by [@ikmckenz](https://github.com/ikmckenz).
+
+* Publish binaries for WASI (WebAssembly System Interface) preview 1 ([#3300](https://github.com/evanw/esbuild/issues/3300), [#3779](https://github.com/evanw/esbuild/pull/3779))
+
+    The upcoming WASI (WebAssembly System Interface) standard is going to be a way to run WebAssembly outside of a JavaScript host environment. In this scenario you only need a `.wasm` file without any supporting JavaScript code. Instead of JavaScript providing the APIs for the host environment, the WASI standard specifies a "system interface" that WebAssembly code can access directly (e.g. for file system access).
+
+    Development versions of the WASI specification are being released using preview numbers. The people behind WASI are currently working on preview 2 but the Go compiler has [released support for preview 1](https://go.dev/blog/wasi), which from what I understand is now considered an unsupported legacy release. However, some people have requested that esbuild publish binary executables that support WASI preview 1 so they can experiment with them.
+
+    This release publishes esbuild precompiled for WASI preview 1 to the `@esbuild/wasi-preview1` package on npm (specifically the file `@esbuild/wasi-preview1/esbuild.wasm`). This binary executable has not been tested and won't be officially supported, as it's for an old preview release of a specification that has since moved in another direction. If it works for you, great! If not, then you'll likely have to wait for the ecosystem to evolve before using esbuild with WASI. For example, it sounds like perhaps WASI preview 1 doesn't include support for opening network sockets so esbuild's local development server is unlikely to work with WASI preview 1.
+
+* Warn about `onResolve` plugins not setting a path ([#3790](https://github.com/evanw/esbuild/issues/3790))
+
+    Plugins that return values from `onResolve` without resolving the path (i.e. without setting either `path` or `external: true`) will now cause a warning. This is because esbuild only uses return values from `onResolve` if it successfully resolves the path, and it's not good for invalid input to be silently ignored.
+
+* Add a new Go API for running the CLI with plugins ([#3539](https://github.com/evanw/esbuild/pull/3539))
+
+    With esbuild's Go API, you can now call `cli.RunWithPlugins(args, plugins)` to pass an array of esbuild plugins to be used during the build process. This allows you to create a CLI that behaves similarly to esbuild's CLI but with additional Go plugins enabled.
+
+    This was contributed by [@edewit](https://github.com/edewit).
 
 ## 0.21.5
 

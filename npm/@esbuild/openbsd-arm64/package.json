@@ -1,7 +1,7 @@
 {
-  "name": "@esbuild/freebsd-x64",
+  "name": "@esbuild/openbsd-arm64",
   "version": "0.22.0",
-  "description": "The FreeBSD 64-bit binary for esbuild, a JavaScript bundler.",
+  "description": "The OpenBSD ARM 64-bit binary for esbuild, a JavaScript bundler.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/evanw/esbuild.git"
@@ -12,9 +12,9 @@
     "node": ">=18"
   },
   "os": [
-    "freebsd"
+    "openbsd"
   ],
   "cpu": [
-    "x64"
+    "arm64"
   ]
 }

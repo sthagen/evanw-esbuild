@@ -613,12 +613,15 @@ func parseOptionsImpl(
 		case strings.HasPrefix(arg, "--packages=") && buildOpts != nil:
 			value := arg[len("--packages="):]
 			var packages api.Packages
-			if value == "external" {
+			switch value {
+			case "bundle":
+				packages = api.PackagesBundle
+			case "external":
 				packages = api.PackagesExternal
-			} else {
+			default:
 				return parseOptionsExtras{}, cli_helpers.MakeErrorWithNote(
 					fmt.Sprintf("Invalid value %q in %q", value, arg),
-					"The only valid value is \"external\".",
+					"Valid values are \"bundle\" or \"external\".",
 				)
 			}
 			buildOpts.Packages = packages
@@ -1129,7 +1132,7 @@ func addAnalyzePlugin(buildOptions *api.BuildOptions, analyze analyzeMode, osArg
 	buildOptions.Metafile = true
 }
 
-func runImpl(osArgs []string) int {
+func runImpl(osArgs []string, plugins []api.Plugin) int {
 	// Special-case running a server
 	for _, arg := range osArgs {
 		if arg == "--serve" ||
@@ -1143,6 +1146,12 @@ func runImpl(osArgs []string) int {
 
 	osArgs, analyze := filterAnalyzeFlags(osArgs)
 	buildOptions, transformOptions, extras, err := parseOptionsForRun(osArgs)
+
+	// Add any plugins from the caller after parsing the build options
+	if buildOptions != nil {
+		buildOptions.Plugins = append(buildOptions.Plugins, plugins...)
+	}
+
 	if analyze != analyzeDisabled {
 		addAnalyzePlugin(buildOptions, analyze, osArgs)
 	}
