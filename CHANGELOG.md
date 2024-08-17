@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.23.1
 
 * Allow using the `node:` import prefix with `es*` targets ([#3821](https://github.com/evanw/esbuild/issues/3821))
 
@@ -27,6 +27,14 @@
 * Fix incorrect location of certain error messages ([#3845](https://github.com/evanw/esbuild/issues/3845))
 
     This release fixes a regression that caused certain errors relating to variable declarations to be reported at an incorrect location. The regression was introduced in version 0.18.7 of esbuild.
+
+* Print comments before case clauses in switch statements ([#3838](https://github.com/evanw/esbuild/issues/3838))
+
+    With this release, esbuild will attempt to print comments that come before case clauses in switch statements. This is similar to what esbuild already does for comments inside of certain types of expressions. Note that these types of comments are not printed if minification is enabled (specifically whitespace minification).
+
+* Fix a memory leak with `pluginData` ([#3825](https://github.com/evanw/esbuild/issues/3825))
+
+    With this release, the build context's internal `pluginData` cache will now be cleared when starting a new build. This should fix a leak of memory from plugins that return `pluginData` objects from `onResolve` and/or `onLoad` callbacks.
 
 ## 0.23.0
 
