@@ -3,6 +3,7 @@ package js_parser
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"sort"
 	"strings"
@@ -227,6 +228,7 @@ type parser struct {
 	importMetaRef ast.Ref
 	promiseRef    ast.Ref
 	regExpRef     ast.Ref
+	bigIntRef     ast.Ref
 	superCtorRef  ast.Ref
 
 	// Imports from "react/jsx-runtime" and "react", respectively.
@@ -1765,6 +1767,14 @@ func (p *parser) makeRegExpRef() ast.Ref {
 	return p.regExpRef
 }
 
+func (p *parser) makeBigIntRef() ast.Ref {
+	if p.bigIntRef == ast.InvalidRef {
+		p.bigIntRef = p.newSymbol(ast.SymbolUnbound, "BigInt")
+		p.moduleScope.Generated = append(p.moduleScope.Generated, p.bigIntRef)
+	}
+	return p.bigIntRef
+}
+
 // The name is temporarily stored in the ref until the scope traversal pass
 // happens, at which point a symbol will be generated and the ref will point
 // to the symbol instead.
@@ -2026,6 +2036,15 @@ func (p *parser) parseStringLiteral() js_ast.Expr {
 	return value
 }
 
+func (p *parser) parseBigIntOrStringIfUnsupported() js_ast.Expr {
+	if p.options.unsupportedJSFeatures.Has(compat.Bigint) {
+		var i big.Int
+		fmt.Sscan(p.lexer.Identifier.String, &i)
+		return js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EString{Value: helpers.StringToUTF16(i.String())}}
+	}
+	return js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier.String}}
+}
+
 type propertyOpts struct {
 	decorators       []js_ast.Decorator
 	decoratorScope   *js_ast.Scope
@@ -2064,8 +2083,7 @@ func (p *parser) parseProperty(startLoc logger.Loc, kind js_ast.PropertyKind, op
 		}
 
 	case js_lexer.TBigIntegerLiteral:
-		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier.String}}
-		p.markSyntaxFeature(compat.Bigint, p.lexer.Range())
+		key = p.parseBigIntOrStringIfUnsupported()
 		p.lexer.Next()
 
 	case js_lexer.TPrivateIdentifier:
@@ -2627,8 +2645,7 @@ func (p *parser) parsePropertyBinding() js_ast.PropertyBinding {
 		preferQuotedKey = !p.options.minifySyntax
 
 	case js_lexer.TBigIntegerLiteral:
-		key = js_ast.Expr{Loc: p.lexer.Loc(), Data: &js_ast.EBigInt{Value: p.lexer.Identifier.String}}
-		p.markSyntaxFeature(compat.Bigint, p.lexer.Range())
+		key = p.parseBigIntOrStringIfUnsupported()
 		p.lexer.Next()
 
 	case js_lexer.TOpenBracket:
@@ -3544,7 +3561,6 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 
 	case js_lexer.TBigIntegerLiteral:
 		value := p.lexer.Identifier
-		p.markSyntaxFeature(compat.Bigint, p.lexer.Range())
 		p.lexer.Next()
 		return js_ast.Expr{Loc: loc, Data: &js_ast.EBigInt{Value: value.String}}
 
@@ -12602,6 +12618,7 @@ type exprOut struct {
 
 	// If true and this is used as a call target, the whole call expression
 	// must be replaced with undefined.
+	callMustBeReplacedWithUndefined       bool
 	methodCallMustBeReplacedWithUndefined bool
 }
 
@@ -12891,7 +12908,18 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 	// it doesn't affect these mitigations by ensuring that the mitigations are not
 	// applied in those cases (e.g. by adding an additional conditional check).
 	switch e := expr.Data.(type) {
-	case *js_ast.ENull, *js_ast.ESuper, *js_ast.EBoolean, *js_ast.EBigInt, *js_ast.EUndefined, *js_ast.EJSXText:
+	case *js_ast.ENull, *js_ast.ESuper, *js_ast.EBoolean, *js_ast.EUndefined, *js_ast.EJSXText:
+
+	case *js_ast.EBigInt:
+		if p.options.unsupportedJSFeatures.Has(compat.Bigint) {
+			// For ease of implementation, the actual reference of the "BigInt"
+			// symbol is deferred to print time. That means we don't have to
+			// special-case the "BigInt" constructor in side-effect computations
+			// and future big integer constant folding (of which there isn't any
+			// at the moment).
+			p.markSyntaxFeature(compat.Bigint, p.source.RangeOfNumber(expr.Loc))
+			p.recordUsage(p.makeBigIntRef())
+		}
 
 	case *js_ast.ENameOfSymbol:
 		e.Ref = p.symbolForMangledProp(p.loadNameFromRef(e.Ref))
@@ -13694,12 +13722,23 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 			return p.lowerOptionalChain(expr, in, out)
 		}
 
+		// Also erase "console.log.call(console, 123)" and "console.log.bind(console)"
+		if out.callMustBeReplacedWithUndefined {
+			if e.Name == "call" || e.Name == "apply" {
+				out.methodCallMustBeReplacedWithUndefined = true
+			} else if p.options.unsupportedJSFeatures.Has(compat.Arrow) {
+				e.Target.Data = &js_ast.EFunction{}
+			} else {
+				e.Target.Data = &js_ast.EArrow{}
+			}
+		}
+
 		// Potentially rewrite this property access
 		out = exprOut{
-			childContainsOptionalChain:            containsOptionalChain,
-			methodCallMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
-			thisArgFunc:                           out.thisArgFunc,
-			thisArgWrapFunc:                       out.thisArgWrapFunc,
+			childContainsOptionalChain:      containsOptionalChain,
+			callMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
+			thisArgFunc:                     out.thisArgFunc,
+			thisArgWrapFunc:                 out.thisArgWrapFunc,
 		}
 		if !in.hasChainParent {
 			out.thisArgFunc = nil
@@ -13858,10 +13897,10 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 
 		// Potentially rewrite this property access
 		out = exprOut{
-			childContainsOptionalChain:            containsOptionalChain,
-			methodCallMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
-			thisArgFunc:                           out.thisArgFunc,
-			thisArgWrapFunc:                       out.thisArgWrapFunc,
+			childContainsOptionalChain:      containsOptionalChain,
+			callMustBeReplacedWithUndefined: out.methodCallMustBeReplacedWithUndefined,
+			thisArgFunc:                     out.thisArgFunc,
+			thisArgWrapFunc:                 out.thisArgWrapFunc,
 		}
 		if !in.hasChainParent {
 			out.thisArgFunc = nil
@@ -14581,11 +14620,11 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		oldIsControlFlowDead := p.isControlFlowDead
 
 		// If we're removing this call, don't count any arguments as symbol uses
-		if out.methodCallMustBeReplacedWithUndefined {
+		if out.callMustBeReplacedWithUndefined {
 			if js_ast.IsPropertyAccess(e.Target) {
 				p.isControlFlowDead = true
 			} else {
-				out.methodCallMustBeReplacedWithUndefined = false
+				out.callMustBeReplacedWithUndefined = false
 			}
 		}
 
@@ -14657,7 +14696,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		}
 
 		// Stop now if this call must be removed
-		if out.methodCallMustBeReplacedWithUndefined {
+		if out.callMustBeReplacedWithUndefined {
 			p.isControlFlowDead = oldIsControlFlowDead
 			return js_ast.Expr{Loc: expr.Loc, Data: js_ast.EUndefinedShared}, exprOut{}
 		}
@@ -17011,6 +17050,7 @@ func newParser(log logger.Log, source logger.Source, lexer js_lexer.Lexer, optio
 		runtimeImports:     make(map[string]ast.LocRef),
 		promiseRef:         ast.InvalidRef,
 		regExpRef:          ast.InvalidRef,
+		bigIntRef:          ast.InvalidRef,
 		afterArrowBodyLoc:  logger.Loc{Start: -1},
 		firstJSXElementLoc: logger.Loc{Start: -1},
 		importMetaRef:      ast.InvalidRef,
@@ -17458,7 +17498,7 @@ func GlobResolveAST(log logger.Log, source logger.Source, importRecords []ast.Im
 	return p.toAST([]js_ast.Part{nsExportPart}, []js_ast.Part{part}, nil, "", nil)
 }
 
-func ParseDefineExprOrJSON(text string) (config.DefineExpr, js_ast.E) {
+func ParseDefineExpr(text string) (config.DefineExpr, js_ast.E) {
 	if text == "" {
 		return config.DefineExpr{}, nil
 	}
@@ -17484,16 +17524,18 @@ func ParseDefineExprOrJSON(text string) (config.DefineExpr, js_ast.E) {
 		return config.DefineExpr{Parts: parts}, nil
 	}
 
-	// Try parsing a JSON value
+	// Try parsing a value
 	log := logger.NewDeferLog(logger.DeferLogNoVerboseOrDebug, nil)
-	expr, ok := ParseJSON(log, logger.Source{Contents: text}, JSONOptions{})
+	expr, ok := ParseJSON(log, logger.Source{Contents: text}, JSONOptions{
+		IsForDefine: true,
+	})
 	if !ok {
 		return config.DefineExpr{}, nil
 	}
 
 	// Only primitive literals are inlined directly
 	switch expr.Data.(type) {
-	case *js_ast.ENull, *js_ast.EBoolean, *js_ast.EString, *js_ast.ENumber:
+	case *js_ast.ENull, *js_ast.EBoolean, *js_ast.EString, *js_ast.ENumber, *js_ast.EBigInt:
 		return config.DefineExpr{Constant: expr.Data}, nil
 	}
 
@@ -17623,7 +17665,7 @@ func (p *parser) prepareForVisitPass() {
 			if p.options.jsx.AutomaticRuntime {
 				p.log.AddID(logger.MsgID_JS_UnsupportedJSXComment, logger.Warning, &p.tracker, jsxFactory.Range,
 					"The JSX factory cannot be set when using React's \"automatic\" JSX transform")
-			} else if expr, _ := ParseDefineExprOrJSON(jsxFactory.Text); len(expr.Parts) > 0 {
+			} else if expr, _ := ParseDefineExpr(jsxFactory.Text); len(expr.Parts) > 0 {
 				p.options.jsx.Factory = expr
 			} else {
 				p.log.AddID(logger.MsgID_JS_UnsupportedJSXComment, logger.Warning, &p.tracker, jsxFactory.Range,
@@ -17635,7 +17677,7 @@ func (p *parser) prepareForVisitPass() {
 			if p.options.jsx.AutomaticRuntime {
 				p.log.AddID(logger.MsgID_JS_UnsupportedJSXComment, logger.Warning, &p.tracker, jsxFragment.Range,
 					"The JSX fragment cannot be set when using React's \"automatic\" JSX transform")
-			} else if expr, _ := ParseDefineExprOrJSON(jsxFragment.Text); len(expr.Parts) > 0 || expr.Constant != nil {
+			} else if expr, _ := ParseDefineExpr(jsxFragment.Text); len(expr.Parts) > 0 || expr.Constant != nil {
 				p.options.jsx.Fragment = expr
 			} else {
 				p.log.AddID(logger.MsgID_JS_UnsupportedJSXComment, logger.Warning, &p.tracker, jsxFragment.Range,

@@ -4010,7 +4010,7 @@ let watchTests = {
         )
         assert.strictEqual(result2.errors.length, 1)
         assert.strictEqual(result2.errors[0].text, 'Expected ";" but found "2"')
-        assert.strictEqual(await readFileAsync(outfile, 'utf8'), 'throw 3;\n')
+        assert.strictEqual(fs.existsSync(outfile), false)
       }
 
       // Fourth rebuild: edit
@@ -4031,8 +4031,7 @@ let watchTests = {
           result => result.errors.length > 0,
         )
         assert.strictEqual(result2.errors.length, 1)
-        assert.strictEqual(await readFileAsync(outfile, 'utf8'), 'throw 4;\n')
-        assert.strictEqual(await readFileAsync(outfile, 'utf8'), 'throw 4;\n')
+        assert.strictEqual(fs.existsSync(outfile), false)
       }
 
       // Sixth rebuild: restore
@@ -6081,17 +6080,57 @@ class Foo {
   },
 
   async dropConsole({ esbuild }) {
-    const { code } = await esbuild.transform(`
-      console('foo')
+    const { code: drop } = await esbuild.transform(`
       console.log('foo')
       console.log(foo())
+      console.log.call(console, foo())
+      console.log.apply(console, foo())
       x = console.log(bar())
+      console['log']('foo')
+    `, { drop: ['console'] })
+    assert.strictEqual(drop, `x = void 0;\n`)
+
+    const { code: keepArrow } = await esbuild.transform(`
+      console('foo')
       console.abc.xyz('foo')
       console['log']('foo')
       console[abc][xyz]('foo')
       console[foo()][bar()]('foo')
+      const x = {
+        log: console.log.bind(console),
+      }
     `, { drop: ['console'] })
-    assert.strictEqual(code, `console("foo");\nx = void 0;\n`)
+    assert.strictEqual(keepArrow, `console("foo");
+(() => {
+}).xyz("foo");
+console[abc][xyz]("foo");
+console[foo()][bar()]("foo");
+const x = {
+  log: (() => {
+  }).bind(console)
+};
+`)
+
+    const { code: keepFn } = await esbuild.transform(`
+      console('foo')
+      console.abc.xyz('foo')
+      console['log']('foo')
+      console[abc][xyz]('foo')
+      console[foo()][bar()]('foo')
+      const x = {
+        log: console.log.bind(console),
+      }
+    `, { drop: ['console'], supported: { arrow: false } })
+    assert.strictEqual(keepFn, `console("foo");
+(function() {
+}).xyz("foo");
+console[abc][xyz]("foo");
+console[foo()][bar()]("foo");
+const x = {
+  log: function() {
+  }.bind(console)
+};
+`)
   },
 
   async keepDebugger({ esbuild }) {
@@ -6224,6 +6263,11 @@ class Foo {
       write: false,
     })
     assert.strictEqual(outputFiles[0].text, `return true;\n`)
+  },
+
+  async defineBigInt({ esbuild }) {
+    const { code } = await esbuild.transform(`console.log(a, b); export {}`, { define: { a: '0n', b: '{"x":[123n]}' }, format: 'esm' })
+    assert.strictEqual(code, `var define_b_default = { x: [123n] };\nconsole.log(0n, define_b_default);\n`)
   },
 
   async json({ esbuild }) {
@@ -6872,11 +6916,11 @@ class Foo {
 
   async multipleEngineTargetsNotSupported({ esbuild }) {
     try {
-      await esbuild.transform(`0n`, { target: ['es5', 'chrome1', 'safari2', 'firefox3'] })
+      await esbuild.transform(`class X {}`, { target: ['es5', 'chrome1', 'safari2', 'firefox3'] })
       throw new Error('Expected an error to be thrown')
     } catch (e) {
       assert.strictEqual(e.errors[0].text,
-        'Big integer literals are not available in the configured target environment ("chrome1", "es5", "firefox3", "safari2")')
+        'Transforming class syntax to the configured target environment ("chrome1", "es5", "firefox3", "safari2") is not supported yet')
     }
   },
 
@@ -6900,12 +6944,12 @@ class Foo {
       check({ supported: { arrow: false }, target: 'es2022' }, `x = () => y`, `x = function() {\n  return y;\n};\n`),
 
       // JS: error
-      check({ supported: { bigint: true } }, `x = 1n`, `x = 1n;\n`),
-      check({ supported: { bigint: false } }, `x = 1n`, `Big integer literals are not available in the configured target environment`),
-      check({ supported: { bigint: true }, target: 'es5' }, `x = 1n`, `x = 1n;\n`),
-      check({ supported: { bigint: false }, target: 'es5' }, `x = 1n`, `Big integer literals are not available in the configured target environment ("es5" + 1 override)`),
-      check({ supported: { bigint: true }, target: 'es2022' }, `x = 1n`, `x = 1n;\n`),
-      check({ supported: { bigint: false }, target: 'es2022' }, `x = 1n`, `Big integer literals are not available in the configured target environment ("es2022" + 1 override)`),
+      check({ supported: { class: true } }, `class X {}`, `class X {\n}\n`),
+      check({ supported: { class: false } }, `class X {}`, `Transforming class syntax to the configured target environment is not supported yet`),
+      check({ supported: { class: true }, target: 'es5' }, `class X {}`, `class X {\n}\n`),
+      check({ supported: { class: false }, target: 'es5' }, `class X {}`, `Transforming class syntax to the configured target environment ("es5" + 11 overrides) is not supported yet`),
+      check({ supported: { class: true }, target: 'es6' }, `class X {}`, `class X {\n}\n`),
+      check({ supported: { class: false }, target: 'es6' }, `class X {}`, `Transforming class syntax to the configured target environment ("es2015" + 11 overrides) is not supported yet`),
 
       // CSS: lower
       check({ supported: { 'hex-rgba': true }, loader: 'css' }, `a { color: #1234 }`, `a {\n  color: #1234;\n}\n`),
@@ -6914,7 +6958,7 @@ class Foo {
       check({ target: 'safari15.4', loader: 'css' }, `a { mask-image: url(x.png) }`, `a {\n  mask-image: url(x.png);\n}\n`),
 
       // Check for "+ 2 overrides"
-      check({ supported: { bigint: false, arrow: true }, target: 'es2022' }, `x = 1n`, `Big integer literals are not available in the configured target environment ("es2022" + 2 overrides)`),
+      check({ supported: { class: false, arrow: true }, target: 'es2022' }, `class X {}`, `Transforming class syntax to the configured target environment ("es2022" + 12 overrides) is not supported yet`),
     ])
   },
 
@@ -6958,9 +7002,6 @@ class Foo {
   },
 
   // Future syntax
-  bigInt: ({ esbuild }) => futureSyntax(esbuild, '123n', 'es2019', 'es2020'),
-  bigIntKey: ({ esbuild }) => futureSyntax(esbuild, '({123n: 0})', 'es2019', 'es2020'),
-  bigIntPattern: ({ esbuild }) => futureSyntax(esbuild, 'let {123n: x} = y', 'es2019', 'es2020'),
   nonIdArrayRest: ({ esbuild }) => futureSyntax(esbuild, 'let [...[x]] = y', 'es2015', 'es2016'),
   topLevelAwait: ({ esbuild }) => futureSyntax(esbuild, 'await foo', 'es2020', 'esnext'),
   topLevelForAwait: ({ esbuild }) => futureSyntax(esbuild, 'for await (foo of bar) ;', 'es2020', 'esnext'),
