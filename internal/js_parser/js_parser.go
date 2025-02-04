@@ -387,6 +387,7 @@ type parser struct {
 	latestReturnHadSemicolon    bool
 	messageAboutThisIsUndefined bool
 	isControlFlowDead           bool
+	shouldAddKeyComment         bool
 
 	// If this is true, then all top-level statements are wrapped in a try/catch
 	willWrapModuleInTryCatchForUsing bool
@@ -2305,7 +2306,10 @@ func (p *parser) parseProperty(startLoc logger.Loc, kind js_ast.PropertyKind, op
 		}
 
 		if p.isMangledProp(name.String) {
-			key = js_ast.Expr{Loc: nameRange.Loc, Data: &js_ast.ENameOfSymbol{Ref: p.storeNameInRef(name)}}
+			key = js_ast.Expr{Loc: nameRange.Loc, Data: &js_ast.ENameOfSymbol{
+				Ref:                   p.storeNameInRef(name),
+				HasPropertyKeyComment: true,
+			}}
 		} else {
 			key = js_ast.Expr{Loc: nameRange.Loc, Data: &js_ast.EString{Value: helpers.StringToUTF16(name.String)}}
 		}
@@ -12964,7 +12968,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		if in.shouldMangleStringsAsProps && p.options.mangleQuoted && !e.PreferTemplate {
 			if name := helpers.UTF16ToString(e.Value); p.isMangledProp(name) {
 				return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENameOfSymbol{
-					Ref: p.symbolForMangledProp(name),
+					Ref:                   p.symbolForMangledProp(name),
+					HasPropertyKeyComment: e.HasPropertyKeyComment,
 				}}, exprOut{}
 			}
 		}
@@ -14028,7 +14033,25 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 
 			case js_ast.UnOpVoid:
-				if p.astHelpers.ExprCanBeRemovedIfUnused(e.Value) {
+				var shouldRemove bool
+				if p.options.minifySyntax {
+					shouldRemove = p.astHelpers.ExprCanBeRemovedIfUnused(e.Value)
+				} else {
+					// This special case was added for a very obscure reason. There's a
+					// custom dialect of JavaScript called Svelte that uses JavaScript
+					// syntax with different semantics. Specifically variable accesses
+					// have side effects (!). And someone wants to use "void x" instead
+					// of just "x" to trigger the side effect for some reason.
+					//
+					// Arguably this should not be supported, because you shouldn't be
+					// running esbuild on weird kinda-JavaScript-but-not languages and
+					// expecting it to work correctly. But this one special case seems
+					// harmless enough. This is definitely not fully supported though.
+					//
+					// More info: https://github.com/evanw/esbuild/issues/4041
+					shouldRemove = isUnsightlyPrimitive(e.Value.Data)
+				}
+				if shouldRemove {
 					return js_ast.Expr{Loc: expr.Loc, Data: js_ast.EUndefinedShared}, exprOut{}
 				}
 
@@ -16351,7 +16374,7 @@ func (p *parser) handleIdentifier(loc logger.Loc, e *js_ast.EIdentifier, opts id
 	ref := e.Ref
 
 	// Substitute inlined constants
-	if p.options.minifySyntax {
+	if p.options.minifySyntax && !p.currentScope.ContainsDirectEval {
 		if value, ok := p.constValues[ref]; ok {
 			p.ignoreUsage(ref)
 			return js_ast.ConstValueToExpr(loc, value)
@@ -17077,6 +17100,12 @@ func newParser(log logger.Log, source logger.Source, lexer js_lexer.Lexer, optio
 		// For JSX runtime imports
 		jsxRuntimeImports: make(map[string]ast.LocRef),
 		jsxLegacyImports:  make(map[string]ast.LocRef),
+
+		// Add "/* @__KEY__ */" comments when mangling properties to support
+		// running esbuild (or other tools like Terser) again on the output.
+		// This checks both "--mangle-props" and "--reserve-props" so that
+		// you can turn this on with just "--reserve-props=." if you want to.
+		shouldAddKeyComment: options.mangleProps != nil || options.reserveProps != nil,
 
 		suppressWarningsAboutWeirdCode: helpers.IsInsideNodeModules(source.KeyPath.Text),
 	}
