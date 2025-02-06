@@ -102,6 +102,16 @@
         .a{.b{color:red}:where(& .b){color:#00f}}
         ```
 
+* Fix some correctness issues with source maps ([#1745](https://github.com/evanw/esbuild/issues/1745), [#3183](https://github.com/evanw/esbuild/issues/3183), [#3613](https://github.com/evanw/esbuild/issues/3613), [#3982](https://github.com/evanw/esbuild/issues/3982))
+
+    Previously esbuild incorrectly treated source map path references as file paths instead of as URLs. With this release, esbuild will now treat source map path references as URLs. This fixes the following problems with source maps:
+
+    * File names in `sourceMappingURL` that contained a space previously did not encode the space as `%20`, which resulted in JavaScript tools (including esbuild) failing to read that path back in when consuming the generated output file. This should now be fixed.
+
+    * Absolute URLs in `sourceMappingURL` that use the `file://` scheme previously attempted to read from a folder called `file:`. These URLs should now be recognized and parsed correctly.
+
+    * Entries in the `sources` array in the source map are now treated as URLs instead of file paths. The correct behavior for this is much more clear now that source maps has a [formal specification](https://tc39.es/ecma426/). Many thanks to those who worked on the specification.
+
 * Fix incorrect package for `@esbuild/netbsd-arm64` ([#4018](https://github.com/evanw/esbuild/issues/4018))
 
     Due to a copy+paste typo, the binary published to `@esbuild/netbsd-arm64` was not actually for `arm64`, and didn't run in that environment. This release should fix running esbuild in that environment (NetBSD on 64-bit ARM). Sorry about the mistake.
