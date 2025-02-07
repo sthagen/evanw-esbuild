@@ -162,6 +162,33 @@
 
     With this release, you can now use BigInt literals as define values, such as with `--define:FOO=123n`. Previously trying to do this resulted in a syntax error.
 
+* Fix a bug with resolve extensions in `node_modules` ([#4053](https://github.com/evanw/esbuild/issues/4053))
+
+    The `--resolve-extensions=` option lets you specify the order in which to try resolving implicit file extensions. For complicated reasons, esbuild reorders TypeScript file extensions after JavaScript ones inside of `node_modules` so that JavaScript source code is always preferred to TypeScript source code inside of dependencies. However, this reordering had a bug that could accidentally change the relative order of TypeScript file extensions if one of them was a prefix of the other. That bug has been fixed in this release. You can see the issue for details.
+
+* Better minification of statically-determined `switch` cases ([#4028](https://github.com/evanw/esbuild/issues/4028))
+
+    With this release, esbuild will now try to trim unused code within `switch` statements when the test expression and `case` expressions are primitive literals. This can arise when the test expression is an identifier that is substituted for a primitive literal at compile time. For example:
+
+    ```js
+    // Original code
+    switch (MODE) {
+      case 'dev':
+        installDevToolsConsole()
+        break
+      case 'prod':
+        return
+      default:
+        throw new Error
+    }
+
+    // Old output (with --minify '--define:MODE="prod"')
+    switch("prod"){case"dev":installDevToolsConsole();break;case"prod":return;default:throw new Error}
+
+    // New output (with --minify '--define:MODE="prod"')
+    return;
+    ```
+
 * Emit `/* @__KEY__ */` for string literals derived from property names ([#4034](https://github.com/evanw/esbuild/issues/4034))
 
     Property name mangling is an advanced feature that shortens certain property names for better minification (I say "advanced feature" because it's very easy to break your code with it). Sometimes you need to store a property name in a string, such as `obj.get('foo')` instead of `obj.foo`. JavaScript minifiers such as esbuild and [Terser](https://terser.org/) have a convention where a `/* @__KEY__ */` comment before the string makes it behave like a property name. So `obj.get(/* @__KEY__ */ 'foo')` allows the contents of the string `'foo'` to be shortened.
@@ -183,6 +210,14 @@
     This should have no effect on existing code as this version change does not change Go's operating system support. It may remove certain reports from vulnerability scanners that detect which version of the Go compiler esbuild uses.
 
     This PR was contributed by [@MikeWillCook](https://github.com/MikeWillCook).
+
+* Allow passing a port of 0 to the development server ([#3692](https://github.com/evanw/esbuild/issues/3692))
+
+    Unix sockets interpret a port of 0 to mean "pick a random unused port in the [ephemeral port](https://en.wikipedia.org/wiki/Ephemeral_port) range". However, esbuild's default behavior when the port is not specified is to pick the first unused port starting from 8000 and upward. This is more convenient because port 8000 is typically free, so you can for example restart the development server and reload your app in the browser without needing to change the port in the URL. Since esbuild is written in Go (which does not have optional fields like JavaScript), not specifying the port in Go means it defaults to 0, so previously passing a port of 0 to esbuild caused port 8000 to be picked.
+
+    Starting with this release, passing a port of 0 to esbuild when using the CLI or the JS API will now pass port 0 to the OS, which will pick a random ephemeral port. To make this possible, the `Port` option in the Go API has been changed from `uint16` to `int` (to allow for additional sentinel values) and passing a port of -1 in Go now picks a random port. Both the CLI and JS APIs now remap an explicitly-provided port of 0 into -1 for the internal Go API.
+
+    Another option would have been to change `Port` in Go from `uint16` to `*uint16` (Go's closest equivalent of `number | undefined`). However, that would make the common case of providing an explicit port in Go very awkward as Go doesn't support taking the address of integer constants. This tradeoff isn't worth it as picking a random ephemeral port is a rare use case. So the CLI and JS APIs should now match standard Unix behavior when the port is 0, but you need to use -1 instead with Go API.
 
 * Minification now avoids inlining constants with direct `eval` ([#4055](https://github.com/evanw/esbuild/issues/4055))
 
