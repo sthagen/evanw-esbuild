@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+* Support optionally emitting absolute paths instead of relative paths ([#338](https://github.com/evanw/esbuild/issues/338), [#2082](https://github.com/evanw/esbuild/issues/2082), [#3023](https://github.com/evanw/esbuild/issues/3023))
+
+    This release introduces the `--abs-paths=` feature which takes a comma-separated list of situations where esbuild should use absolute paths instead of relative paths. There are currently three supported situations: `code` (comments and string literals), `log` (log message text and location info), and `metafile` (the JSON build metadata).
+
+    Using absolute paths instead of relative paths is not the default behavior because it means that the build results are no longer machine-independent (which means builds are no longer reproducible). Absolute paths can be useful when used with certain terminal emulators that allow you to click on absolute paths in the terminal text and/or when esbuild is being automatically invoked from several different directories within the same script.
+
+## 0.25.6
+
+* Fix a memory leak when `cancel()` is used on a build context ([#4231](https://github.com/evanw/esbuild/issues/4231))
+
+    Calling `rebuild()` followed by `cancel()` in rapid succession could previously leak memory. The bundler uses a producer/consumer model internally, and the resource leak was caused by the consumer being termianted while there were still remaining unreceived results from a producer. To avoid the leak, the consumer now waits for all producers to finish before terminating.
+
+* Support empty `:is()` and `:where()` syntax in CSS ([#4232](https://github.com/evanw/esbuild/issues/4232))
+
+    Previously using these selectors with esbuild would generate a warning. That warning has been removed in this release for these cases.
+
+* Improve tree-shaking of `try` statements in dead code ([#4224](https://github.com/evanw/esbuild/issues/4224))
+
+    With this release, esbuild will now remove certain `try` statements if esbuild considers them to be within dead code (i.e. code that is known to not ever be evaluated). For example:
+
+    ```js
+    // Original code
+    return 'foo'
+    try { return 'bar' } catch {}
+
+    // Old output (with --minify)
+    return"foo";try{return"bar"}catch{}
+
+    // New output (with --minify)
+    return"foo";
+    ```
+
 * Consider negated bigints to have no side effects
 
     While esbuild currently considers `1`, `-1`, and `1n` to all have no side effects, it didn't previously consider `-1n` to have no side effects. This is because esbuild does constant folding with numbers but not bigints. However, it meant that unused negative bigint constants were not tree-shaken. With this release, esbuild will now consider these expressions to also be side-effect free:
@@ -16,6 +48,26 @@
     // New output (with --bundle --minify)
     (()=>{})();
     ```
+
+* Support a configurable delay in watch mode before rebuilding ([#3476](https://github.com/evanw/esbuild/issues/3476), [#4178](https://github.com/evanw/esbuild/issues/4178))
+
+    The `watch()` API now takes a `delay` option that lets you add a delay (in milliseconds) before rebuilding when a change is detected in watch mode. If you use a tool that regenerates multiple source files very slowly, this should make it more likely that esbuild's watch mode won't generate a broken intermediate build before the successful final build. This option is also available via the CLI using the `--watch-delay=` flag.
+
+    This should also help avoid confusion about the `watch()` API's options argument. It was previously empty to allow for future API expansion, which caused some people to think that the documentation was missing. It's no longer empty now that the `watch()` API has an option.
+
+* Allow mixed array for `entryPoints` API option ([#4223](https://github.com/evanw/esbuild/issues/4223))
+
+    The TypeScript type definitions now allow you to pass a mixed array of both string literals and object literals to the `entryPoints` API option, such as `['foo.js', { out: 'lib', in: 'bar.js' }]`. This was always possible to do in JavaScript but the TypeScript type definitions were previously too restrictive.
+
+* Update Go from 1.23.8 to 1.23.10 ([#4204](https://github.com/evanw/esbuild/issues/4204), [#4207](https://github.com/evanw/esbuild/pull/4207))
+
+    This should have no effect on existing code as this version change does not change Go's operating system support. It may remove certain false positive reports (specifically CVE-2025-4673 and CVE-2025-22874) from vulnerability scanners that only detect which version of the Go compiler esbuild uses.
+
+* Experimental support for esbuild on OpenHarmony ([#4212](https://github.com/evanw/esbuild/pull/4212))
+
+    With this release, esbuild now publishes the [`@esbuild/openharmony-arm64`](https://www.npmjs.com/package/@esbuild/openharmony-arm64) npm package for [OpenHarmony](https://en.wikipedia.org/wiki/OpenHarmony). It contains a WebAssembly binary instead of a native binary because Go doesn't currently support OpenHarmony. Node does support it, however, so in theory esbuild should now work on OpenHarmony through WebAssembly.
+
+    This change was contributed by [@hqzing](https://github.com/hqzing).
 
 ## 0.25.5
 
