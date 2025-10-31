@@ -1517,6 +1517,17 @@ func TestAtRule(t *testing.T) {
 	}
 }`, "@supports (container-type: size){@container (width <= 150px){#inner{background-color:#87ceeb}}}", "")
 
+	// https://drafts.csswg.org/css-view-transitions-2/#view-transition-rule
+	expectPrinted(t, "@view-transition { navigation: auto; types: check; }", `@view-transition {
+  navigation: auto;
+  types: check;
+}
+`, "")
+	expectPrintedMinify(t, `@view-transition {
+	navigation: auto;
+	types: check;
+}`, "@view-transition{navigation:auto;types:check}", "")
+
 	// https://drafts.csswg.org/css-transitions-2/#defining-before-change-style-the-starting-style-rule
 	expectPrinted(t, `
 		@starting-style {
