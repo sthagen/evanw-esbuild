@@ -15135,63 +15135,74 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				}
 			}
 
-			// Optimize references to global constructors
-			if p.options.minifySyntax && t.CanBeRemovedIfUnused && len(e.Args) <= 1 && !hasSpread {
+			// Handle certain special cases
+			if len(e.Args) <= 1 && !hasSpread {
 				if symbol := &p.symbols[t.Ref.InnerIndex]; symbol.Kind == ast.SymbolUnbound {
-					// Note: We construct expressions by assigning to "expr.Data" so
-					// that the source map position for the constructor is preserved
 					switch symbol.OriginalName {
-					case "Boolean":
-						if len(e.Args) == 0 {
-							return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: false}}, exprOut{}
-						} else {
-							expr.Data = &js_ast.EUnary{Value: p.astHelpers.SimplifyBooleanExpr(e.Args[0]), Op: js_ast.UnOpNot}
-							return js_ast.Not(expr), exprOut{}
+					case "Symbol":
+						// Calling the "Symbol()" constructor with a primitive will never throw
+						if len(e.Args) == 0 || js_ast.KnownPrimitiveType(e.Args[0].Data) != js_ast.PrimitiveUnknown {
+							e.CanBeUnwrappedIfUnused = true
 						}
+					}
 
-					case "Number":
-						if len(e.Args) == 0 {
-							return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: 0}}, exprOut{}
-						} else {
-							arg := e.Args[0]
+					// Optimize references to global constructors
+					if p.options.minifySyntax && t.CanBeRemovedIfUnused {
+						// Note: We construct expressions by assigning to "expr.Data" so
+						// that the source map position for the constructor is preserved
+						switch symbol.OriginalName {
+						case "Boolean":
+							if len(e.Args) == 0 {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EBoolean{Value: false}}, exprOut{}
+							} else {
+								expr.Data = &js_ast.EUnary{Value: p.astHelpers.SimplifyBooleanExpr(e.Args[0]), Op: js_ast.UnOpNot}
+								return js_ast.Not(expr), exprOut{}
+							}
 
-							switch js_ast.KnownPrimitiveType(arg.Data) {
-							case js_ast.PrimitiveNumber:
-								return arg, exprOut{}
+						case "Number":
+							if len(e.Args) == 0 {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.ENumber{Value: 0}}, exprOut{}
+							} else {
+								arg := e.Args[0]
 
-							case
-								js_ast.PrimitiveUndefined, // NaN
-								js_ast.PrimitiveNull,      // 0
-								js_ast.PrimitiveBoolean,   // 0 or 1
-								js_ast.PrimitiveString:    // StringToNumber
-								if number, ok := js_ast.ToNumberWithoutSideEffects(arg.Data); ok {
-									expr.Data = &js_ast.ENumber{Value: number}
-								} else {
-									expr.Data = &js_ast.EUnary{Value: arg, Op: js_ast.UnOpPos}
+								switch js_ast.KnownPrimitiveType(arg.Data) {
+								case js_ast.PrimitiveNumber:
+									return arg, exprOut{}
+
+								case
+									js_ast.PrimitiveUndefined, // NaN
+									js_ast.PrimitiveNull,      // 0
+									js_ast.PrimitiveBoolean,   // 0 or 1
+									js_ast.PrimitiveString:    // StringToNumber
+									if number, ok := js_ast.ToNumberWithoutSideEffects(arg.Data); ok {
+										expr.Data = &js_ast.ENumber{Value: number}
+									} else {
+										expr.Data = &js_ast.EUnary{Value: arg, Op: js_ast.UnOpPos}
+									}
+									return expr, exprOut{}
 								}
-								return expr, exprOut{}
 							}
-						}
 
-					case "String":
-						if len(e.Args) == 0 {
-							return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: nil}}, exprOut{}
-						} else {
-							arg := e.Args[0]
+						case "String":
+							if len(e.Args) == 0 {
+								return js_ast.Expr{Loc: expr.Loc, Data: &js_ast.EString{Value: nil}}, exprOut{}
+							} else {
+								arg := e.Args[0]
 
-							switch js_ast.KnownPrimitiveType(arg.Data) {
-							case js_ast.PrimitiveString:
-								return arg, exprOut{}
+								switch js_ast.KnownPrimitiveType(arg.Data) {
+								case js_ast.PrimitiveString:
+									return arg, exprOut{}
+								}
 							}
-						}
 
-					case "BigInt":
-						if len(e.Args) == 1 {
-							arg := e.Args[0]
+						case "BigInt":
+							if len(e.Args) == 1 {
+								arg := e.Args[0]
 
-							switch js_ast.KnownPrimitiveType(arg.Data) {
-							case js_ast.PrimitiveBigInt:
-								return arg, exprOut{}
+								switch js_ast.KnownPrimitiveType(arg.Data) {
+								case js_ast.PrimitiveBigInt:
+									return arg, exprOut{}
+								}
 							}
 						}
 					}
@@ -15252,6 +15263,16 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 									CloseParenLoc: e.CloseParenLoc,
 								}}
 							}), exprOut{}
+						}
+					}
+
+				case "for":
+					// Calling "Symbol.for()" with a primitive will never throw
+					if id, ok := t.Target.Data.(*js_ast.EIdentifier); ok {
+						if symbol := &p.symbols[id.Ref.InnerIndex]; symbol.Kind == ast.SymbolUnbound && symbol.OriginalName == "Symbol" {
+							if js_ast.KnownPrimitiveType(e.Args[0].Data) != js_ast.PrimitiveUnknown {
+								e.CanBeUnwrappedIfUnused = true
+							}
 						}
 					}
 
@@ -17820,7 +17841,12 @@ func Parse(log logger.Log, source logger.Source, options Options) (result js_ast
 	return
 }
 
-func LazyExportAST(log logger.Log, source logger.Source, options Options, expr js_ast.Expr, apiCall string) js_ast.AST {
+type HelperCall struct {
+	Global  []string
+	Runtime string
+}
+
+func LazyExportAST(log logger.Log, source logger.Source, options Options, expr js_ast.Expr, helperCall *HelperCall) js_ast.AST {
 	// Don't create a new lexer using js_lexer.NewLexer() here since that will
 	// actually attempt to parse the first token, which might cause a syntax
 	// error.
@@ -17828,9 +17854,21 @@ func LazyExportAST(log logger.Log, source logger.Source, options Options, expr j
 	p.prepareForVisitPass()
 
 	// Optionally call a runtime API function to transform the expression
-	if apiCall != "" {
+	if helperCall != nil {
 		p.symbolUses = make(map[ast.Ref]js_ast.SymbolUse)
-		expr = p.callRuntime(expr.Loc, apiCall, []js_ast.Expr{expr})
+		if len(helperCall.Global) > 0 {
+			ref := p.newSymbol(ast.SymbolUnbound, helperCall.Global[0])
+			p.recordUsage(ref)
+			target := js_ast.Expr{Data: &js_ast.EIdentifier{Ref: ref}}
+			kind := js_ast.NormalCall
+			for _, name := range helperCall.Global[1:] {
+				target.Data = &js_ast.EDot{Target: target, Name: name}
+				kind = js_ast.TargetWasOriginallyPropertyAccess
+			}
+			expr.Data = &js_ast.ECall{Target: target, Args: []js_ast.Expr{expr}, Kind: kind}
+		} else {
+			expr = p.callRuntime(expr.Loc, helperCall.Runtime, []js_ast.Expr{expr})
+		}
 	}
 
 	// Add an empty part for the namespace export that we can fill in later
