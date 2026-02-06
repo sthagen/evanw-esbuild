@@ -335,11 +335,11 @@ const installGitHubDependencies = (): void => {
 // These dependencies are not published on npm and are instead pulled from GitHub (but pinned to a specific commit)
 installGitHubDependencies()
 
-import('./kangax').then(kangax => {
+import('./compat-table').then(compatTable => {
   const js: SupportMap<JSFeature> = {} as SupportMap<JSFeature>
   for (const feature in jsFeatures) js[feature as JSFeature] = {}
 
-  mergeSupportMaps(js, kangax.js)
+  mergeSupportMaps(js, compatTable.js)
   mergeSupportMaps(js, caniuse.js)
   mergeSupportMaps(js, mdn.js)
 
@@ -564,8 +564,9 @@ mergeSupportMaps(css, mdn.css)
 mergePrefixMaps(cssPrefix, caniuse.cssPrefix)
 mergePrefixMaps(cssPrefix, mdn.cssPrefix)
 
-// MDN data is wrong here, Firefox 127 still has gradient interpolation rendering bugs: https://bugzilla.mozilla.org/show_bug.cgi?id=1904106
-css.GradientInterpolation.Firefox = {}
+// MDN data is wrong here, Firefox still had gradient interpolation rendering
+// bugs until version 137: https://bugzilla.mozilla.org/show_bug.cgi?id=1904106
+css.GradientInterpolation.Firefox = { 137: { force: true } }
 
 const [cssVersionRanges] = supportMapToVersionRanges(css)
 generateTableForCSS(cssVersionRanges, cssPrefix)
