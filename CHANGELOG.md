@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+* Fix a regression when `metafile` is enabled ([#4420](https://github.com/evanw/esbuild/issues/4420), [#4418](https://github.com/evanw/esbuild/pull/4418))
+
+    This release fixes a regression introduced by the previous release. When `metafile: true` was enabled in esbuild's JavaScript API, builds with build errors were incorrectly throwing an error about an empty JSON string instead of an object containing the build errors.
+
+* Allow `es2025` as a target in `tsconfig.json` ([#4432](https://github.com/evanw/esbuild/issues/4432))
+
+    TypeScript recently [added `es2025`](https://devblogs.microsoft.com/typescript/announcing-typescript-6-0/#es2025-option-for-target-and-lib) as a compilation target, so esbuild now supports this in the `target` field of `tsconfig.json` files, such as in the following configuration file:
+
+    ```json
+    {
+      "compilerOptions": {
+        "target": "ES2025"
+      }
+    }
+    ```
+
+    As a reminder, the only thing that esbuild uses this field for is determining whether or not to use legacy TypeScript behavior for class fields. You can read more in [the documentation](https://esbuild.github.io/content-types/#tsconfig-json).
+
 ## 0.27.4
 
 * Fix a regression with CSS media queries ([#4395](https://github.com/evanw/esbuild/issues/4395), [#4405](https://github.com/evanw/esbuild/issues/4405), [#4406](https://github.com/evanw/esbuild/issues/4406))
