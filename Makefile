@@ -142,9 +142,9 @@ ts-type-tests: | scripts/node_modules
 require/old-ts/node_modules:
 	cd require/old-ts && npm ci
 
-test-old-ts: platform-neutral | require/old-ts/node_modules
+test-old-ts: | require/old-ts/node_modules
 	rm -fr scripts/.test-old-ts && mkdir scripts/.test-old-ts
-	cp `find npm/esbuild -name '*.d.ts'` scripts/.test-old-ts
+	cp lib/shared/types.ts scripts/.test-old-ts/main.d.ts
 	cd scripts/.test-old-ts && ../../require/old-ts/node_modules/.bin/tsc *.d.ts
 	rm -fr scripts/.test-old-ts
 
@@ -317,13 +317,20 @@ version-go:
 	node scripts/esbuild.js --update-version-go
 
 platform-all: \
-	platform-aix-ppc64 \
 	platform-android-arm \
-	platform-android-arm64 \
 	platform-android-x64 \
+	platform-deno \
+	platform-neutral \
+	platform-openharmony-arm64 \
+	platform-wasi-preview1 \
+	platform-wasm
+
+# Note: The dependency list here must match `generateBinaryHashes` in `./scripts/esbuild.js`
+platform-neutral: \
+	platform-aix-ppc64 \
+	platform-android-arm64 \
 	platform-darwin-arm64 \
 	platform-darwin-x64 \
-	platform-deno \
 	platform-freebsd-arm64 \
 	platform-freebsd-x64 \
 	platform-linux-arm \
@@ -337,16 +344,18 @@ platform-all: \
 	platform-linux-x64 \
 	platform-netbsd-arm64 \
 	platform-netbsd-x64 \
-	platform-neutral \
 	platform-openbsd-arm64 \
 	platform-openbsd-x64 \
-	platform-openharmony-arm64 \
 	platform-sunos-x64 \
-	platform-wasi-preview1 \
-	platform-wasm \
 	platform-win32-arm64 \
 	platform-win32-ia32 \
 	platform-win32-x64
+
+	# This must happen last because it hashes everything from the steps above
+	@echo
+	@echo "# Build: npm/esbuild"
+	node scripts/esbuild.js npm/esbuild/package.json --version
+	node scripts/esbuild.js ./esbuild --neutral
 
 platform-internal:
 	@test -n "$(GOOS)" || (echo "The environment variable GOOS must be provided" && false)
@@ -360,7 +369,7 @@ platform-internal:
 	@shasum -a 256 "$(NPMDIR)/$(BINPATH)"
 
 platform-win32-x64: version-go go-compiler
-	@$(MAKE) --no-print-directory GOOS=windows GOARCH=amd64 NPMDIR=npm/@esbuild/win32-ia32 BINPATH=esbuild.exe platform-internal
+	@$(MAKE) --no-print-directory GOOS=windows GOARCH=amd64 NPMDIR=npm/@esbuild/win32-x64 BINPATH=esbuild.exe platform-internal
 
 platform-win32-ia32: version-go go-compiler
 	@$(MAKE) --no-print-directory GOOS=windows GOARCH=386 NPMDIR=npm/@esbuild/win32-ia32 BINPATH=esbuild.exe platform-internal
@@ -452,12 +461,6 @@ platform-wasm: esbuild go-compiler
 	node scripts/esbuild.js npm/esbuild-wasm/package.json --version
 	$(GO_COMPILER) "$(NODE)" scripts/esbuild.js ./esbuild --wasm
 	@shasum -a 256 npm/esbuild-wasm/esbuild.wasm
-
-platform-neutral: esbuild
-	@echo
-	@echo "# Build: npm/esbuild"
-	node scripts/esbuild.js npm/esbuild/package.json --version
-	node scripts/esbuild.js ./esbuild --neutral
 
 platform-deno: platform-wasm go-compiler
 	@echo
