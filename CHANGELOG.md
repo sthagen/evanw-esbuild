@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+* Fix module evaluation when an error is thrown ([#4461](https://github.com/evanw/esbuild/issues/4461), [#4467](https://github.com/evanw/esbuild/pull/4467))
+
+    If an error is thrown during module evaluation, esbuild previously didn't preserve the state of the module for subsequent module references. This was observable if `import()` or `require()` is used to import a module multiple times. The thrown error is supposed to be thrown by every call to `import()` or `require()`, not just the first. With this release, esbuild will now throw the same error every time you call `import()` or `require()` on a module that throws during its evaluation.
+
+* Fix some edge cases around the `new` operator ([#4477](https://github.com/evanw/esbuild/issues/4477))
+
+    Previously esbuild incorrectly printed certain edge cases involving complex expressions inside the target of a `new` expression (specifically an optional chain and/or a tagged template literal). The generated code for the `new` target was not correctly wrapped with parentheses, and either contained a syntax error or had different semantics. These edge cases have been fixed so that they now correctly wrap the `new` target in parentheses. Here is an example of some affected code:
+
+    ```js
+    // Original code
+    new (foo()`bar`)()
+    new (foo()?.bar)()
+
+    // Old output
+    new foo()`bar`();
+    new (foo())?.bar();
+
+    // New output
+    new (foo())`bar`();
+    new (foo()?.bar)();
+    ```
+
+* Fix renaming of nested `var` declarations ([#4471](https://github.com/evanw/esbuild/issues/4471))
+
+    This release fixes a bug where `var` declarations in nested scopes that are hoisted up to module scope were not correctly being renamed during bundling. That could previously lead to name collisions when minification was disabled, which could potentially cause a behavior change. The bug has been fixed so that these hoisted declarations are now considered to be module-level symbols during the name collision avoidance pass.
+
+* Emit `var` instead of `const` for certain TypeScript-only constructs for ES5 ([#4448](https://github.com/evanw/esbuild/issues/4448))
+
+    While esbuild doesn't generally support converting `const` to `var` for ES5 due to nested scoping rules (which is currently a build-time error), esbuild previously incorrectly converted TypeScript-only `import` assignment constructs into a `const` declaration even when targeting ES5. With this release, esbuild will now use `var` for this case instead:
+
+    ```js
+    // Original code
+    import x = require('y')
+
+    // Old output (with --target=es5)
+    const x = require("y");
+
+    // New output (with --target=es5)
+    var x = require("y");
+    ```
+
 ## 0.28.0
 
 * Add support for `with { type: 'text' }` imports ([#4435](https://github.com/evanw/esbuild/issues/4435))
