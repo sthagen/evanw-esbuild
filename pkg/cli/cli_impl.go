@@ -1038,6 +1038,7 @@ func parseTargets(targets []string, arg string) (target api.Target, engines []ap
 		"es2023": api.ES2023,
 		"es2024": api.ES2024,
 		"es2025": api.ES2025,
+		"es2026": api.ES2026,
 	}
 
 outer:
@@ -1580,12 +1581,14 @@ func parseLogStyle(value string, arg string) (api.LogStyle, *cli_helpers.ErrorWi
 	switch value {
 	case "default":
 		return api.LogStyleDefault, nil
+	case "clang":
+		return api.LogStyleClang, nil
 	case "visualstudio":
 		return api.LogStyleVisualStudio, nil
 	default:
 		return api.LogStyleDefault, cli_helpers.MakeErrorWithNote(
 			fmt.Sprintf("Invalid value %q in %q", value, arg),
-			"Valid values are \"default\" or \"visualstudio\".",
+			"Valid values are \"default\", \"clang\", or \"visualstudio\".",
 		)
 	}
 }

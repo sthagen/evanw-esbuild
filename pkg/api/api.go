@@ -135,6 +135,7 @@ const (
 	ES2023
 	ES2024
 	ES2025
+	ES2026
 )
 
 type Loader uint16
@@ -240,6 +241,7 @@ type LogStyle uint8
 
 const (
 	LogStyleDefault LogStyle = iota
+	LogStyleClang
 	LogStyleVisualStudio
 )
 
